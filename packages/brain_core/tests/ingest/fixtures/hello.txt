@@ -1,0 +1,2 @@
+Hello, brain.
+This is a plain-text fixture for the text handler.
