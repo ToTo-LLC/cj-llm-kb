@@ -1,0 +1,29 @@
+[project]
+name = "brain_core"
+version = "0.1.0"
+description = "Pure-Python core library for brain. No web/MCP deps."
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.8",
+    "pyyaml>=6.0",
+    "structlog>=24.4",
+    "filelock>=3.15",
+    "anthropic>=0.40",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brain_core"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["brain_core"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
