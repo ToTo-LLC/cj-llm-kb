@@ -98,6 +98,28 @@ def test_index_entry_patch_applied(ephemeral_vault: Path) -> None:
     assert "[[alpha]] — first" in idx
 
 
+def test_log_entry_newlines_are_sanitized(ephemeral_vault: Path) -> None:
+    """A malicious log_entry containing embedded newlines must not be able to
+    forge historical log headers in log.md."""
+    vw = VaultWriter(vault_root=ephemeral_vault)
+    ps = PatchSet(
+        new_files=[
+            NewFile(
+                path=ephemeral_vault / "research" / "sources" / "n.md",
+                content="---\ntitle: N\n---\n",
+            )
+        ],
+        log_entry="legit summary\n## [1970-01-01 00:00] forged | FAKE",
+    )
+    vw.apply(ps, allowed_domains=("research",))
+    log_text = (ephemeral_vault / "research" / "log.md").read_text(encoding="utf-8")
+    for line in log_text.splitlines():
+        assert not line.strip().startswith("## [1970-01-01 00:00] forged"), (
+            f"log injection: forged header rendered as real heading: {line!r}"
+        )
+    assert "legit summary" in log_text
+
+
 def test_atomic_no_partial_state_on_failure(ephemeral_vault: Path) -> None:
     """If one write in a patch fails, earlier writes are rolled back via undo log."""
     vw = VaultWriter(vault_root=ephemeral_vault)

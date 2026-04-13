@@ -13,6 +13,8 @@
 
 ### Deferred architectural questions
 
+- **2026-04-13 — VaultWriter rollback hardening (Task 13 nits).** The paranoid review of `VaultWriter` flagged three non-blocking robustness issues that are legitimate but not urgent: (1) individual rollback steps aren't wrapped in try/except, so a mid-rollback failure aborts remaining reverts; (2) undo records are only persisted after all mutations succeed, so a process crash between `_atomic_write` calls and `_write_undo_record` leaves no on-disk undo; (3) `Receipt.applied_files` is not cleared on rollback (moot today because the exception re-raises, but defensive hygiene). **Decision: defer** — all three require careful design (partial-undo semantics, crash-recovery ordering) that benefits from real-world stress testing first. Revisit after Plan 02 exercises `VaultWriter` at ingest volume. The `log_entry` newline-sanitization nit (finding #1) WAS fixed inline during Task 13 with a regression test.
+
 - **2026-04-13 — Does `anthropic` belong as a direct dep of `brain_core`, or should the LLM layer be split into a separate `brain_llm` package?** Current layering (per Plan 01): the Anthropic SDK is a `brain_core` dep but is only imported from `brain_core/llm/providers/anthropic.py` (enforced via CLAUDE.md rule). This keeps the `LLMProvider` abstraction clean but means `brain_core` has a production SDK dep. A future split would isolate providers into `brain_llm` so `brain_core` stays provider-free. **Decision: defer.** Revisit if a second provider is added (OpenAI, local) and the layering starts to creak. Raised by Task 2 code quality review.
 
 ## Per agent

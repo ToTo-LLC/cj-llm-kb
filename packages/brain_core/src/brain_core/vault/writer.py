@@ -103,7 +103,7 @@ class VaultWriter:
                 if log_entry:
                     domain = allowed_domains[0]
                     log = LogFile(self.vault_root / domain / "log.md")
-                    summary = log_entry.lstrip("#").strip() or patch.reason
+                    summary = _sanitize_log_summary(log_entry) or patch.reason
                     log.append(
                         LogEntry(
                             timestamp=datetime.now(tz=timezone.utc),
@@ -154,6 +154,17 @@ class VaultWriter:
                 lines.append(prev)
                 lines.append("END_PREV")
         target.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _sanitize_log_summary(text: str) -> str:
+    """Strip a log_entry down to a safe single-line summary.
+
+    Prevents log-injection: an LLM-produced log_entry containing embedded
+    newlines followed by `## [...]` headers could forge historical log entries
+    when written into log.md. Collapse all whitespace-including newlines to a
+    single space, and strip leading `#` chars used for markdown heading.
+    """
+    return " ".join(text.lstrip("#").strip().split())
 
 
 def _parse_index_line(line: str) -> IndexEntry:
