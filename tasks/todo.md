@@ -10,7 +10,7 @@
 
 | # | Plan | Status | Demoable deliverable | Primary subagent(s) |
 |---|---|---|---|---|
-| 01 | [Foundation](./plans/01-foundation.md) | 📝 Ready for execution | Tested `brain_core` library (config, vault, llm, cost) green on Mac + Windows CI | brain-core-engineer, brain-test-engineer |
+| 01 | [Foundation](./plans/01-foundation.md) | ✅ Complete (2026-04-13, tag `plan-01-foundation`) | Tested `brain_core` library (config, vault, llm, cost) green on Mac + Windows CI | brain-core-engineer, brain-test-engineer |
 | 02 | Ingestion | ⏸ Not yet written | `brain add <url>` produces a wiki note via full pipeline | brain-core-engineer, brain-prompt-engineer |
 | 03 | Chat | ⏸ Not yet written | `brain chat` Ask / Brainstorm / Draft working in terminal | brain-core-engineer, brain-prompt-engineer |
 | 04 | MCP + Claude Desktop | ⏸ Not yet written | Claude Desktop reads / searches / ingests over MCP | brain-mcp-engineer |
