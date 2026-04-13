@@ -1,0 +1,25 @@
+[project]
+name = "brain"
+version = "0.1.0"
+description = "LLM-maintained personal knowledge base"
+requires-python = ">=3.12"
+readme = "README.md"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+brain_core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "filelock>=3.15",
+]

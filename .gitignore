@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Vault secrets must NEVER land in the repo (defense in depth;
+# the real vault is at ~/Documents/brain/, not here)
+**/.brain/secrets.env
+**/.brain/logs/
+**/.brain/run/
+**/.brain/costs.sqlite
+**/.brain/state.sqlite
