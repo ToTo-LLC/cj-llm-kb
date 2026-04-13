@@ -25,4 +25,5 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "filelock>=3.15",
+    "types-PyYAML>=6.0",
 ]
