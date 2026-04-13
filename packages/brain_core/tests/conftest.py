@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from collections.abc import Iterator
 
 import pytest
 
 
 @pytest.fixture
-def ephemeral_vault(tmp_path: Path) -> Iterator[Path]:
-    """Create a minimal, valid brain vault inside tmp_path and yield its root.
+def ephemeral_vault(tmp_path: Path) -> Path:
+    """Create a minimal, valid brain vault inside tmp_path and return its root.
 
     Layout:
         <tmp>/brain/
@@ -37,4 +36,4 @@ def ephemeral_vault(tmp_path: Path) -> Iterator[Path]:
     for sub in ("inbox", "failed", "archive"):
         (root / "raw" / sub).mkdir(parents=True)
     (root / "BRAIN.md").write_text("# BRAIN\n\nDefault schema doc.\n", encoding="utf-8")
-    yield root
+    return root

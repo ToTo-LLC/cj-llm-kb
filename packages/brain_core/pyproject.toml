@@ -21,7 +21,7 @@ packages = ["src/brain_core"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["brain_core"]
+packages = ["brain_core", "tests"]
 mypy_path = "src"
 
 [tool.pytest.ini_options]

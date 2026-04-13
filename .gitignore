@@ -29,3 +29,9 @@ out/
 **/.brain/run/
 **/.brain/costs.sqlite
 **/.brain/state.sqlite
+
+# Broader secret/log safety net (catches stray .env files at any level)
+.env
+.env.*
+!.env.example
+*.log
