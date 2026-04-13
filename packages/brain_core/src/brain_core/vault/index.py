@@ -26,7 +26,7 @@ class IndexFile:
     sections: dict[str, list[IndexEntry]] = field(default_factory=dict)
 
     @classmethod
-    def load(cls, path: Path) -> "IndexFile":
+    def load(cls, path: Path) -> IndexFile:
         text = path.read_text(encoding="utf-8")
         lines = text.splitlines()
         title = lines[0].lstrip("# ").strip() if lines and lines[0].startswith("#") else path.stem

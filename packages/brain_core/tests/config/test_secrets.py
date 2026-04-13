@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from brain_core.config.secrets import SecretNotFoundError, SecretsStore
 
 

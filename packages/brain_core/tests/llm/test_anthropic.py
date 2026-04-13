@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from brain_core.llm.providers.anthropic import AnthropicProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _HEADING = re.compile(r"^##\s*\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*(\S+)\s*\|\s*(.*)$")
@@ -36,7 +36,7 @@ class LogFile:
         for line in self.path.read_text(encoding="utf-8").splitlines():
             m = _HEADING.match(line)
             if m:
-                ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=UTC)
                 out.append(LogEntry(timestamp=ts, op=m.group(2), summary=m.group(3)))
         return out
 

@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from filelock import FileLock
@@ -106,7 +106,7 @@ class VaultWriter:
                     summary = _sanitize_log_summary(log_entry) or patch.reason
                     log.append(
                         LogEntry(
-                            timestamp=datetime.now(tz=timezone.utc),
+                            timestamp=datetime.now(tz=UTC),
                             op="patch",
                             summary=summary,
                         )
@@ -138,7 +138,7 @@ class VaultWriter:
             raise
 
     def _new_undo_id(self) -> str:
-        return datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        return datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S%f")
 
     def _write_undo_record(
         self, undo_id: str, records: list[tuple[Path, str | None]]

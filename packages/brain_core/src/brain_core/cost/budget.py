@@ -9,7 +9,7 @@ Rates verified against https://claude.com/pricing (April 2026).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from brain_core.cost.ledger import CostLedger
 
@@ -49,7 +49,7 @@ class BudgetEnforcer:
     def check_can_spend(self, projected_usd: float) -> None:
         if self._ledger is None:
             return
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         day_total = self._ledger.total_for_day(now.date()) + projected_usd
         if day_total > self._daily:
             raise BudgetExceededError(

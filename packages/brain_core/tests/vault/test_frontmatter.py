@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from brain_core.vault.frontmatter import (
     FrontmatterError,
     parse_frontmatter,

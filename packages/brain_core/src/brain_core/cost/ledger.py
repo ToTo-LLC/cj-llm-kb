@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 
@@ -52,8 +52,8 @@ class CostLedger:
                 "INSERT INTO costs (ts_utc, day, operation, model, input_tokens, output_tokens, cost_usd, domain) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    entry.timestamp.astimezone(timezone.utc).isoformat(),
-                    entry.timestamp.astimezone(timezone.utc).date().isoformat(),
+                    entry.timestamp.astimezone(UTC).isoformat(),
+                    entry.timestamp.astimezone(UTC).date().isoformat(),
                     entry.operation,
                     entry.model,
                     entry.input_tokens,

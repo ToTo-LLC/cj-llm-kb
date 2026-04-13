@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from brain_core.vault.types import NewFile, PatchSet
 from brain_core.vault.writer import VaultWriter
 

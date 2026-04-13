@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
 
 # Matches [[target]] or [[target|alias]] — captures the target portion only.
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
@@ -23,7 +22,7 @@ class BrokenLink:
     target: str
 
 
-Resolution: TypeAlias = Resolved | BrokenLink
+type Resolution = Resolved | BrokenLink
 
 
 def extract_wikilinks(body: str) -> list[str]:

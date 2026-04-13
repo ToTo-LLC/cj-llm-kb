@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from brain_core.cost.ledger import CostEntry, CostLedger
@@ -9,7 +9,7 @@ from brain_core.cost.ledger import CostEntry, CostLedger
 def test_write_and_aggregate(tmp_path: Path) -> None:
     db = tmp_path / "costs.sqlite"
     ledger = CostLedger(db_path=db)
-    now = datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
     ledger.record(
         CostEntry(
             timestamp=now,
@@ -41,7 +41,7 @@ def test_write_and_aggregate(tmp_path: Path) -> None:
 def test_persists_across_instances(tmp_path: Path) -> None:
     db = tmp_path / "costs.sqlite"
     l1 = CostLedger(db_path=db)
-    now = datetime(2026, 4, 13, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 13, tzinfo=UTC)
     l1.record(
         CostEntry(
             timestamp=now,

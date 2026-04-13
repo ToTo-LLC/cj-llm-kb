@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
 

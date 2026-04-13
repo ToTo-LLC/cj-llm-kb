@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from brain_core.cost.budget import BudgetEnforcer, BudgetExceededError
 from brain_core.cost.ledger import CostEntry, CostLedger
 
@@ -24,7 +23,7 @@ def test_over_daily_budget_raises(tmp_path: Path) -> None:
     ledger, be = _fresh(tmp_path)
     ledger.record(
         CostEntry(
-            timestamp=datetime.now(tz=timezone.utc),
+            timestamp=datetime.now(tz=UTC),
             operation="x",
             model="m",
             input_tokens=1,
@@ -39,7 +38,7 @@ def test_over_daily_budget_raises(tmp_path: Path) -> None:
 
 def test_estimate_cost_for_sonnet() -> None:
     # claude-sonnet-4-6: $3/Mtok in, $15/Mtok out
-    # 1000 in + 500 out → $3 × 0.001 + $15 × 0.0005 = 0.003 + 0.0075 = 0.0105
+    # 1000 in + 500 out → $3 x 0.001 + $15 x 0.0005 = 0.003 + 0.0075 = 0.0105
     est = BudgetEnforcer.estimate_cost(
         model="claude-sonnet-4-6", input_tokens=1000, output_tokens=500
     )
@@ -48,7 +47,7 @@ def test_estimate_cost_for_sonnet() -> None:
 
 def test_estimate_cost_for_opus() -> None:
     # claude-opus-4-6: $5/Mtok in, $25/Mtok out
-    # 1000 in + 500 out → $5 × 0.001 + $25 × 0.0005 = 0.005 + 0.0125 = 0.0175
+    # 1000 in + 500 out → $5 x 0.001 + $25 x 0.0005 = 0.005 + 0.0125 = 0.0175
     est = BudgetEnforcer.estimate_cost(
         model="claude-opus-4-6", input_tokens=1000, output_tokens=500
     )
@@ -57,7 +56,7 @@ def test_estimate_cost_for_opus() -> None:
 
 def test_estimate_cost_for_haiku() -> None:
     # claude-haiku-4-5-20251001: $1/Mtok in, $5/Mtok out
-    # 1000 in + 500 out → $1 × 0.001 + $5 × 0.0005 = 0.001 + 0.0025 = 0.0035
+    # 1000 in + 500 out → $1 x 0.001 + $5 x 0.0005 = 0.001 + 0.0025 = 0.0035
     est = BudgetEnforcer.estimate_cost(
         model="claude-haiku-4-5-20251001", input_tokens=1000, output_tokens=500
     )
