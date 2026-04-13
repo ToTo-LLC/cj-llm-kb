@@ -2,5 +2,13 @@
 
 from brain_core.config.loader import load_config
 from brain_core.config.schema import BudgetConfig, Config, LLMConfig
+from brain_core.config.secrets import SecretNotFoundError, SecretsStore
 
-__all__ = ["BudgetConfig", "Config", "LLMConfig", "load_config"]
+__all__ = [
+    "BudgetConfig",
+    "Config",
+    "LLMConfig",
+    "SecretNotFoundError",
+    "SecretsStore",
+    "load_config",
+]
