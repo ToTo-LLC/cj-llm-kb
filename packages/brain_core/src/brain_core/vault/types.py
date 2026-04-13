@@ -35,9 +35,7 @@ class PatchSet(BaseModel):
     reason: str = ""
 
     def total_size(self) -> int:
-        return sum(len(nf.content) for nf in self.new_files) + sum(
-            len(e.new) for e in self.edits
-        )
+        return sum(len(nf.content) for nf in self.new_files) + sum(len(e.new) for e in self.edits)
 
     def file_count(self) -> int:
         touched = {nf.path for nf in self.new_files} | {e.path for e in self.edits}

@@ -30,9 +30,7 @@ class FakeLLMProvider:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         self.requests.append(request)
         if not self._queue:
-            raise RuntimeError(
-                "FakeLLMProvider queue is empty — call .queue() before .complete()"
-            )
+            raise RuntimeError("FakeLLMProvider queue is empty — call .queue() before .complete()")
         q = self._queue.pop(0)
         return LLMResponse(
             model=request.model,
@@ -44,9 +42,7 @@ class FakeLLMProvider:
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamChunk]:
         self.requests.append(request)
         if not self._queue:
-            raise RuntimeError(
-                "FakeLLMProvider queue is empty — call .queue() before .stream()"
-            )
+            raise RuntimeError("FakeLLMProvider queue is empty — call .queue() before .stream()")
         q = self._queue.pop(0)
         for ch in q.content:
             yield LLMStreamChunk(delta=ch)

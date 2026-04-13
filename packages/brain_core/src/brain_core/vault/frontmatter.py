@@ -48,7 +48,5 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 
 def serialize_with_frontmatter(data: Mapping[str, Any], *, body: str) -> str:
     """Serialize a note with frontmatter. Key order is preserved from the input mapping."""
-    yaml_text = yaml.safe_dump(
-        dict(data), sort_keys=False, allow_unicode=True
-    ).rstrip("\n")
+    yaml_text = yaml.safe_dump(dict(data), sort_keys=False, allow_unicode=True).rstrip("\n")
     return f"{_FENCE}\n{yaml_text}\n{_FENCE}\n\n{body}"

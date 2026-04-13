@@ -26,7 +26,11 @@ def test_apply_new_file(ephemeral_vault: Path) -> None:
     )
     receipt = vw.apply(ps, allowed_domains=("research",))
     assert receipt.applied_files == [ephemeral_vault / "research" / "sources" / "a.md"]
-    assert (ephemeral_vault / "research" / "sources" / "a.md").read_text(encoding="utf-8").startswith("---")
+    assert (
+        (ephemeral_vault / "research" / "sources" / "a.md")
+        .read_text(encoding="utf-8")
+        .startswith("---")
+    )
 
 
 def test_apply_edit(ephemeral_vault: Path) -> None:

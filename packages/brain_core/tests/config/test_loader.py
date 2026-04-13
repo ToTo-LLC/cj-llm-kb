@@ -21,9 +21,7 @@ def test_env_overrides_defaults() -> None:
 
 def test_config_file_beats_defaults_but_loses_to_env(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
-    cfg_path.write_text(
-        json.dumps({"web_port": 6000, "active_domain": "work"}), encoding="utf-8"
-    )
+    cfg_path.write_text(json.dumps({"web_port": 6000, "active_domain": "work"}), encoding="utf-8")
     cfg = load_config(
         config_file=cfg_path,
         env={"BRAIN_WEB_PORT": "7000"},

@@ -10,15 +10,7 @@ from brain_core.vault.frontmatter import (
 
 def test_parse_roundtrip() -> None:
     content = (
-        "---\n"
-        "title: Example\n"
-        "domain: research\n"
-        "tags:\n"
-        "  - foo\n"
-        "  - bar\n"
-        "---\n"
-        "\n"
-        "Body text here.\n"
+        "---\ntitle: Example\ndomain: research\ntags:\n  - foo\n  - bar\n---\n\nBody text here.\n"
     )
     data, body = parse_frontmatter(content)
     assert data == {"title": "Example", "domain": "research", "tags": ["foo", "bar"]}
@@ -52,7 +44,5 @@ def test_serialize_produces_parseable_output() -> None:
 
 
 def test_serialize_preserves_key_order_stable() -> None:
-    out = serialize_with_frontmatter(
-        {"title": "a", "domain": "b", "type": "c"}, body=""
-    )
+    out = serialize_with_frontmatter({"title": "a", "domain": "b", "type": "c"}, body="")
     assert out.splitlines()[:5] == ["---", "title: a", "domain: b", "type: c", "---"]

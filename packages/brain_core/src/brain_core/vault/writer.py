@@ -125,9 +125,7 @@ class VaultWriter:
 
     def _atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
-        )
+        fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
@@ -140,9 +138,7 @@ class VaultWriter:
     def _new_undo_id(self) -> str:
         return datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S%f")
 
-    def _write_undo_record(
-        self, undo_id: str, records: list[tuple[Path, str | None]]
-    ) -> None:
+    def _write_undo_record(self, undo_id: str, records: list[tuple[Path, str | None]]) -> None:
         target = self._undo_dir / f"{undo_id}.txt"
         lines: list[str] = []
         for p, prev in records:

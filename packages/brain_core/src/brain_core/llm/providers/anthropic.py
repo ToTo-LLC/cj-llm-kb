@@ -33,9 +33,7 @@ class AnthropicProvider:
             messages=[{"role": m.role, "content": m.content} for m in request.messages],
             stop_sequences=request.stop_sequences or None,
         )
-        text = "".join(
-            block.text for block in raw.content if getattr(block, "type", "") == "text"
-        )
+        text = "".join(block.text for block in raw.content if getattr(block, "type", "") == "text")
         return LLMResponse(
             model=raw.model,
             content=text,
