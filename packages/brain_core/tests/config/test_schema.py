@@ -24,6 +24,11 @@ def test_config_rejects_unknown_domain() -> None:
         Config(active_domain="marketing")  # type: ignore[arg-type]  # not in allowed set
 
 
+def test_config_rejects_unknown_fields() -> None:
+    with pytest.raises(ValueError):
+        Config(active_doamin="research")  # type: ignore[call-arg]  # deliberate typo
+
+
 def test_llm_config_model_change_roundtrips() -> None:
     cfg = LLMConfig(default_model="claude-haiku-4-5-20251001")
     assert cfg.default_model == "claude-haiku-4-5-20251001"

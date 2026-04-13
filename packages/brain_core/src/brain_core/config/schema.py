@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Domain = Literal["research", "work", "personal"]
 ALLOWED_DOMAINS: tuple[Domain, ...] = ("research", "work", "personal")
 
 
 class LLMConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     provider: Literal["anthropic"] = "anthropic"
     default_model: str = "claude-sonnet-4-6"
     classify_model: str = "claude-haiku-4-5-20251001"
@@ -20,12 +21,14 @@ class LLMConfig(BaseModel):
 
 
 class BudgetConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     daily_usd: float = Field(default=5.0, ge=0.0)
     monthly_usd: float = Field(default=80.0, ge=0.0)
     alert_threshold_pct: int = Field(default=80, ge=0, le=100)
 
 
 class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     vault_path: Path = Field(default_factory=lambda: Path.home() / "Documents" / "brain")
     active_domain: Domain = "research"
     autonomous_mode: bool = False
