@@ -137,15 +137,26 @@ class BulkImporter:
     ) -> list[IngestResult]:
         """Run `IngestPipeline.ingest` for each item in the plan, in order.
 
+        Per-item domain selection precedence:
+          1. Caller's global ``domain_override`` (forces every item into one domain).
+          2. The item's own ``classified_domain`` from the plan phase
+             (honors the per-item classification the plan already paid for).
+          3. ``None`` — pipeline re-classifies fresh.
+
+        Honoring (2) is the whole reason the plan phase exists: without it the
+        classifier work done during ``plan()`` is thrown away and every item
+        gets re-classified inside ``ingest()``.
+
         Returns a list of IngestResult in the same order as plan.items. Does
         NOT short-circuit on FAILED items — each item is independent.
         """
         results: list[IngestResult] = []
         for item in plan.items:
+            effective_override = domain_override or item.classified_domain
             result = await self._pipeline.ingest(
                 item.spec,
                 allowed_domains=allowed_domains,
-                domain_override=domain_override,
+                domain_override=effective_override,
             )
             results.append(result)
         return results

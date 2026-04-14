@@ -316,3 +316,68 @@ def test_is_hidden_outside_root(tmp_path: Path) -> None:
     outside = tmp_path / ".outside.txt"
     # path not relative to root → returns False (no ValueError crash)
     assert _is_hidden(outside, root=root) is False
+
+
+@pytest.mark.asyncio
+async def test_apply_honors_per_item_classified_domain(
+    ephemeral_vault: Path, tmp_path: Path
+) -> None:
+    """apply() must pass each item's own classified_domain to ingest(), so the
+    pipeline does NOT re-classify. Without this, the plan phase's classifier
+    work is thrown away and every item burns a second classify call.
+    """
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "a.txt").write_text("alpha content", encoding="utf-8")
+    (folder / "b.txt").write_text("beta content", encoding="utf-8")
+
+    fake = FakeLLMProvider()
+    # Plan phase: 2 classify calls (one per file), each to a DIFFERENT domain.
+    fake.queue('{"source_type":"text","domain":"research","confidence":0.9}')
+    fake.queue('{"source_type":"text","domain":"work","confidence":0.9}')
+
+    pipeline = _make_pipeline(ephemeral_vault, fake)
+    importer = BulkImporter(pipeline)
+    plan = await importer.plan(folder, allowed_domains=("research", "work"))
+    assert len(plan.items) == 2
+    classified_domains = {item.spec.name: item.classified_domain for item in plan.items}
+    assert classified_domains == {"a.txt": "research", "b.txt": "work"}
+
+    # At this point the fake queue is empty. Queue ONLY summarize + integrate
+    # for each item, giving each summary a distinct title so the slug-from-title
+    # re-computation in the pipeline yields distinct source note filenames.
+    # NO additional classify responses. If apply() triggers the pipeline to
+    # re-classify, the empty queue will make FakeLLMProvider raise loudly.
+    for title in ("alpha-note", "beta-note"):
+        fake.queue(
+            SummarizeOutput(
+                title=title,
+                summary="y",
+                key_points=[],
+                entities=[],
+                concepts=[],
+                open_questions=[],
+            ).model_dump_json()
+        )
+        fake.queue(
+            PatchSet(
+                index_entries=[],
+                log_entry=None,
+                reason="t",
+            ).model_dump_json()
+        )
+
+    results = await importer.apply(plan, allowed_domains=("research", "work"))
+    assert len(results) == 2
+    for r in results:
+        assert r.status is IngestStatus.OK, f"status={r.status} errors={r.errors}"
+
+    # Each item ended up under its OWN classified domain (slug from summary title).
+    assert (ephemeral_vault / "research" / "sources" / "alpha-note.md").exists()
+    assert (ephemeral_vault / "work" / "sources" / "beta-note.md").exists()
+    # And NOT forced into the same domain
+    assert not (ephemeral_vault / "research" / "sources" / "beta-note.md").exists()
+    assert not (ephemeral_vault / "work" / "sources" / "alpha-note.md").exists()
+
+    # Exactly 6 LLM calls total: 2 classify (plan) + 2 summarize + 2 integrate.
+    assert len(fake.requests) == 6
