@@ -4053,6 +4053,10 @@ If the review surfaces nothing, this task becomes a formal "no-op close" commit 
 - **Task 11 `edit_open_doc` empty-`old` string** falls through to "not unique" error because `body.count("")` returns `len(body)+1`. Add explicit guard: `if not old: raise ValueError("old text must be non-empty")` before the count.
 - **Task 7 `read_note` + Task 8 `list_index` `FrontmatterError` fallback path** has no direct regression test (the lenient `fm={}, body=raw` branch). Add one parametrized test covering both tools.
 - **Task 10/11 staging-tool consistency**: `text` messages are the only place the patch_id surfaces to the LLM. Consider a shared helper if a third staging tool lands.
+- **Task 13 section regex** (`^## (User|Assistant|System)\s*$`) would match a literal `## User` line inside a fenced code block in assistant content. Add an adversarial-content regression test.
+- **Task 14a cross-domain check** raises plain `PermissionError` instead of `ScopeError` (which is a subclass). Normalize to `ScopeError` for consistency with the rest of `VaultWriter`.
+- **Task 14a negative-path tests missing** for src-outside-vault, dst-outside-vault, src-not-existing. `scope_guard` is covered elsewhere but explicit tests would lock the `rename_file` contract.
+- **Plan-author meta-lesson (Tasks 14, 8)**: (1) plan text referenced imagined APIs (`PromptLoader` class, `FakeLLMProvider.queue_response`) instead of real Plan 02 signatures (`load_prompt` function, `.queue`). Verify real signatures before writing future tasks. (2) Tasks 8 and 14 both triggered false "mypy pre-existing errors" from implementers running mypy from the wrong cwd. Add explicit `cd packages/brain_core` to the per-task self-review checklist in Task 25.
 
 - [ ] **Step 1: Collect all deferred items from Tasks 4–20 review logs** into a findings list (append to the known list above).
 - [ ] **Step 2: Batch-fix each with test coverage** — same TDD discipline.
