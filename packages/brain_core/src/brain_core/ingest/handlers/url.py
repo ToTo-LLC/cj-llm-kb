@@ -31,9 +31,12 @@ class URLHandler:
             html = resp.text
             final_url = str(resp.url)
 
-        extracted: str = (
-            trafilatura.extract(html, include_comments=False, include_tables=False) or ""
-        )
+        extracted = trafilatura.extract(html, include_comments=False, include_tables=False)
+        if not extracted or not extracted.strip():
+            raise HandlerError(
+                f"No readable content extracted from {final_url!r}. "
+                "The page may require JavaScript, be login-walled, or contain only navigation chrome."
+            )
         meta = trafilatura.extract_metadata(html)
         title: str | None = meta.title if meta and meta.title else None
         author: str | None = meta.author if meta and meta.author else None

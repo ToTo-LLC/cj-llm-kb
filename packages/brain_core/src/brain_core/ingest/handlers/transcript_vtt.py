@@ -22,12 +22,9 @@ class TranscriptVTTHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, Path) or not spec.exists():
             raise HandlerError(f"transcript_vtt cannot read {spec!r}")
-        if spec.suffix.lower() == ".srt":
-            captions = webvtt.from_srt(str(spec))
-        else:
-            captions = webvtt.read(str(spec))
+        captions = webvtt.from_srt(spec) if spec.suffix.lower() == ".srt" else webvtt.read(spec)
         lines = [c.text.strip() for c in captions if c.text.strip()]
-        body = "\n".join(lines)
+        body = "\n\n".join(lines)
         archive_root.mkdir(parents=True, exist_ok=True)
         archive_path = archive_root / spec.name
         shutil.copy2(spec, archive_path)

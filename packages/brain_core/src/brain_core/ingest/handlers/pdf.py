@@ -29,10 +29,9 @@ class PDFHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, Path) or not spec.exists():
             raise HandlerError(f"pdf handler cannot read {spec!r}")
-        doc = fitz.open(spec)
-        try:
+        with fitz.open(spec) as doc:
             parts: list[str] = []
-            title = None
+            title: str | None = None
             try:
                 meta = doc.metadata or {}
                 title = meta.get("title") or None
@@ -40,8 +39,6 @@ class PDFHandler:
                 title = None
             for page in doc:
                 parts.append(page.get_text())
-        finally:
-            doc.close()
         body = "\n\n".join(p.strip() for p in parts if p.strip())
         if len(body) < self._min_chars:
             raise ScannedPDFError(

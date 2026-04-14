@@ -20,8 +20,14 @@ class EmailHandler:
         if not isinstance(spec, str):
             return False
         head = spec.splitlines()[:10]
-        seen = {line.split(":", 1)[0].strip().lower() for line in head if ":" in line}
-        return _REQUIRED_HEADERS.issubset(seen)
+        headers: dict[str, str] = {}
+        for line in head:
+            if ":" in line:
+                key, _, value = line.partition(":")
+                headers[key.strip().lower()] = value.strip()
+        if not _REQUIRED_HEADERS.issubset(headers):
+            return False
+        return "@" in headers.get("from", "")
 
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, str):
@@ -41,11 +47,10 @@ class EmailHandler:
             payload = msg.get_payload(decode=True)
             if isinstance(payload, bytes):
                 body_text = payload.decode("utf-8", errors="replace")
-            else:
-                raw = msg.get_payload(decode=False)
-                body_text = raw if isinstance(raw, str) else ""
         if not body_text:
-            # plain-text paste: parser puts it all under payload, which we already read.
+            # Final safety net: if every branch above left body_text empty (e.g. edge-case
+            # multipart with no text/plain parts), fall back to splitting on the blank-line
+            # boundary.
             body_text = spec.split("\n\n", 1)[-1] if "\n\n" in spec else spec
 
         archive_root.mkdir(parents=True, exist_ok=True)

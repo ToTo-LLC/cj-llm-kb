@@ -20,7 +20,7 @@ class TranscriptDOCXHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, Path) or not spec.exists():
             raise HandlerError(f"transcript_docx cannot read {spec!r}")
-        doc = Document(str(spec))
+        doc = Document(spec)  # type: ignore[arg-type]  # python-docx stubs say str | IO[bytes], but Path works at runtime
         body = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
         archive_root.mkdir(parents=True, exist_ok=True)
         archive_path = archive_root / spec.name

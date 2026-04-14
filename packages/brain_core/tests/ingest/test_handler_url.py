@@ -41,3 +41,17 @@ async def test_url_handler_rejects_non_http() -> None:
     h = URLHandler()
     assert await h.can_handle("file:///etc/passwd") is False
     assert await h.can_handle(Path("/tmp/x")) is False
+
+
+_HTML_JS_ONLY = "<html><body><script>var x=1;</script></body></html>"
+
+
+@pytest.mark.asyncio
+async def test_url_handler_raises_on_empty_extraction(tmp_path: Path) -> None:
+    from brain_core.ingest.handlers.base import HandlerError
+
+    async with respx.mock(base_url="https://example.com") as mock:
+        mock.get("/js-only").mock(return_value=httpx.Response(200, text=_HTML_JS_ONLY))
+        h = URLHandler()
+        with pytest.raises(HandlerError, match="No readable content"):
+            await h.extract("https://example.com/js-only", archive_root=tmp_path)

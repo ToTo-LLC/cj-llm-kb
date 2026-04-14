@@ -23,3 +23,10 @@ async def test_email_handler_parses_header_and_body(fixtures_dir: Path, tmp_path
 @pytest.mark.asyncio
 async def test_email_handler_rejects_non_email_text() -> None:
     assert await EmailHandler().can_handle("just a random paragraph") is False
+
+
+@pytest.mark.asyncio
+async def test_email_handler_rejects_headers_without_at() -> None:
+    """From header without @-sign must not be detected as email."""
+    raw = "From: Alice\nTo: Bob\nSubject: stuff\n\nbody"
+    assert await EmailHandler().can_handle(raw) is False
