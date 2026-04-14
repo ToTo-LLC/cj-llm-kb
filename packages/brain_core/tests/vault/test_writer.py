@@ -136,3 +136,51 @@ def test_atomic_no_partial_state_on_failure(ephemeral_vault: Path) -> None:
     with pytest.raises(ScopeError):
         vw.apply(ps, allowed_domains=("research",))
     assert not good.exists()
+
+
+class TestRenameFile:
+    def test_rename_file_moves_file_atomically(self, ephemeral_vault: Path) -> None:
+        src = ephemeral_vault / "research" / "sources" / "old.md"
+        src.write_text("body", encoding="utf-8")
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        dst = ephemeral_vault / "research" / "sources" / "new.md"
+        receipt = writer.rename_file(src, dst, allowed_domains=("research",))
+        assert not src.exists()
+        assert dst.exists()
+        assert dst.read_text(encoding="utf-8") == "body"
+        assert receipt.undo_id is not None
+        assert receipt.applied_files == [Path("research/sources/new.md")]
+
+    def test_rename_file_rejects_cross_domain(self, ephemeral_vault: Path) -> None:
+        src = ephemeral_vault / "research" / "sources" / "old.md"
+        src.write_text("body", encoding="utf-8")
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        dst = ephemeral_vault / "work" / "sources" / "new.md"
+        with pytest.raises(PermissionError, match="rename across domains"):
+            writer.rename_file(src, dst, allowed_domains=("research", "work"))
+        assert src.exists()
+
+    def test_rename_file_refuses_overwrite(self, ephemeral_vault: Path) -> None:
+        src = ephemeral_vault / "research" / "sources" / "a.md"
+        src.write_text("a", encoding="utf-8")
+        dst = ephemeral_vault / "research" / "sources" / "b.md"
+        dst.write_text("b", encoding="utf-8")
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        with pytest.raises(FileExistsError, match="already exists"):
+            writer.rename_file(src, dst, allowed_domains=("research",))
+        assert src.exists()
+        assert dst.exists()
+        assert dst.read_text(encoding="utf-8") == "b"
+
+    def test_rename_file_writes_undo_record(self, ephemeral_vault: Path) -> None:
+        src = ephemeral_vault / "research" / "sources" / "old.md"
+        src.write_text("body", encoding="utf-8")
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        dst = ephemeral_vault / "research" / "sources" / "new.md"
+        receipt = writer.rename_file(src, dst, allowed_domains=("research",))
+        undo_file = ephemeral_vault / ".brain" / "undo" / f"{receipt.undo_id}.txt"
+        assert undo_file.exists()
+        contents = undo_file.read_text(encoding="utf-8")
+        assert contents.startswith("RENAME")
+        assert "SRC" in contents
+        assert "DST" in contents

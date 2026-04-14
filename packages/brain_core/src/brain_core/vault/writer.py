@@ -123,6 +123,40 @@ class VaultWriter:
                 raise
         return receipt
 
+    def rename_file(
+        self,
+        src: Path,
+        dst: Path,
+        *,
+        allowed_domains: tuple[str, ...],
+    ) -> Receipt:
+        """Atomically rename a file inside the vault.
+
+        Both paths must be inside the vault and inside allowed domains, and
+        must belong to the same top-level domain (cross-domain moves are
+        rejected). `dst` must not exist. Writes a rename undo record.
+        """
+        src_abs = scope_guard(src, vault_root=self.vault_root, allowed_domains=allowed_domains)
+        dst_abs = scope_guard(dst, vault_root=self.vault_root, allowed_domains=allowed_domains)
+        src_rel = src_abs.relative_to(self.vault_root)
+        dst_rel = dst_abs.relative_to(self.vault_root)
+        if src_rel.parts[0] != dst_rel.parts[0]:
+            raise PermissionError(
+                f"rename across domains not allowed: {src_rel.parts[0]} -> {dst_rel.parts[0]}"
+            )
+        if not src_abs.exists():
+            raise FileNotFoundError(f"source {src} does not exist")
+        if dst_abs.exists():
+            raise FileExistsError(f"destination {dst} already exists")
+
+        lock = FileLock(str(self._locks_dir / "global.lock"))
+        with lock.acquire(timeout=30):
+            dst_abs.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src_abs, dst_abs)
+            undo_id = self._new_undo_id()
+            self._write_rename_undo_record(undo_id, src_abs, dst_abs)
+        return Receipt(applied_files=[dst_rel], undo_id=undo_id)
+
     def _atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
@@ -150,6 +184,10 @@ class VaultWriter:
                 lines.append(prev)
                 lines.append("END_PREV")
         target.write_text("\n".join(lines), encoding="utf-8")
+
+    def _write_rename_undo_record(self, undo_id: str, src: Path, dst: Path) -> None:
+        target = self._undo_dir / f"{undo_id}.txt"
+        target.write_text(f"RENAME\nSRC\t{src}\nDST\t{dst}\n", encoding="utf-8")
 
 
 def _sanitize_log_summary(text: str) -> str:
