@@ -26,6 +26,12 @@ class ClassifyOutput(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class ChatAutotitleOutput(BaseModel):
+    title: str
+    slug: str
+
+
 SCHEMAS["SummarizeOutput"] = SummarizeOutput
 SCHEMAS["IntegrateOutput"] = PatchSet
 SCHEMAS["ClassifyOutput"] = ClassifyOutput
+SCHEMAS["ChatAutotitleOutput"] = ChatAutotitleOutput
