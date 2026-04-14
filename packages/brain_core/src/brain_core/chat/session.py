@@ -17,9 +17,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from brain_core.chat.autotitle import AutoTitler
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.modes import MODES, tool_to_tooldef
 from brain_core.chat.pending import PendingPatchStore
+from brain_core.chat.persistence import ThreadPersistence
 from brain_core.chat.retrieval import BM25VaultIndex
 from brain_core.chat.tools.base import ToolContext, ToolRegistry
 from brain_core.chat.types import (
@@ -41,6 +43,7 @@ from brain_core.llm.types import (
     ToolUseBlock,
 )
 from brain_core.state.db import StateDB
+from brain_core.vault.writer import VaultWriter
 
 
 class ChatSession:
@@ -60,7 +63,12 @@ class ChatSession:
         state_db: StateDB | None,
         vault_root: Path,
         thread_id: str,
+        persistence: ThreadPersistence | None = None,
+        autotitler: AutoTitler | None = None,
+        vault_writer: VaultWriter | None = None,
     ) -> None:
+        if autotitler is not None and vault_writer is None:
+            raise ValueError("autotitler requires vault_writer")
         self.config = config
         self.llm = llm
         self.compiler = compiler
@@ -70,6 +78,9 @@ class ChatSession:
         self.state_db = state_db
         self.vault_root = vault_root
         self.thread_id = thread_id
+        self.persistence = persistence
+        self.autotitler = autotitler
+        self.vault_writer = vault_writer
         self._turns: list[ChatTurn] = []
         self._read_notes: dict[Path, str] = {}
         self._effective_registry = self._build_effective_registry()
@@ -386,4 +397,60 @@ class ChatSession:
                     tool_calls=tool_call_records,
                     cost_usd=turn_cost,
                 )
+            )
+
+        # Task 18: persistence + autotitle. Runs only on successful turn
+        # completion (the finally re-raises exceptions before reaching here).
+        if self.persistence is not None:
+            self.persistence.write(
+                thread_id=self.thread_id,
+                config=self.config,
+                turns=self._turns,
+            )
+
+        if (
+            self.autotitler is not None
+            and self.vault_writer is not None
+            and self.persistence is not None
+            and len(self._turns) == 4
+            and "draft" in self.thread_id
+        ):
+            try:
+                title_result = await self.autotitler.run(self._turns)
+            except Exception as exc:
+                yield ChatEvent(
+                    kind=ChatEventKind.ERROR,
+                    data={"message": f"autotitle failed: {exc}"},
+                )
+                return
+
+            old_thread_id = self.thread_id
+            date_prefix = old_thread_id[:10]
+            short_suffix = old_thread_id.split("-")[-1][:6]
+            new_thread_id = f"{date_prefix}-{title_result.slug}-{short_suffix}"
+
+            old_rel = self.persistence.thread_path(old_thread_id, self.config)
+            new_rel = self.persistence.thread_path(new_thread_id, self.config)
+            old_abs = self.vault_root / old_rel
+            new_abs = self.vault_root / new_rel
+
+            try:
+                self.vault_writer.rename_file(old_abs, new_abs, allowed_domains=self.config.domains)
+            except Exception as exc:
+                yield ChatEvent(
+                    kind=ChatEventKind.ERROR,
+                    data={"message": f"autotitle rename failed: {exc}"},
+                )
+                return
+
+            self.thread_id = new_thread_id
+            if self.state_db is not None:
+                self.state_db.exec(
+                    "DELETE FROM chat_threads WHERE thread_id = ?",
+                    (old_thread_id,),
+                )
+            self.persistence.write(
+                thread_id=self.thread_id,
+                config=self.config,
+                turns=self._turns,
             )
