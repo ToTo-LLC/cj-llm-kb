@@ -36,5 +36,5 @@ async def test_dispatch_text_path(fixtures_dir: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_unknown_raises() -> None:
-    with pytest.raises(DispatchError):
+    with pytest.raises(DispatchError, match=r"nope\.xyz"):
         await dispatch(Path("/nope/nope.xyz"))
