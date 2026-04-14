@@ -127,7 +127,10 @@ class IngestPipeline:
 
             # Stage 8: Integrate → PatchSet; prepend source note
             integrate_patch = await self._integrate(
-                extracted=extracted, summary=summary, domain=domain
+                extracted=extracted,
+                summary=summary,
+                domain=domain,
+                note_content=note_content,
             )
             integrate_patch.new_files.insert(0, NewFile(path=note_path, content=note_content))
 
@@ -177,14 +180,20 @@ class IngestPipeline:
         extracted: ExtractedSource,
         summary: SummarizeOutput,
         domain: str,
+        note_content: str,
     ) -> PatchSet:
-        """Call the integrate prompt and parse the response as a PatchSet."""
+        """Call the integrate prompt and parse the response as a PatchSet.
+
+        Feeds the integrate LLM the rendered markdown body of the source note
+        (not the SummarizeOutput JSON) so wikilink generation and section
+        references work against the same prose the vault will eventually hold.
+        """
         prompt = load_prompt("integrate")
         index_path = self.vault_root / domain / "index.md"
         index_md = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
         # TODO: related-notes retrieval lands in a later plan.
         user_content = prompt.render(
-            source_note=summary.model_dump_json(indent=2),
+            source_note=note_content,
             index_md=index_md,
             domain=domain,
             related_notes="",
