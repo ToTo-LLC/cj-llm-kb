@@ -618,7 +618,10 @@ Per D2c, this is a standalone `brain_core.state` module with just the `StateDB` 
 **Cross-platform notes:**
 - Use `sqlite3.connect(str(path))` — `pathlib.Path` works on both platforms.
 - WAL mode (`PRAGMA journal_mode=WAL`) — supported on Mac and Windows NTFS.
+- Pair WAL with `PRAGMA synchronous=NORMAL` — state is a rebuildable cache per CLAUDE.md principle #6, and NORMAL gives ~2× write speed with crash safety for everything except the last committed transaction.
 - File locking is sqlite's responsibility; no extra code needed.
+
+**Migration atomicity (IMPORTANT — learned during execution):** Do NOT use `conn.executescript(sql)` for migration application. `executescript` issues an implicit COMMIT on an autocommit connection, which breaks transaction semantics — a partial-failure migration will commit some DDL and never record the `schema_version` row, leaving the DB in a silently inconsistent state. Instead, manually split the SQL file on `;` after stripping `--` line comments, then loop over statements inside an explicit `BEGIN` / `COMMIT` / `ROLLBACK` block. This means migration files MUST NOT contain semicolons inside string literals or trigger bodies (document the limitation in the code, enforce at the first trigger-bearing migration). Also use plain `INSERT` (not `INSERT OR IGNORE`) on `schema_version` — a conflict there is always a bug given the preceding `version <= current` guard.
 
 - [ ] **Step 1: Write the failing test for `StateDB` basics**
 
@@ -778,6 +781,7 @@ __all__ = ["StateDB"]
 """StateDB — thin SQLite wrapper with additive migrations.
 
 Cross-platform: uses pathlib for all paths, WAL journal mode, no POSIX-only syscalls.
+Migrations apply transactionally: each file runs inside an explicit BEGIN/COMMIT/ROLLBACK.
 """
 
 from __future__ import annotations
@@ -802,14 +806,21 @@ class StateDB:
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path), isolation_level=None)  # autocommit
         conn.execute("PRAGMA journal_mode=WAL")
+        # NORMAL pairs with WAL per CLAUDE.md principle #6 (state is a rebuildable cache).
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         db = cls(conn)
-        db._apply_migrations()
+        try:
+            db._apply_migrations()
+        except Exception:
+            db.close()  # release the half-built resource before re-raising
+            raise
         return db
 
     def _apply_migrations(self) -> None:
         self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS schema_version "
+            "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
         )
         current = self.schema_version()
         for sql_file in sorted(_MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql")):
@@ -817,11 +828,36 @@ class StateDB:
             if version <= current:
                 continue
             sql = sql_file.read_text(encoding="utf-8")
-            self._conn.executescript(sql)
+            self._apply_one_migration(version, sql)
+
+    def _apply_one_migration(self, version: int, sql: str) -> None:
+        """Apply a single migration file transactionally.
+
+        We avoid sqlite3.executescript — it issues an implicit COMMIT on autocommit
+        connections, which breaks rollback semantics. Instead we split on ; after
+        stripping line comments, and run each statement inside an explicit transaction.
+
+        LIMITATION: the splitter does not understand semicolons inside string literals
+        or trigger bodies. Today's DDL-only migrations satisfy that constraint; the
+        first trigger-bearing migration must upgrade the splitter.
+        """
+        cleaned_lines = [
+            line for line in sql.splitlines() if not line.strip().startswith("--")
+        ]
+        cleaned = "\n".join(cleaned_lines)
+        statements = [s.strip() for s in cleaned.split(";") if s.strip()]
+        try:
+            self._conn.execute("BEGIN")
+            for stmt in statements:
+                self._conn.execute(stmt)
             self._conn.execute(
-                "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
+                "INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
                 (version, datetime.now(UTC).isoformat()),
             )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
 
     def schema_version(self) -> int:
         try:
@@ -849,23 +885,64 @@ class StateDB:
         self.close()
 ```
 
-- [ ] **Step 4: Run tests — expect PASS**
+- [ ] **Step 4: Add a regression test for transactional rollback**
+
+Add to `test_migrations.py`:
+
+```python
+def test_failed_migration_rolls_back_cleanly(tmp_path, monkeypatch):
+    """A broken 0002 migration must roll back atomically — no partial tables,
+    no stale schema_version row, and the DB must be reopenable with a valid
+    migrations dir afterward."""
+    import brain_core.state.db as db_module
+    fake_migrations = tmp_path / "fake_migrations"
+    fake_migrations.mkdir()
+    # Copy the real 0001 verbatim.
+    real_0001 = db_module._MIGRATIONS_DIR / "0001_chat_and_bm25.sql"
+    (fake_migrations / "0001_chat_and_bm25.sql").write_text(
+        real_0001.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    # Write a broken 0002 with a valid statement followed by invalid SQL.
+    (fake_migrations / "0002_broken.sql").write_text(
+        "CREATE TABLE partial_good (x INTEGER);\nBROKEN SYNTAX HERE;\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(db_module, "_MIGRATIONS_DIR", fake_migrations)
+
+    db_path = tmp_path / "state.sqlite"
+    with pytest.raises(sqlite3.OperationalError):
+        StateDB.open(db_path)
+
+    # Reopen with just the valid migration and verify rollback:
+    (fake_migrations / "0002_broken.sql").unlink()
+    with StateDB.open(db_path) as db:
+        # partial_good from the broken migration must NOT exist.
+        cur = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='partial_good'")
+        assert cur.fetchone() is None
+        # schema_version has exactly version 1.
+        cur = db.exec("SELECT version FROM schema_version")
+        assert cur.fetchall() == [(1,)]
+```
+
+- [ ] **Step 5: Run tests — expect PASS**
 
 ```bash
 uv sync --reinstall-package brain_core
 uv run pytest packages/brain_core/tests/state -v
 ```
-Expected: 9 passed.
+Expected: **10 passed** (5 in test_db.py + 5 in test_migrations.py).
 
-- [ ] **Step 5: 12-point self-review checklist**
+- [ ] **Step 6: 12-point self-review checklist**
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add packages/brain_core/src/brain_core/state/ \
         packages/brain_core/tests/state/
 git commit -m "feat(state): plan 03 task 2 — StateDB primitive + chat/bm25 migration"
 ```
+
+**Note for future plan authors:** the original plan text here specified `conn.executescript(sql)` and `INSERT OR IGNORE` on schema_version. Both are latent correctness bugs for partial-failure migrations and were caught in Task 2's code-quality review during execution (`08e04a0`). The version above reflects the shipped implementation. Future migration-related plans should NOT revert to `executescript`.
 
 ---
 
@@ -883,8 +960,16 @@ Per D3a, the pending-patch queue is one JSON file per patch at `<vault>/.brain/p
 `PatchSet` comes from `brain_core.vault.types` (already exists from Plan 02).
 
 **Cross-platform notes:**
-- Writes via `_atomic_write` helper (temp + rename) — never `open(..., "w")` directly.
-- `os.replace()` is atomic on both Mac and Windows.
+- Writes via `_atomic_write_text` helper (temp + rename) — never `open(..., "w")` directly.
+- `os.replace()` is atomic on both Mac and Windows, AND works cross-directory on the same filesystem. We exploit that for state transitions: first rewrite the envelope in place (tmp + `os.replace` → src), then rename src → dest across directories.
+
+**State transition atomicity (IMPORTANT — learned during execution):** The naive pattern `write(dest) → unlink(src)` has a crash window where both files exist, and on next `list()` the stale pending/ file reappears — a user's rejected patch pops back into their queue. Instead, `_move()` uses a two-phase atomic sequence:
+1. Compute the updated envelope (new status + reason)
+2. Write tmp in `src.parent` with the updated JSON
+3. `os.replace(tmp, src)` — src now has terminal status atomically
+4. `os.replace(src, dest)` — cross-directory atomic rename
+
+A crash between phases 3 and 4 leaves src with `status != PENDING`. `list()` has a safety net filter that excludes any loaded envelope where `env.status != PendingStatus.PENDING`, so the stale file is invisible to consumers. The clean path is atomic; the crash path self-heals at list time.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1125,7 +1210,13 @@ class PendingPatchStore:
         for f in sorted(self.root.glob("*.json")):
             if f.parent != self.root:
                 continue
-            out.append(PendingEnvelope.model_validate_json(f.read_text(encoding="utf-8")))
+            env = PendingEnvelope.model_validate_json(f.read_text(encoding="utf-8"))
+            # Safety net for the _move() crash window: if a file is in pending/ but its
+            # on-disk status is already terminal (REJECTED/APPLIED), skip it. Clean path
+            # never produces such files; crash path self-heals here.
+            if env.status != PendingStatus.PENDING:
+                continue
+            out.append(env)
         return out
 
     def get(self, patch_id: str) -> PendingEnvelope | None:
@@ -1148,32 +1239,94 @@ class PendingPatchStore:
         env = env.model_copy(
             update={"status": new_status, "reason": reason if reason is not None else env.reason}
         )
+        # Phase 1: rewrite src in place with the terminal status.
+        # We write the tmp directly (not via _atomic_write_text) because the subsequent
+        # os.replace(tmp, src) IS the atomic commit — wrapping it in another atomic
+        # helper would double-rename.
+        tmp = src.with_suffix(src.suffix + ".tmp")
+        tmp.write_text(env.model_dump_json(indent=2), encoding="utf-8", newline="\n")
+        os.replace(tmp, src)
+        # Phase 2: atomic cross-directory rename to the terminal status dir.
         dest_dir = self.root / new_status.value
         dest_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(dest_dir / f"{patch_id}.json", env.model_dump_json(indent=2))
-        src.unlink()
+        os.replace(src, dest_dir / f"{patch_id}.json")
 ```
 
-- [ ] **Step 3: Run tests — expect PASS**
+- [ ] **Step 3: Add two regression tests for the atomicity fix**
+
+Add `test_reject_actually_moves_via_os_replace` to `TestRejectAndApply`:
+
+```python
+def test_reject_actually_moves_via_os_replace(self, store: PendingPatchStore) -> None:
+    env = store.put(
+        patchset=_sample_patchset(),
+        source_thread="t.md",
+        mode=ChatMode.BRAINSTORM,
+        tool="propose_note",
+        target_path=Path("research/n.md"),
+        reason="x",
+    )
+    src = store.root / f"{env.patch_id}.json"
+    dest = store.root / "rejected" / f"{env.patch_id}.json"
+    store.reject(env.patch_id, reason="user rejected")
+    assert not src.exists()
+    assert dest.exists()
+    loaded = PendingEnvelope.model_validate_json(dest.read_text(encoding="utf-8"))
+    assert loaded.status == PendingStatus.REJECTED
+    assert loaded.reason == "user rejected"
+```
+
+Add a new `TestCrashRecovery` class:
+
+```python
+class TestCrashRecovery:
+    def test_list_skips_stale_pending_with_terminal_status(
+        self, store: PendingPatchStore
+    ) -> None:
+        """Simulate a crash between phase 1 (rewrite src with new status) and
+        phase 2 (os.replace src -> dest). The stale pending file must NOT
+        resurrect into list() output."""
+        env = store.put(
+            patchset=_sample_patchset(),
+            source_thread="t.md",
+            mode=ChatMode.BRAINSTORM,
+            tool="propose_note",
+            target_path=Path("research/n.md"),
+            reason="x",
+        )
+        src = store.root / f"{env.patch_id}.json"
+        # Manually reproduce the mid-crash state: src present but status=REJECTED.
+        stale = env.model_copy(update={"status": PendingStatus.REJECTED})
+        src.write_text(stale.model_dump_json(indent=2), encoding="utf-8")
+
+        listed = [e.patch_id for e in store.list()]
+        assert env.patch_id not in listed
+```
+
+Also bump all four `time.sleep(0.002)` occurrences in the existing tests to `time.sleep(0.01)` — 2ms is below historical Windows timer granularity and could be flaky on CI runners.
+
+- [ ] **Step 4: Run tests — expect PASS**
 
 ```bash
 uv run pytest packages/brain_core/tests/chat/test_pending.py -v
 ```
-Expected: 10 passed.
+Expected: **11 passed** (9 original + 2 new regression tests).
 
-- [ ] **Step 4: 12-point self-review checklist**
+- [ ] **Step 5: 12-point self-review checklist**
 
 Extra verification for Task 3:
-- Grep for any `open(..., "w")` or `write_text` outside `_atomic_write_text` in `pending.py` — should find only the helper itself.
+- Grep for any `open(..., "w")` or `write_text` outside `_atomic_write_text` / the `_move` phase-1 tmp write in `pending.py` — should find only those two sites.
 - `PendingPatchStore` writes to `.brain/pending/`, not the vault proper — confirm no `VaultWriter` bypass concern (this is scratch/state, not vault content).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/brain_core/src/brain_core/chat/pending.py \
         packages/brain_core/tests/chat/test_pending.py
 git commit -m "feat(chat): plan 03 task 3 — PendingPatchStore (.brain/pending/<id>.json)"
 ```
+
+**Note for future plan authors:** the original plan text here specified `_atomic_write_text(dest, ...)` followed by `src.unlink()` in `_move()`, and did NOT filter `list()` by status. Both were latent crash-recovery bugs caught in Task 3's code-quality review during execution (`62b0c1d`). The version above reflects the shipped implementation. Future staging-queue work should NOT revert to write-dest-then-unlink-src.
 
 ---
 
