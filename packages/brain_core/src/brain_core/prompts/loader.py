@@ -39,8 +39,11 @@ _USER_TEMPLATE_HEADER = "## User Template"
 _SECTION_RE = re.compile(r"^(##\s+\S[^\n]*)", re.MULTILINE)
 
 
-def _split_sections(body: str) -> dict[str, str]:
-    """Return a mapping of section heading -> trimmed content."""
+def _split_sections(body: str, *, name: str) -> dict[str, str]:
+    """Return a mapping of section heading -> trimmed content.
+
+    Raises :class:`PromptError` if the same heading appears more than once.
+    """
     parts = _SECTION_RE.split(body)
     # parts[0] is text before the first heading (usually empty).
     # After that: [heading, content, heading, content, ...]
@@ -48,7 +51,13 @@ def _split_sections(body: str) -> dict[str, str]:
     it = iter(parts[1:])
     for heading in it:
         content = next(it, "")
-        sections[heading.strip()] = content.strip()
+        heading_stripped = heading.strip()
+        if heading_stripped in sections:
+            raise PromptError(
+                f"Duplicate section {heading_stripped!r} in prompt {name!r}. "
+                "Prompt bodies must contain '## System' and '## User Template' exactly once."
+            )
+        sections[heading_stripped] = content.strip()
     return sections
 
 
@@ -65,12 +74,15 @@ class Prompt:
     def render(self, **kwargs: Any) -> str:
         """Substitute ``{placeholders}`` in the user template.
 
-        Raises ``KeyError`` if a required placeholder is missing.
+        Raises :class:`PromptError` if a placeholder is missing, positional,
+        or the format string is malformed.
         """
         try:
             return self.user_template.format(**kwargs)
-        except KeyError as exc:
-            raise KeyError(f"Prompt '{self.name}' render() missing placeholder: {exc}") from exc
+        except (KeyError, IndexError, ValueError) as exc:
+            raise PromptError(
+                f"Prompt {self.name!r} render() failed: missing or malformed placeholder ({exc})"
+            ) from exc
 
 
 def load_prompt(
@@ -103,7 +115,9 @@ def load_prompt(
     ------
     PromptError
         On missing file, malformed frontmatter, missing required frontmatter
-        keys, missing body sections, or unknown schema (strict mode).
+        keys, non-string frontmatter values, frontmatter name mismatch,
+        missing or empty body sections, duplicate sections, or unknown schema
+        (strict mode).
     """
     if search_dir is None:
         search_dir = Path(__file__).parent
@@ -127,8 +141,27 @@ def load_prompt(
                 f"prompt file '{prompt_path}' is missing required frontmatter key: '{key}'"
             )
 
-    fm_name: str = fm["name"]
-    output_schema_name: str = fm["output_schema"]
+    fm_name = fm["name"]
+    fm_schema = fm["output_schema"]
+
+    # --- Validate frontmatter values are strings -----------------------------
+    if not isinstance(fm_name, str):
+        raise PromptError(
+            f"Prompt {name!r}: frontmatter 'name' must be a string, got {type(fm_name).__name__}."
+        )
+    if not isinstance(fm_schema, str):
+        raise PromptError(
+            f"Prompt {name!r}: frontmatter 'output_schema' must be a string, "
+            f"got {type(fm_schema).__name__}."
+        )
+
+    # --- Validate frontmatter name matches the filename stem -----------------
+    if fm_name != name:
+        raise PromptError(
+            f"Prompt {name!r}: frontmatter 'name' is {fm_name!r}; it must match the filename stem."
+        )
+
+    output_schema_name: str = fm_schema
 
     # --- Resolve schema class -------------------------------------------------
     output_schema: type[BaseModel] | None = SCHEMAS.get(output_schema_name)
@@ -139,17 +172,21 @@ def load_prompt(
         )
 
     # --- Split body into sections --------------------------------------------
-    sections = _split_sections(body)
+    sections = _split_sections(body, name=name)
 
     system = sections.get(_SYSTEM_HEADER)
     if system is None:
         raise PromptError(f"prompt file '{prompt_path}' is missing required section: '## System'")
+    if not system:
+        raise PromptError(f"Prompt {name!r}: '## System' section is empty.")
 
     user_template = sections.get(_USER_TEMPLATE_HEADER)
     if user_template is None:
         raise PromptError(
             f"prompt file '{prompt_path}' is missing required section: '## User Template'"
         )
+    if not user_template:
+        raise PromptError(f"Prompt {name!r}: '## User Template' section is empty.")
 
     return Prompt(
         name=fm_name,

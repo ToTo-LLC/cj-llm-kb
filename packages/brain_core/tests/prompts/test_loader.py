@@ -110,7 +110,7 @@ def test_missing_user_template_section_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — render() with missing placeholder raises KeyError
+# Test 6 — render() with missing placeholder raises PromptError (Fix 1 + Fix 6)
 # ---------------------------------------------------------------------------
 
 
@@ -120,7 +120,7 @@ def test_render_missing_placeholder_raises(prompts_fixture_dir: Path) -> None:
         search_dir=prompts_fixture_dir,
         allow_unregistered_schema=True,
     )
-    with pytest.raises(KeyError):
+    with pytest.raises(PromptError, match=r"missing or malformed placeholder"):
         prompt.render()  # missing required 'text' kwarg
 
 
@@ -145,3 +145,115 @@ def test_registered_schema_resolved(tmp_path: Path) -> None:
         assert prompt.output_schema_name == "DummySchema"
     finally:
         SCHEMAS.pop("DummySchema", None)
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — render() wraps IndexError (positional placeholder) in PromptError
+# ---------------------------------------------------------------------------
+
+
+def test_render_positional_placeholder_raises_prompt_error(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "positional.md",
+        "---\nname: positional\noutput_schema: Foo\n---\n\n## System\n\nHello.\n\n## User Template\n\npositional {0}\n",
+    )
+    prompt = load_prompt("positional", search_dir=tmp_path, allow_unregistered_schema=True)
+    with pytest.raises(PromptError, match=r"missing or malformed placeholder"):
+        prompt.render()  # no positional args supplied
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — render() wraps ValueError (malformed template) in PromptError
+# ---------------------------------------------------------------------------
+
+
+def test_render_malformed_template_raises_prompt_error(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "malformed.md",
+        "---\nname: malformed\noutput_schema: Foo\n---\n\n## System\n\nHello.\n\n## User Template\n\nbad {\n",
+    )
+    prompt = load_prompt("malformed", search_dir=tmp_path, allow_unregistered_schema=True)
+    with pytest.raises(PromptError, match=r"missing or malformed placeholder"):
+        prompt.render()
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — Duplicate section header raises PromptError
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_section_header_raises(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "dupsec.md",
+        (
+            "---\nname: dupsec\noutput_schema: Foo\n---\n\n"
+            "## System\n\nFirst system.\n\n"
+            "## User Template\n\nHi {name}\n\n"
+            "## System\n\nDuplicate system.\n"
+        ),
+    )
+    with pytest.raises(PromptError, match=r"[Dd]uplicate section"):
+        load_prompt("dupsec", search_dir=tmp_path, allow_unregistered_schema=True)
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 — Frontmatter name must match filename stem
+# ---------------------------------------------------------------------------
+
+
+def test_frontmatter_name_must_match_filename(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "foo.md",
+        "---\nname: bar\noutput_schema: Foo\n---\n\n## System\n\nHello.\n\n## User Template\n\nHi {name}\n",
+    )
+    with pytest.raises(PromptError, match=r"frontmatter 'name'"):
+        load_prompt("foo", search_dir=tmp_path, allow_unregistered_schema=True)
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 — Empty ## System section raises PromptError
+# ---------------------------------------------------------------------------
+
+
+def test_empty_system_section_raises(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "emptysys.md",
+        "---\nname: emptysys\noutput_schema: Foo\n---\n\n## System\n\n## User Template\n\nHi {name}\n",
+    )
+    with pytest.raises(PromptError, match=r"'## System' section is empty"):
+        load_prompt("emptysys", search_dir=tmp_path, allow_unregistered_schema=True)
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 — Empty ## User Template section raises PromptError
+# ---------------------------------------------------------------------------
+
+
+def test_empty_user_template_section_raises(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "emptytpl.md",
+        "---\nname: emptytpl\noutput_schema: Foo\n---\n\n## System\n\nHello.\n\n## User Template\n",
+    )
+    with pytest.raises(PromptError, match=r"'## User Template' section is empty"):
+        load_prompt("emptytpl", search_dir=tmp_path, allow_unregistered_schema=True)
+
+
+# ---------------------------------------------------------------------------
+# Fix 5 — Non-string frontmatter 'name' raises PromptError
+# ---------------------------------------------------------------------------
+
+
+def test_non_string_frontmatter_value_raises(tmp_path: Path) -> None:
+    _write_prompt(
+        tmp_path,
+        "intname.md",
+        "---\nname: 123\noutput_schema: Foo\n---\n\n## System\n\nHello.\n\n## User Template\n\nHi {x}\n",
+    )
+    with pytest.raises(PromptError, match=r"frontmatter 'name' must be a string"):
+        load_prompt("intname", search_dir=tmp_path, allow_unregistered_schema=True)
