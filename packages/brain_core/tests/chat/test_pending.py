@@ -138,9 +138,7 @@ class TestRejectAndApply:
 
 
 class TestCrashRecovery:
-    def test_list_skips_stale_pending_with_terminal_status(
-        self, store: PendingPatchStore
-    ) -> None:
+    def test_list_skips_stale_pending_with_terminal_status(self, store: PendingPatchStore) -> None:
         """Simulate a crash between the two os.replace calls in _move(): the pending/
         file has status=REJECTED on disk but hasn't been moved to rejected/ yet.
         list() must filter it out so the rejected patch doesn't resurrect."""
