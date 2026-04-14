@@ -143,6 +143,30 @@ async def test_autotitle_none_skips_rename(
     assert session.thread_id == original
 
 
+async def test_autotitle_fires_after_turn_2_even_with_slash_command(
+    persistent_env: tuple[Path, FakeLLMProvider, ChatSession],
+) -> None:
+    """A user switching modes between turn 1 and turn 2 should still get an autotitle
+    on turn 2 completion. The trigger counts USER turns, not total turns."""
+    _vault, fake, session = persistent_env
+    old_thread_id = session.thread_id
+    # Turn 1.
+    fake.queue("answer 1")
+    async for _ in session.turn("q1"):
+        pass
+    # Simulate a slash command mid-session that appends a SYSTEM turn.
+    session.switch_mode(ChatMode.BRAINSTORM)
+    # Turn 2 + autotitle JSON.
+    fake.queue("answer 2")
+    fake.queue('{"title": "llm wiki basics", "slug": "llm-wiki-basics"}')
+    async for _ in session.turn("q2"):
+        pass
+    # Autotitle MUST have fired despite the SYSTEM turn from switch_mode.
+    assert session.thread_id != old_thread_id
+    assert "llm-wiki-basics" in session.thread_id
+    assert "draft" not in session.thread_id
+
+
 async def test_autotitle_failure_rolls_back_thread_id(
     persistent_env: tuple[Path, FakeLLMProvider, ChatSession],
 ) -> None:

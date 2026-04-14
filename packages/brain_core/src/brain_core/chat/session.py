@@ -408,11 +408,12 @@ class ChatSession:
                 turns=self._turns,
             )
 
+        user_turn_count = sum(1 for t in self._turns if t.role == TurnRole.USER)
         if (
             self.autotitler is not None
             and self.vault_writer is not None
             and self.persistence is not None
-            and len(self._turns) == 4
+            and user_turn_count == 2
             and "draft" in self.thread_id
         ):
             try:
