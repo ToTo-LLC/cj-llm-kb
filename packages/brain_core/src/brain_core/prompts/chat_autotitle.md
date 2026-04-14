@@ -15,7 +15,7 @@ Constraints:
 
 Respond with a JSON object matching the `ChatAutotitleOutput` schema:
 
-{{"title": "short human-readable title", "slug": "same-title-as-kebab-case-slug"}}
+{"title": "short human-readable title", "slug": "same-title-as-kebab-case-slug"}
 
 The `slug` must be the `title` with spaces replaced by hyphens. Do not include any prose, commentary, or markdown around the JSON.
 

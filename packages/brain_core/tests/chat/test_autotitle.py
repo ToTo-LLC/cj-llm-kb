@@ -42,9 +42,43 @@ async def test_invalid_json_raises_autotitle_error(turns: list[ChatTurn]) -> Non
         await autotitler.run(turns)
 
 
-async def test_slug_mismatch_raises(turns: list[ChatTurn]) -> None:
+@pytest.mark.asyncio
+async def test_slug_derived_from_title_ignores_llm_slug(turns: list[ChatTurn]) -> None:
+    """Even if the LLM's slug is wrong, we derive it from the title."""
     fake = FakeLLMProvider()
-    fake.queue('{"title": "foo bar", "slug": "completely-different"}')
+    fake.queue('{"title": "karpathy llm wiki", "slug": "completely-different"}')
     autotitler = AutoTitler(llm=fake)
-    with pytest.raises(AutoTitleError, match="slug"):
+    result = await autotitler.run(turns)
+    assert result.title == "karpathy llm wiki"
+    assert result.slug == "karpathy-llm-wiki"
+
+
+@pytest.mark.asyncio
+async def test_empty_title_raises(turns: list[ChatTurn]) -> None:
+    fake = FakeLLMProvider()
+    fake.queue('{"title": "", "slug": "x"}')
+    autotitler = AutoTitler(llm=fake)
+    with pytest.raises(AutoTitleError, match="missing title"):
         await autotitler.run(turns)
+
+
+@pytest.mark.asyncio
+async def test_code_fenced_json_is_parsed(turns: list[ChatTurn]) -> None:
+    fake = FakeLLMProvider()
+    fake.queue('```json\n{"title": "karpathy wiki", "slug": "karpathy-wiki"}\n```')
+    autotitler = AutoTitler(llm=fake)
+    result = await autotitler.run(turns)
+    assert result.title == "karpathy wiki"
+    assert result.slug == "karpathy-wiki"
+
+
+def test_prompt_system_has_single_braces() -> None:
+    from brain_core.prompts.loader import load_prompt
+
+    prompt = load_prompt("chat_autotitle")
+    # If the JSON example had escaped braces, they'd appear as `{{` in the system
+    # text because loader doesn't format the system section.
+    assert "{{" not in prompt.system
+    assert "}}" not in prompt.system
+    # But normal JSON should still be present
+    assert '"title"' in prompt.system

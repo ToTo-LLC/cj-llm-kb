@@ -144,13 +144,12 @@ class VaultWriter:
             raise PermissionError(
                 f"rename across domains not allowed: {src_rel.parts[0]} -> {dst_rel.parts[0]}"
             )
-        if not src_abs.exists():
-            raise FileNotFoundError(f"source {src} does not exist")
-        if dst_abs.exists():
-            raise FileExistsError(f"destination {dst} already exists")
-
         lock = FileLock(str(self._locks_dir / "global.lock"))
         with lock.acquire(timeout=30):
+            if not src_abs.exists():
+                raise FileNotFoundError(f"source {src} does not exist")
+            if dst_abs.exists():
+                raise FileExistsError(f"destination {dst} already exists")
             dst_abs.parent.mkdir(parents=True, exist_ok=True)
             os.replace(src_abs, dst_abs)
             undo_id = self._new_undo_id()

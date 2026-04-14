@@ -28,9 +28,6 @@ class AutoTitleResult:
     slug: str
 
 
-_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-
-
 class AutoTitler:
     """Produces a short kebab-case title for a chat thread from its first two turns."""
 
@@ -63,6 +60,13 @@ class AutoTitler:
 
     def _parse(self, raw: str) -> AutoTitleResult:
         stripped = raw.strip()
+        # Strip common code-fence wrappers that Haiku sometimes adds.
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            lines = lines[1:]  # drop opening fence (e.g. ```json)
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]  # drop closing fence
+            stripped = "\n".join(lines).strip()
         try:
             data = json.loads(stripped)
         except json.JSONDecodeError as exc:
@@ -70,12 +74,10 @@ class AutoTitler:
         if not isinstance(data, dict):
             raise AutoTitleError(f"autotitle expected JSON object, got {type(data).__name__}")
         title = str(data.get("title", "")).strip()
-        slug = str(data.get("slug", "")).strip()
-        if not title or not slug:
-            raise AutoTitleError(f"autotitle missing fields: {data}")
-        if not _SLUG_RE.match(slug):
-            raise AutoTitleError(f"autotitle slug not kebab-case: {slug!r}")
-        expected_slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-        if slug != expected_slug:
-            raise AutoTitleError(f"autotitle slug {slug!r} does not match title {title!r}")
+        if not title:
+            raise AutoTitleError(f"autotitle missing title: {data}")
+        # Derive slug deterministically from title — ignore any slug the LLM returned.
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+        if not slug:
+            raise AutoTitleError(f"autotitle title {title!r} produced empty slug")
         return AutoTitleResult(title=title, slug=slug)
