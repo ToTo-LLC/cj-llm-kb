@@ -26,9 +26,17 @@ class StateDB:
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path), isolation_level=None)  # autocommit
         conn.execute("PRAGMA journal_mode=WAL")
+        # NORMAL is the idiomatic WAL pairing: ~2x faster writes, still crash-safe.
+        # State DB is a rebuildable cache (see CLAUDE.md principle #6), so the
+        # last-committed-txn-on-power-loss risk is acceptable.
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         db = cls(conn)
-        db._apply_migrations()
+        try:
+            db._apply_migrations()
+        except Exception:
+            conn.close()
+            raise
         return db
 
     def _apply_migrations(self) -> None:
@@ -42,11 +50,39 @@ class StateDB:
             if version <= current:
                 continue
             sql = sql_file.read_text(encoding="utf-8")
-            self._conn.executescript(sql)
+            self._apply_one_migration(version, sql)
+
+    def _apply_one_migration(self, version: int, sql: str) -> None:
+        """Apply a single migration file atomically.
+
+        We cannot use ``sqlite3.Connection.executescript`` because it issues an
+        implicit COMMIT before running, which defeats the explicit BEGIN below
+        and lets partial migrations commit mid-file. Instead, we split on
+        semicolons and run each statement inside a single transaction, rolling
+        back on any failure so ``schema_version`` never ends up out-of-sync
+        with the actual schema.
+
+        Constraint: migration files must not contain semicolons inside string
+        literals or trigger bodies (naive split would break them). Today's
+        migrations are plain DDL — if a future migration needs triggers or
+        string-literal semicolons, upgrade this splitter accordingly.
+        """
+        # Strip `--` line comments before splitting so a leading comment block
+        # doesn't get glued onto the first real statement.
+        cleaned = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+        statements = [s.strip() for s in cleaned.split(";") if s.strip()]
+        try:
+            self._conn.execute("BEGIN")
+            for stmt in statements:
+                self._conn.execute(stmt)
             self._conn.execute(
-                "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
+                "INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
                 (version, datetime.now(UTC).isoformat()),
             )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
 
     def schema_version(self) -> int:
         """Return the highest applied migration version, or 0 if none."""
