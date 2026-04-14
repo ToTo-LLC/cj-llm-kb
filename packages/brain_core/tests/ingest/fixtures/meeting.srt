@@ -1,0 +1,7 @@
+1
+00:00:00,000 --> 00:00:03,000
+Alice: Welcome to the meeting.
+
+2
+00:00:03,000 --> 00:00:06,000
+Bob: Thanks for setting this up.
