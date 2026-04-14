@@ -22,7 +22,7 @@ class TweetHandler:
     source_type: SourceType = SourceType.TWEET
     fragile: bool = True
 
-    async def can_handle(self, spec: str | Path) -> bool:
+    def can_handle(self, spec: str | Path) -> bool:
         if not isinstance(spec, str):
             return False
         parsed = urlparse(spec)

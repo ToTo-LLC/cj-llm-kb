@@ -10,7 +10,7 @@ from brain_core.ingest.types import SourceType
 @pytest.mark.asyncio
 async def test_pdf_handler_extracts_text(tmp_path: Path, fixtures_dir: Path) -> None:
     h = PDFHandler()
-    assert await h.can_handle(fixtures_dir / "sample.pdf")
+    assert h.can_handle(fixtures_dir / "sample.pdf")
     es = await h.extract(fixtures_dir / "sample.pdf", archive_root=tmp_path)
     assert es.source_type is SourceType.PDF
     assert "Plan 02 PDF fixture" in es.body_text
@@ -32,11 +32,10 @@ async def test_pdf_handler_flags_probable_scan(tmp_path: Path) -> None:
         await PDFHandler(min_chars=50).extract(p, archive_root=tmp_path)
 
 
-@pytest.mark.asyncio
-async def test_pdf_handler_rejects_non_pdf(tmp_path: Path) -> None:
+def test_pdf_handler_rejects_non_pdf(tmp_path: Path) -> None:
     f = tmp_path / "x.txt"
     f.write_text("not a pdf", encoding="utf-8")
-    assert await PDFHandler().can_handle(f) is False
+    assert PDFHandler().can_handle(f) is False
 
 
 @pytest.mark.asyncio

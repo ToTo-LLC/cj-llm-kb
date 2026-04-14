@@ -16,7 +16,7 @@ _EXTS = {".vtt", ".srt"}
 class TranscriptVTTHandler:
     source_type: SourceType = SourceType.TRANSCRIPT
 
-    async def can_handle(self, spec: str | Path) -> bool:
+    def can_handle(self, spec: str | Path) -> bool:
         return isinstance(spec, Path) and spec.suffix.lower() in _EXTS and spec.exists()
 
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:

@@ -14,11 +14,15 @@ class HandlerError(RuntimeError):
 
 @runtime_checkable
 class SourceHandler(Protocol):
-    """Contract every per-type handler satisfies."""
+    """Contract every per-type handler satisfies.
+
+    `can_handle` must be a pure, synchronous routing check — no I/O, no
+    side effects, no network. `extract` does the actual work and may do I/O.
+    """
 
     source_type: SourceType
 
-    async def can_handle(self, spec: str | Path) -> bool: ...
+    def can_handle(self, spec: str | Path) -> bool: ...
 
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource: ...
 

@@ -27,7 +27,7 @@ async def test_url_handler_fetches_and_extracts(tmp_path: Path) -> None:
     async with respx.mock(base_url="https://example.com") as mock:
         mock.get("/a").mock(return_value=httpx.Response(200, text=_HTML))
         h = URLHandler()
-        assert await h.can_handle("https://example.com/a")
+        assert h.can_handle("https://example.com/a")
         es = await h.extract("https://example.com/a", archive_root=tmp_path)
     assert es.source_type is SourceType.URL
     assert "main body content" in es.body_text
@@ -36,11 +36,10 @@ async def test_url_handler_fetches_and_extracts(tmp_path: Path) -> None:
     assert es.archive_path.exists()
 
 
-@pytest.mark.asyncio
-async def test_url_handler_rejects_non_http() -> None:
+def test_url_handler_rejects_non_http() -> None:
     h = URLHandler()
-    assert await h.can_handle("file:///etc/passwd") is False
-    assert await h.can_handle(Path("/tmp/x")) is False
+    assert h.can_handle("file:///etc/passwd") is False
+    assert h.can_handle(Path("/tmp/x")) is False
 
 
 _HTML_JS_ONLY = "<html><body><script>var x=1;</script></body></html>"

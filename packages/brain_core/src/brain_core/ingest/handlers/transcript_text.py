@@ -14,7 +14,7 @@ _EXTS = {".txt"}
 class TranscriptTextHandler:
     source_type: SourceType = SourceType.TRANSCRIPT
 
-    async def can_handle(self, spec: str | Path) -> bool:
+    def can_handle(self, spec: str | Path) -> bool:
         if not isinstance(spec, Path):
             return False
         return spec.suffix.lower() in _EXTS and spec.exists() and "transcript" in spec.stem.lower()

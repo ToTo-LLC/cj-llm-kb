@@ -21,7 +21,7 @@ class PDFHandler:
     def __init__(self, *, min_chars: int = 200) -> None:
         self._min_chars = min_chars
 
-    async def can_handle(self, spec: str | Path) -> bool:
+    def can_handle(self, spec: str | Path) -> bool:
         if not isinstance(spec, Path):
             return False
         return spec.suffix.lower() == ".pdf" and spec.exists()

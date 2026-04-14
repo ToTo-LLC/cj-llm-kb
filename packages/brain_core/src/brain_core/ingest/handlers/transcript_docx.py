@@ -14,7 +14,7 @@ from brain_core.ingest.types import ExtractedSource, SourceType
 class TranscriptDOCXHandler:
     source_type: SourceType = SourceType.TRANSCRIPT
 
-    async def can_handle(self, spec: str | Path) -> bool:
+    def can_handle(self, spec: str | Path) -> bool:
         return isinstance(spec, Path) and spec.suffix.lower() == ".docx" and spec.exists()
 
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:

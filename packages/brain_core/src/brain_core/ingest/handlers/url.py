@@ -16,7 +16,7 @@ from brain_core.ingest.types import ExtractedSource, SourceType
 class URLHandler:
     source_type: SourceType = SourceType.URL
 
-    async def can_handle(self, spec: str | Path) -> bool:
+    def can_handle(self, spec: str | Path) -> bool:
         if not isinstance(spec, str):
             return False
         parsed = urlparse(spec)

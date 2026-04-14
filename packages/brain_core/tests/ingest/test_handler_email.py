@@ -11,7 +11,7 @@ from brain_core.ingest.types import SourceType
 async def test_email_handler_parses_header_and_body(fixtures_dir: Path, tmp_path: Path) -> None:
     text = (fixtures_dir / "email.txt").read_text(encoding="utf-8")
     h = EmailHandler()
-    assert await h.can_handle(text) is True
+    assert h.can_handle(text) is True
     es = await h.extract(text, archive_root=tmp_path)
     assert es.source_type is SourceType.EMAIL
     assert es.title == "Q2 planning"
@@ -20,13 +20,11 @@ async def test_email_handler_parses_header_and_body(fixtures_dir: Path, tmp_path
     assert es.archive_path.exists()
 
 
-@pytest.mark.asyncio
-async def test_email_handler_rejects_non_email_text() -> None:
-    assert await EmailHandler().can_handle("just a random paragraph") is False
+def test_email_handler_rejects_non_email_text() -> None:
+    assert EmailHandler().can_handle("just a random paragraph") is False
 
 
-@pytest.mark.asyncio
-async def test_email_handler_rejects_headers_without_at() -> None:
+def test_email_handler_rejects_headers_without_at() -> None:
     """From header without @-sign must not be detected as email."""
     raw = "From: Alice\nTo: Bob\nSubject: stuff\n\nbody"
-    assert await EmailHandler().can_handle(raw) is False
+    assert EmailHandler().can_handle(raw) is False
