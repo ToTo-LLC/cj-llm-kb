@@ -95,7 +95,14 @@ class PendingPatchStore:
         for f in sorted(self.root.glob("*.json")):
             if f.parent != self.root:
                 continue
-            out.append(PendingEnvelope.model_validate_json(f.read_text(encoding="utf-8")))
+            env = PendingEnvelope.model_validate_json(f.read_text(encoding="utf-8"))
+            # Crash-recovery safety net: if a prior _move() crashed between rewriting
+            # src with a terminal status and renaming it into rejected/applied/, the
+            # file is still sitting in pending/ with a non-PENDING status. Skip it
+            # so the stale transition does not resurface in the queue.
+            if env.status != PendingStatus.PENDING:
+                continue
+            out.append(env)
         return out
 
     def get(self, patch_id: str) -> PendingEnvelope | None:
@@ -121,7 +128,14 @@ class PendingPatchStore:
         env = env.model_copy(
             update={"status": new_status, "reason": reason if reason is not None else env.reason}
         )
+        # Two-phase atomic transition. Phase 1: rewrite src in place with the
+        # terminal status so the on-disk content is authoritative before any
+        # cross-directory rename. Phase 2: rename src -> dest. If we crash between
+        # phases, src has a non-PENDING status and list()'s filter skips it.
         dest_dir = self.root / new_status.value
         dest_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(dest_dir / f"{patch_id}.json", env.model_dump_json(indent=2))
-        src.unlink()
+        dest = dest_dir / f"{patch_id}.json"
+        tmp = src.with_suffix(src.suffix + ".tmp")
+        tmp.write_text(env.model_dump_json(indent=2), encoding="utf-8", newline="\n")
+        os.replace(tmp, src)  # phase 1: src now has terminal status, atomically
+        os.replace(src, dest)  # phase 2: cross-dir rename on same filesystem

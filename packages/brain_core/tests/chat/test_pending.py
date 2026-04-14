@@ -48,7 +48,7 @@ class TestPutAndList:
                 reason="x",
             )
             ids.append(env.patch_id)
-            time.sleep(0.002)
+            time.sleep(0.01)
         listed = [e.patch_id for e in store.list()]
         assert listed == sorted(ids)
 
@@ -99,11 +99,11 @@ class TestRejectAndApply:
         a = store.put(
             _sample_patchset(), "t.md", ChatMode.BRAINSTORM, "propose_note", Path("r/a.md"), "x"
         )
-        time.sleep(0.002)
+        time.sleep(0.01)
         b = store.put(
             _sample_patchset(), "t.md", ChatMode.BRAINSTORM, "propose_note", Path("r/b.md"), "x"
         )
-        time.sleep(0.002)
+        time.sleep(0.01)
         c = store.put(
             _sample_patchset(), "t.md", ChatMode.BRAINSTORM, "propose_note", Path("r/c.md"), "x"
         )
@@ -116,13 +116,55 @@ class TestRejectAndApply:
         with pytest.raises(KeyError):
             store.reject("nonexistent", reason="x")
 
+    def test_reject_actually_moves_via_os_replace(self, store: PendingPatchStore) -> None:
+        env = store.put(
+            patchset=_sample_patchset(),
+            source_thread="t.md",
+            mode=ChatMode.BRAINSTORM,
+            tool="propose_note",
+            target_path=Path("research/n.md"),
+            reason="x",
+        )
+        src = store.root / f"{env.patch_id}.json"
+        dest = store.root / "rejected" / f"{env.patch_id}.json"
+        store.reject(env.patch_id, reason="user rejected")
+        assert not src.exists()
+        assert dest.exists()
+        from brain_core.chat.pending import PendingEnvelope
+
+        loaded = PendingEnvelope.model_validate_json(dest.read_text(encoding="utf-8"))
+        assert loaded.status == PendingStatus.REJECTED
+        assert loaded.reason == "user rejected"
+
+
+class TestCrashRecovery:
+    def test_list_skips_stale_pending_with_terminal_status(
+        self, store: PendingPatchStore
+    ) -> None:
+        """Simulate a crash between the two os.replace calls in _move(): the pending/
+        file has status=REJECTED on disk but hasn't been moved to rejected/ yet.
+        list() must filter it out so the rejected patch doesn't resurrect."""
+        env = store.put(
+            patchset=_sample_patchset(),
+            source_thread="t.md",
+            mode=ChatMode.BRAINSTORM,
+            tool="propose_note",
+            target_path=Path("research/n.md"),
+            reason="x",
+        )
+        src = store.root / f"{env.patch_id}.json"
+        stale = env.model_copy(update={"status": PendingStatus.REJECTED})
+        src.write_text(stale.model_dump_json(indent=2), encoding="utf-8")
+        listed = [e.patch_id for e in store.list()]
+        assert env.patch_id not in listed
+
 
 class TestCrossPlatform:
     def test_patch_id_is_sortable_lexicographically(self, store: PendingPatchStore) -> None:
         first = store.put(
             _sample_patchset(), "t.md", ChatMode.BRAINSTORM, "propose_note", Path("r/a.md"), "x"
         )
-        time.sleep(0.002)
+        time.sleep(0.01)
         second = store.put(
             _sample_patchset(), "t.md", ChatMode.BRAINSTORM, "propose_note", Path("r/b.md"), "x"
         )
