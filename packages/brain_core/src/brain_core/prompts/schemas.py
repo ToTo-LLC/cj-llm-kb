@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from brain_core.vault.types import PatchSet
 
@@ -18,5 +20,12 @@ class SummarizeOutput(BaseModel):
     open_questions: list[str]
 
 
+class ClassifyOutput(BaseModel):
+    source_type: Literal["text", "url", "pdf", "email", "transcript", "tweet"]
+    domain: Literal["research", "work", "personal"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 SCHEMAS["SummarizeOutput"] = SummarizeOutput
 SCHEMAS["IntegrateOutput"] = PatchSet
+SCHEMAS["ClassifyOutput"] = ClassifyOutput
