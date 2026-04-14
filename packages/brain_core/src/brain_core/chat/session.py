@@ -118,8 +118,25 @@ class ChatSession:
 
     def set_open_doc(self, path: Path | None) -> None:
         """Set or clear the open doc path and rebuild the effective registry."""
+        old = self.config.open_doc_path
+        if old == path:
+            return
         self.config = self.config.model_copy(update={"open_doc_path": path})
         self._effective_registry = self._build_effective_registry()
+        if old is None and path is not None:
+            content = f"open doc set: {path.as_posix()}"
+        elif old is not None and path is None:
+            content = f"open doc cleared (was: {old.as_posix()})"
+        else:
+            assert old is not None and path is not None
+            content = f"open doc changed: {old.as_posix()} -> {path.as_posix()}"
+        self._turns.append(
+            ChatTurn(
+                role=TurnRole.SYSTEM,
+                content=content,
+                created_at=datetime.now(UTC),
+            )
+        )
 
     # ----- turn loop ----------------------------------------------------------
 

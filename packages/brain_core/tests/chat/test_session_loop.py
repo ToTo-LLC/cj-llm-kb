@@ -234,3 +234,27 @@ async def test_switch_mode_appends_system_turn_and_updates_registry(
     assert session.config.mode == ChatMode.BRAINSTORM
     assert any(t.role.value == "system" and "mode changed" in t.content for t in session._turns)
     assert "propose_note" in [t.name for t in session._effective_registry.all()]
+
+
+async def test_set_open_doc_appends_system_turn(env: EnvTuple) -> None:
+    session = _make_session(env, mode=ChatMode.DRAFT, open_doc=None)
+    # Initially no system turn.
+    assert not any(t.role.value == "system" for t in session._turns)
+    # Setting to a path appends a SYSTEM turn.
+    session.set_open_doc(Path("research/notes/drafting.md"))
+    system_turns = [t for t in session._turns if t.role.value == "system"]
+    assert len(system_turns) == 1
+    assert "open doc set" in system_turns[0].content
+    assert "research/notes/drafting.md" in system_turns[0].content
+    # edit_open_doc should now be in the effective registry.
+    assert "edit_open_doc" in [t.name for t in session._effective_registry.all()]
+    # Clearing appends another SYSTEM turn.
+    session.set_open_doc(None)
+    system_turns = [t for t in session._turns if t.role.value == "system"]
+    assert len(system_turns) == 2
+    assert "open doc cleared" in system_turns[1].content
+    # edit_open_doc should be removed from the effective registry.
+    assert "edit_open_doc" not in [t.name for t in session._effective_registry.all()]
+    # Setting to same None is a no-op.
+    session.set_open_doc(None)
+    assert len([t for t in session._turns if t.role.value == "system"]) == 2
