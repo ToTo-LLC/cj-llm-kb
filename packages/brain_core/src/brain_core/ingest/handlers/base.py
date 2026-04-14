@@ -1,4 +1,4 @@
-"""SourceHandler Protocol and the handler registry."""
+"""SourceHandler Protocol."""
 
 from __future__ import annotations
 
