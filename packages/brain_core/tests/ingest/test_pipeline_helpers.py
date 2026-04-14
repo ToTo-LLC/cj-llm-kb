@@ -4,10 +4,6 @@ This file covers:
   - _slug_for / _choose_slug_source
   - _already_ingested
   - _build_source_note
-  - ingest() stub (NotImplementedError)
-
-NOTE: The ingest_stub test will be DELETED in Task 17B when the stub is
-replaced by real logic.
 """
 
 from __future__ import annotations
@@ -15,7 +11,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import ExtractedSource, SourceType
 from brain_core.llm.fake import FakeLLMProvider
@@ -229,16 +224,3 @@ class TestBuildSourceNote:
         # Must not crash; frontmatter source_url should be None/null
         fm, _ = parse_frontmatter(content)
         assert fm.get("source_url") is None
-
-
-# ---------------------------------------------------------------------------
-# Test: ingest() stub
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ingest_stub_raises_not_implemented(ephemeral_vault: Path) -> None:
-    # NOTE: Delete this test in Task 17B when the stub is replaced by real logic.
-    p = _pipeline(ephemeral_vault)
-    with pytest.raises(NotImplementedError):
-        await p.ingest(Path("x.txt"), allowed_domains=("research",))
