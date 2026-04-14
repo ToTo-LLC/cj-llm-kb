@@ -1,0 +1,90 @@
+# Prompt contract tests (VCR cassettes)
+
+This project uses [`vcrpy`](https://vcrpy.readthedocs.io/) via
+[`pytest-vcr`](https://github.com/ktosiek/pytest-vcr) to record and replay
+real Anthropic API responses for prompt contract tests. The goal is to catch
+schema drift — if Anthropic changes how a model formats JSON output, the
+cassette-backed test will fail where a `FakeLLMProvider` test cannot.
+
+## How it works
+
+1. **Record mode.** On the first run with `RUN_LIVE_LLM_TESTS=1`, `vcrpy`
+   intercepts every HTTP call, lets the real request hit Anthropic, and saves
+   the request + response to a YAML file under
+   `packages/brain_core/tests/prompts/cassettes/`.
+2. **Replay mode** (every subsequent run). `vcrpy` intercepts the same HTTP
+   call, looks up the matching request in the cassette, and returns the
+   recorded response without touching the network. Tests are deterministic
+   and free.
+3. **Cassettes are committed to git** alongside the tests.
+
+## Running the tests
+
+### Normal (replay) mode — no API key required
+
+```
+uv run pytest packages/brain_core/tests/prompts -q
+```
+
+If a cassette is missing for a VCR-marked test, the test is **skipped** with
+a clear message. No network calls.
+
+### Record mode — API key required
+
+```
+export ANTHROPIC_API_KEY=sk-...
+RUN_LIVE_LLM_TESTS=1 uv run pytest packages/brain_core/tests/prompts -v -m vcr
+```
+
+This will make real HTTP calls, save cassettes, and cost a small amount of
+token budget. After recording, commit the cassettes:
+
+```
+git add packages/brain_core/tests/prompts/cassettes/
+git commit -m "test(brain_core): record prompt cassettes"
+```
+
+## Writing a VCR-marked test
+
+Template:
+
+```python
+import os
+from pathlib import Path
+import pytest
+
+_CASSETTES = Path(__file__).parent / "cassettes"
+
+
+@pytest.mark.vcr
+@pytest.mark.skipif(
+    not (_CASSETTES / "test_summarize.yaml").exists()
+    and os.environ.get("RUN_LIVE_LLM_TESTS") != "1",
+    reason="cassette not recorded; set RUN_LIVE_LLM_TESTS=1 to record",
+)
+async def test_summarize_contract():
+    # make the real API call here — vcrpy intercepts it
+    ...
+```
+
+## Redaction
+
+The `vcr_config` fixture in `tests/prompts/conftest.py` automatically
+redacts these headers before writing cassettes:
+
+- `authorization`
+- `x-api-key`
+- `anthropic-api-key`
+
+Before committing new cassettes, grep them for any `sk-` or token-like
+strings that may have slipped through.
+
+## Current status
+
+**Task 20 (scaffolding):** complete. Marker registered, VCR config in place,
+cassettes dir present but empty.
+
+**Task 21 (recording):** deferred. Will land whenever an Anthropic API key is
+available.
+
+**Task 22 (contract assertions):** deferred. Depends on Task 21.

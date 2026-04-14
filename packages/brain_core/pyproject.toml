@@ -41,3 +41,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "vcr: requires cassette (deferred in Task 21)",
+]
