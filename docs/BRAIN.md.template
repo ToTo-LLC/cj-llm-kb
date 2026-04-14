@@ -1,0 +1,73 @@
+# BRAIN.md — Your Vault Compass
+
+> This file tells `brain` how YOU think about YOUR vault. It's read on every
+> ingest, chat, brainstorm, and draft. Edit it freely — the LLM will adapt.
+>
+> This file is not a strict schema. It's a living instruction set written in
+> plain English. The more specific you are, the more consistent the wiki
+> will feel over time.
+
+## Taxonomy
+
+Describe the top-level topics or domains you care about. Examples:
+
+- **research** — academic papers, technical deep dives, reading notes
+- **work** — meeting notes, project updates, client context
+- **personal** — journal, family, health (kept private by default)
+
+For each domain, note what kinds of sources belong in it and any naming
+conventions you want followed.
+
+## Naming Conventions
+
+- Note filenames use `kebab-case.md` (e.g. `attention-is-all-you-need.md`).
+- Wiki notes live under `<domain>/notes/` by default.
+- Source notes (one per ingested artifact) live under `<domain>/sources/`.
+- Indexes live at `<domain>/index.md`.
+
+Override any of these here if you prefer a different layout.
+
+## Wikilink Rules
+
+- Prefer `[[note-stem]]` over `[[Full Title]]` when the stem is unambiguous.
+- New wiki notes should link to at least one existing note if semantically related.
+- The integrate step (LLM) will propose new wikilinks; you can reject them in the
+  approval queue.
+
+## Chat Mode Prompts
+
+### Ask
+
+> Placeholder: how should `brain` answer factual questions against the vault?
+> Example: "Cite the note filenames you pulled from, keep answers under 200 words."
+
+### Brainstorm
+
+> Placeholder: how should `brain` explore ideas with you?
+> Example: "Push back on lazy framings. Propose 3 angles, not 1."
+
+### Draft
+
+> Placeholder: how should `brain` help you write long-form?
+> Example: "Match my voice — first-person, dry humor, short sentences."
+
+## Domain-Specific Guidance
+
+### research
+
+> Placeholder: what matters in research notes?
+> Example: "Always capture the core claim, the evidence, and what you disagreed with."
+
+### work
+
+> Placeholder: what matters in work notes?
+> Example: "Decisions, owners, and deadlines are first-class — always extract them."
+
+### personal
+
+> Placeholder: what matters in personal notes?
+> Example: "No summarization shortcuts — keep the exact wording of journal entries."
+
+---
+
+*Edit this file any time. Changes take effect on the next ingest or chat turn.*
