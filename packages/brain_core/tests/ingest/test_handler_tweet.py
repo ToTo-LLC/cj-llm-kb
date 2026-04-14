@@ -23,6 +23,9 @@ async def test_tweet_handler_fetches_and_extracts(fixtures_dir: Path, tmp_path: 
     assert "markdown wikis" in es.body_text
     assert es.author == "karpathy"
     assert es.title and "karpathy" in es.title
+    assert es.archive_path.exists()
+    archived = json.loads(es.archive_path.read_text(encoding="utf-8"))
+    assert archived["id_str"] == "2039805659525644595"
 
 
 @pytest.mark.asyncio
