@@ -4061,6 +4061,10 @@ If the review surfaces nothing, this task becomes a formal "no-op close" commit 
 - **Task 17 test gap — combined chunk (delta + usage)** — session loop handles it via independent `if` branches but no explicit test asserts the contract. Add a test that queues a single chunk with both fields.
 - **Task 17 ERROR-then-finally comment** — when `turn()` raises mid-stream, `finally` still appends partial user+assistant turns with cost=0. Intentional (debugging value) but un-commented. Add one line explaining.
 - **Task 17 MAX_TOOL_ROUNDS round accounting** — `range(MAX_TOOL_ROUNDS + 1)` means rounds 0..9 do real work and round 10 is the sentinel cap check. Add a comment near the loop.
+- **Task 18 `"draft" in thread_id` substring match** — a title like `"draftsman-notes"` contains "draft" and would retrigger autotitle on a resumed session. Harder to hit in practice (user_turn_count==2 guards it), but semantically wrong. Replace with a narrower `_is_draft_thread_id()` helper checking the thread_id format explicitly.
+- **Task 18 double `persistence.write()` after rename** — wastes an Edit patch cycle. Alternative: `persistence.rebind(old_id, new_id)` that just updates `chat_threads` without re-rendering. Optimize only if profiling shows it matters.
+- **Task 18 mutable `session.autotitler`** — tests poke it post-construction. Not harmful but signals the field could be `Final`. Defensive hardening if Task 24 touches this area.
+- **Task 18 vault-before-DB ordering** — rename_file runs before state.sqlite DELETE. A crash between leaves an orphan row that `brain doctor --rebuild-cache` would clean up. Documented in CLAUDE.md principle #6 as acceptable. Add a one-line comment confirming the ordering is intentional.
 
 - [ ] **Step 1: Collect all deferred items from Tasks 4–20 review logs** into a findings list (append to the known list above).
 - [ ] **Step 2: Batch-fix each with test coverage** — same TDD discipline.
