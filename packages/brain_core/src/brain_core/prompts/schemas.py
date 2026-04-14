@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from brain_core.vault.types import PatchSet
+
 SCHEMAS: dict[str, type[BaseModel]] = {}
 
 
@@ -17,3 +19,4 @@ class SummarizeOutput(BaseModel):
 
 
 SCHEMAS["SummarizeOutput"] = SummarizeOutput
+SCHEMAS["IntegrateOutput"] = PatchSet
