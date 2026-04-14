@@ -4046,7 +4046,15 @@ Per Plan 02 lesson "when reviewers raise the same class of concern on 2+ consecu
 
 If the review surfaces nothing, this task becomes a formal "no-op close" commit — file the review receipt in `tasks/lessons.md` and move on.
 
-- [ ] **Step 1: Collect all deferred items from Tasks 4–20 review logs** into a findings list.
+**Known deferrals accumulated during execution** (main loop will append to this list as more surface):
+
+- **Task 4 stopword set is 57 words**, slightly over the "<50" soft target. Trim or update the spec comment.
+- **Task 9 `list_chats` `LIKE` escaping.** `query` param is parameterized (no SQL injection) but `%` and `_` in the user's query act as wildcards. Local-KB concern, not security. Fix by escaping `\%` and `\_`, then appending `ESCAPE '\\'` to the LIKE clause. Alternative: document the wildcard behavior and leave as-is.
+- **Task 11 `edit_open_doc` empty-`old` string** falls through to "not unique" error because `body.count("")` returns `len(body)+1`. Add explicit guard: `if not old: raise ValueError("old text must be non-empty")` before the count.
+- **Task 7 `read_note` + Task 8 `list_index` `FrontmatterError` fallback path** has no direct regression test (the lenient `fm={}, body=raw` branch). Add one parametrized test covering both tools.
+- **Task 10/11 staging-tool consistency**: `text` messages are the only place the patch_id surfaces to the LLM. Consider a shared helper if a third staging tool lands.
+
+- [ ] **Step 1: Collect all deferred items from Tasks 4–20 review logs** into a findings list (append to the known list above).
 - [ ] **Step 2: Batch-fix each with test coverage** — same TDD discipline.
 - [ ] **Step 3: Run full test suite + 12-point self-review.**
 - [ ] **Step 4: Commit** (one commit per batch, matching Plan 02 batch-1/2/3 convention if >5 findings).
