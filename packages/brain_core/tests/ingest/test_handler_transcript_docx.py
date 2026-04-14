@@ -24,3 +24,14 @@ async def test_docx_handler_rejects_txt(tmp_path: Path) -> None:
     f = tmp_path / "x.txt"
     f.write_text("nope", encoding="utf-8")
     assert await TranscriptDOCXHandler().can_handle(f) is False
+
+
+@pytest.mark.asyncio
+async def test_docx_handler_raises_handler_error_on_corrupt_docx(tmp_path: Path) -> None:
+    """A file with .docx extension that is not a valid DOCX must raise HandlerError."""
+    from brain_core.ingest.handlers.base import HandlerError
+
+    fake = tmp_path / "fake.docx"
+    fake.write_bytes(b"not a docx")
+    with pytest.raises(HandlerError):
+        await TranscriptDOCXHandler().extract(fake, archive_root=tmp_path / "archive")

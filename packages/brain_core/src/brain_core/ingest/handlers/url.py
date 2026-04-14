@@ -25,11 +25,22 @@ class URLHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, str):
             raise HandlerError(f"url handler cannot read {spec!r}")
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            resp = await client.get(spec)
-            resp.raise_for_status()
-            html = resp.text
-            final_url = str(resp.url)
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                resp = await client.get(spec)
+                resp.raise_for_status()
+                html = resp.text
+                final_url = str(resp.url)
+        except httpx.HTTPStatusError as exc:
+            raise HandlerError(
+                f"Fetch failed for {spec}: HTTP {exc.response.status_code}. "
+                "Check the URL and try again."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise HandlerError(
+                f"Could not reach {spec}: {type(exc).__name__}. "
+                "Check your network connection and the URL."
+            ) from exc
 
         extracted = trafilatura.extract(html, include_comments=False, include_tables=False)
         if not extracted or not extracted.strip():

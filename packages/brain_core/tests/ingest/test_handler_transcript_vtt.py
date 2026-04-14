@@ -33,3 +33,14 @@ async def test_vtt_handler_rejects_txt(tmp_path: Path) -> None:
     f = tmp_path / "x.txt"
     f.write_text("nope", encoding="utf-8")
     assert await TranscriptVTTHandler().can_handle(f) is False
+
+
+@pytest.mark.asyncio
+async def test_vtt_handler_raises_handler_error_on_malformed_vtt(tmp_path: Path) -> None:
+    """A file that is not valid VTT must raise HandlerError."""
+    from brain_core.ingest.handlers.base import HandlerError
+
+    bad_vtt = tmp_path / "bad.vtt"
+    bad_vtt.write_text("not a vtt file", encoding="utf-8")
+    with pytest.raises(HandlerError, match=r"(?i)(parse|valid)"):
+        await TranscriptVTTHandler().extract(bad_vtt, archive_root=tmp_path / "archive")

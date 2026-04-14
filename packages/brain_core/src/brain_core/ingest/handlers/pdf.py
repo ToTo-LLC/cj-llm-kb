@@ -29,7 +29,14 @@ class PDFHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, Path) or not spec.exists():
             raise HandlerError(f"pdf handler cannot read {spec!r}")
-        with fitz.open(spec) as doc:
+        try:
+            doc_ctx = fitz.open(spec)
+        except fitz.FileDataError as exc:
+            raise HandlerError(
+                f"Could not open PDF {spec.name!r}: {exc}. "
+                "The file may be corrupt, password-protected, or not a PDF."
+            ) from exc
+        with doc_ctx as doc:
             parts: list[str] = []
             title: str | None = None
             try:

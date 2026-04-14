@@ -22,7 +22,12 @@ class TextHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, Path) or not spec.exists():
             raise HandlerError(f"text handler cannot read {spec!r}")
-        body = spec.read_text(encoding="utf-8")
+        try:
+            body = spec.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise HandlerError(
+                f"File {spec.name!r} is not valid UTF-8. Re-save it as UTF-8 text and try again."
+            ) from exc
         archive_root.mkdir(parents=True, exist_ok=True)
         archive_path = archive_root / spec.name
         shutil.copy2(spec, archive_path)

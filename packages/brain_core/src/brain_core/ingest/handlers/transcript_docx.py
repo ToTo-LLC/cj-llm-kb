@@ -20,7 +20,13 @@ class TranscriptDOCXHandler:
     async def extract(self, spec: str | Path, *, archive_root: Path) -> ExtractedSource:
         if not isinstance(spec, Path) or not spec.exists():
             raise HandlerError(f"transcript_docx cannot read {spec!r}")
-        doc = Document(spec)  # type: ignore[arg-type]  # python-docx stubs say str | IO[bytes], but Path works at runtime
+        try:
+            doc = Document(spec)  # type: ignore[arg-type]  # python-docx stubs say str | IO[bytes], but Path works at runtime
+        except Exception as exc:
+            raise HandlerError(
+                f"Could not open DOCX {spec.name!r}: {exc}. "
+                "The file may be corrupt or not a Word document."
+            ) from exc
         body = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
         archive_root.mkdir(parents=True, exist_ok=True)
         archive_path = archive_root / spec.name

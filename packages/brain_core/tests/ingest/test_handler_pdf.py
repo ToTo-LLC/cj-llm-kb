@@ -37,3 +37,14 @@ async def test_pdf_handler_rejects_non_pdf(tmp_path: Path) -> None:
     f = tmp_path / "x.txt"
     f.write_text("not a pdf", encoding="utf-8")
     assert await PDFHandler().can_handle(f) is False
+
+
+@pytest.mark.asyncio
+async def test_pdf_handler_raises_handler_error_on_corrupt_pdf(tmp_path: Path) -> None:
+    """A file with a .pdf extension that is not a valid PDF must raise HandlerError."""
+    from brain_core.ingest.handlers.base import HandlerError
+
+    fake = tmp_path / "fake.pdf"
+    fake.write_bytes(b"not a pdf at all")
+    with pytest.raises(HandlerError, match="Could not open"):
+        await PDFHandler().extract(fake, archive_root=tmp_path / "archive")

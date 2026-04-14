@@ -55,3 +55,15 @@ async def test_url_handler_raises_on_empty_extraction(tmp_path: Path) -> None:
         h = URLHandler()
         with pytest.raises(HandlerError, match="No readable content"):
             await h.extract("https://example.com/js-only", archive_root=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_url_handler_raises_handler_error_on_http_404(tmp_path: Path) -> None:
+    """A 404 response must raise HandlerError mentioning 'HTTP 404'."""
+    from brain_core.ingest.handlers.base import HandlerError
+
+    async with respx.mock(base_url="https://example.com") as mock:
+        mock.get("/missing").mock(return_value=httpx.Response(404, text="Not Found"))
+        h = URLHandler()
+        with pytest.raises(HandlerError, match="HTTP 404"):
+            await h.extract("https://example.com/missing", archive_root=tmp_path)

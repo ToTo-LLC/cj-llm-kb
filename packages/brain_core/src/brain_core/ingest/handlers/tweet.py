@@ -37,10 +37,26 @@ class TweetHandler:
         if not m:
             raise HandlerError(f"no tweet id in {spec}")
         tweet_id = m.group(1)
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(_SYNDICATION, params={"id": tweet_id})
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(_SYNDICATION, params={"id": tweet_id})
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HandlerError(
+                f"Syndication fetch failed for tweet {tweet_id}: HTTP {exc.response.status_code}. "
+                "The tweet may be deleted, private, or the syndication endpoint may have changed."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise HandlerError(
+                f"Could not reach the tweet syndication endpoint: {type(exc).__name__}. "
+                "Check your network connection."
+            ) from exc
+        except ValueError as exc:  # json.JSONDecodeError is a ValueError subclass
+            raise HandlerError(
+                f"Syndication endpoint returned non-JSON for tweet {tweet_id}. "
+                "The endpoint may have changed — this handler may need an update."
+            ) from exc
         author = data.get("user", {}).get("screen_name") or None
         display = data.get("user", {}).get("name") or author
         text = data.get("text") or ""

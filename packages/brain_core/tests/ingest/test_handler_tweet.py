@@ -30,3 +30,16 @@ async def test_tweet_handler_rejects_non_tweet_url() -> None:
     h = TweetHandler()
     assert await h.can_handle("https://example.com") is False
     assert await h.can_handle("https://twitter.com/karpathy") is False  # no status ID
+
+
+@pytest.mark.asyncio
+async def test_tweet_handler_raises_handler_error_on_http_404(tmp_path: Path) -> None:
+    """A 404 from the syndication endpoint must raise HandlerError mentioning 'HTTP 404'."""
+    from brain_core.ingest.handlers.base import HandlerError
+
+    async with respx.mock(base_url="https://cdn.syndication.twimg.com") as mock:
+        mock.get("/tweet-result").mock(return_value=httpx.Response(404, text="Not Found"))
+        h = TweetHandler()
+        url = "https://x.com/karpathy/status/2039805659525644595"
+        with pytest.raises(HandlerError, match="HTTP 404"):
+            await h.extract(url, archive_root=tmp_path)
