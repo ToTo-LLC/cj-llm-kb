@@ -22,10 +22,10 @@ from mcp.server.lowlevel import Server
 
 from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
 from brain_mcp.tools import list_domains as _list_domains_tool
-from brain_mcp.tools.base import ToolContext
+from brain_mcp.tools.base import ToolContext, ToolModule
 
 # Task 5+ appends more modules here.
-_TOOL_MODULES: list[Any] = [
+_TOOL_MODULES: list[ToolModule] = [
     _list_domains_tool,
 ]
 
@@ -42,13 +42,23 @@ def create_server(
     """
     server: Server = Server("brain")
 
+    # Cached across tool calls within one session. An MCP session is short-lived
+    # and bound to one (vault_root, allowed_domains) tuple closed over at
+    # create_server() time, so the ToolContext (notably its BM25 index) is safe
+    # to reuse instead of rebuilding on every tool call.
+    # TODO(Task 21): invalidate cache after writes when real config wiring lands.
+    _cached_ctx: ToolContext | None = None
+
     def _build_ctx() -> ToolContext:
-        """Build a fresh ToolContext per tool call.
+        """Return the session's ToolContext, building it lazily on first use.
 
         Task 21 replaces this with a real builder that reads config from env;
         for now, wires everything from the vault_root + allowed_domains closed
         over at create_server() time.
         """
+        nonlocal _cached_ctx
+        if _cached_ctx is not None:
+            return _cached_ctx
         brain_dir = vault_root / ".brain"
         brain_dir.mkdir(parents=True, exist_ok=True)
         db = StateDB.open(brain_dir / "state.sqlite")
@@ -56,7 +66,7 @@ def create_server(
         pending = PendingPatchStore(brain_dir / "pending")
         retrieval = BM25VaultIndex(vault_root=vault_root, db=db)
         retrieval.build(allowed_domains)
-        return ToolContext(
+        _cached_ctx = ToolContext(
             vault_root=vault_root,
             allowed_domains=allowed_domains,
             retrieval=retrieval,
@@ -68,6 +78,7 @@ def create_server(
             rate_limiter=RateLimiter(RateLimitConfig()),
             undo_log=UndoLog(vault_root=vault_root),
         )
+        return _cached_ctx
 
     @server.list_tools()
     async def handle_list_tools() -> list[types.Tool]:

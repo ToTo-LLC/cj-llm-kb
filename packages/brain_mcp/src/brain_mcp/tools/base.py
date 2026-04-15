@@ -10,10 +10,21 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import mcp.types as types
 from brain_core.vault.paths import scope_guard
+
+# Tool-module registry entries are typed as this alias. A structural Protocol
+# with a `handle` callable member was attempted first, but mypy treats Callable
+# parameters as positional-only, which does not match the named (arguments, ctx)
+# signature our concrete tool modules use. ModuleType gives us an explicit,
+# honest type (these ARE modules) without fighting the type checker. Mypy won't
+# narrow attribute access on ModuleType, so tool-module attribute typos still
+# fall to runtime — but the pattern is documented and consistent across all
+# tool modules in brain_mcp.tools.*.
+ToolModule = ModuleType
 
 
 @dataclass(frozen=True)
