@@ -15,8 +15,9 @@ async def test_initialize_succeeds(mcp_session_ctx: SessionCtx, tmp_path: Path) 
     """Session initialization via the in-memory helper should complete cleanly."""
     async with mcp_session_ctx(tmp_path) as session:
         result = await session.list_tools()
-        # Task 1 baseline: zero tools registered.
-        assert result.tools == []
+        # Task 4 baseline: brain_list_domains registered.
+        tool_names = [t.name for t in result.tools]
+        assert "brain_list_domains" in tool_names
 
 
 async def test_unknown_tool_returns_error(mcp_session_ctx: SessionCtx, tmp_path: Path) -> None:
