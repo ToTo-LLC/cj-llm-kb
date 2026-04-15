@@ -4065,6 +4065,11 @@ If the review surfaces nothing, this task becomes a formal "no-op close" commit 
 - **Task 18 double `persistence.write()` after rename** — wastes an Edit patch cycle. Alternative: `persistence.rebind(old_id, new_id)` that just updates `chat_threads` without re-rendering. Optimize only if profiling shows it matters.
 - **Task 18 mutable `session.autotitler`** — tests poke it post-construction. Not harmful but signals the field could be `Final`. Defensive hardening if Task 24 touches this area.
 - **Task 18 vault-before-DB ordering** — rename_file runs before state.sqlite DELETE. A crash between leaves an orphan row that `brain doctor --rebuild-cache` would clean up. Documented in CLAUDE.md principle #6 as acceptable. Add a one-line comment confirming the ordering is intentional.
+- **Task 20 `StreamRenderer.render` unknown-kind fallback** — no `else` branch. A future `ChatEventKind` addition would silently drop. Add `assert_never(event.kind)` or a dim debug print as future-proofing.
+- **Task 20 `TOOL_RESULT` 500-char truncation** is a magic number in `stream.py`. Pull into a module-level constant (e.g. `_MAX_TOOL_RESULT_CHARS = 500`) for tunability.
+- **Task 20 `patches apply` catches bare `Exception`** in the writer.apply path — correct for a CLI (wants to surface any failure as exit-1 rather than a traceback), but a one-line comment noting the intent would clarify.
+- **Plan 01 gap discovered in Task 20**: `brain_core` was missing the PEP 561 `py.typed` marker file, causing 24 spurious mypy import-untyped errors when running mypy from `packages/brain_cli/`. Fixed in Task 20 as a single-byte marker. Backport this lesson to Plan 01 retrospective: new `brain_core` workspace member needs `py.typed` from day one.
+- **Plan 03 lesson discovered in Task 19**: `[project.scripts]` in a workspace root with `[tool.uv] package = false` is silently ignored by uv. Scripts must live in the workspace member's own `pyproject.toml`. Add this to the Plan 01/uv workaround documentation.
 
 - [ ] **Step 1: Collect all deferred items from Tasks 4–20 review logs** into a findings list (append to the known list above).
 - [ ] **Step 2: Batch-fix each with test coverage** — same TDD discipline.
