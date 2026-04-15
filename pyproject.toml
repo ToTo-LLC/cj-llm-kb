@@ -6,7 +6,11 @@ requires-python = ">=3.12"
 readme = "README.md"
 dependencies = [
     "brain_core",
+    "brain_cli",
 ]
+
+[project.scripts]
+brain = "brain_cli.app:app"
 
 [tool.uv]
 package = false
@@ -16,6 +20,13 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 brain_core = { workspace = true, editable = false }
+brain_cli = { workspace = true, editable = false }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "vcr: requires cassette (deferred in Task 21)",
+]
 
 [dependency-groups]
 dev = [

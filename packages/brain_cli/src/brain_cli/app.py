@@ -1,0 +1,33 @@
+"""Typer root. Subcommands land in commands/ (Task 20)."""
+
+from __future__ import annotations
+
+import typer
+
+from brain_cli import __version__
+
+app = typer.Typer(
+    name="brain",
+    help="brain — local LLM-maintained personal knowledge base",
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"brain {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """brain CLI root."""
