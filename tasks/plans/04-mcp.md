@@ -520,6 +520,8 @@ Both empty files. Populated in later tasks.
 
 ### Step 8 — Create `packages/brain_mcp/tests/conftest.py`
 
+**SHIPPED PATTERN (Task 1 executed):** the real `mcp==1.27.0` API ships a higher-level `create_connected_server_and_client_session` combinator at `mcp.shared.memory`. AND the async-gen fixture pattern fails on pytest-asyncio 1.3.0 because setup and teardown run on different tasks, tripping anyio's cancel-scope guard. The shipped fixture uses a SYNC factory returning an async context manager. Tasks 4+ MUST use `async with mcp_session_ctx(tmp_path) as session:` — do NOT try to make `mcp_session` a yielding async fixture.
+
 ```python
 """Shared fixtures for brain_mcp tests.
 
