@@ -361,7 +361,658 @@ Seven review pause points, matching Plan 03's rhythm:
 
 ### Group 1 — Foundation (Tasks 1–3)
 
-*To be filled in after decision + outline review.*
+**Checkpoint after Task 3:** main-loop reviews package skeleton, rate limiter contract, and `ToolContext` shape before tool rollout. If the ToolContext gets fields wrong, every Group-2/3/4/5 tool will need to be touched — cheaper to catch here.
+
+---
+
+### Task 1 — `brain_mcp` workspace package skeleton
+
+**Owning subagent:** brain-mcp-engineer
+
+**Files:**
+- Modify: root `pyproject.toml` — add `brain_mcp` dep + `[tool.uv.sources]` entry
+- Create: `packages/brain_mcp/pyproject.toml`
+- Create: `packages/brain_mcp/src/brain_mcp/__init__.py`
+- Create: `packages/brain_mcp/src/brain_mcp/__main__.py`
+- Create: `packages/brain_mcp/src/brain_mcp/server.py` (skeleton only — no tools yet)
+- Create: `packages/brain_mcp/src/brain_mcp/py.typed` (empty PEP 561 marker)
+- Create: `packages/brain_mcp/src/brain_mcp/tools/__init__.py` (empty, populated in Tasks 3+)
+- Create: `packages/brain_mcp/src/brain_mcp/resources/__init__.py` (empty, populated in Task 10)
+- Create: `packages/brain_mcp/tests/conftest.py` — in-memory MCP client fixture
+- Create: `packages/brain_mcp/tests/test_server_smoke.py` — initialize + tools/list smoke test
+
+**Context for the implementer:**
+
+This is a NEW workspace package. Lessons from Plan 03 Task 19 (`brain_cli` skeleton):
+- `[project.scripts]` MUST live in `packages/brain_mcp/pyproject.toml`, NOT the root — root has `[tool.uv] package = false` which silently drops scripts.
+- `py.typed` marker needed from day one (Plan 03 Task 20 lesson).
+- Root `pyproject.toml` needs both the `brain_mcp` dep in `[project].dependencies` AND the `brain_mcp = { workspace = true, editable = false }` entry in `[tool.uv.sources]`.
+- Workspace is glob-discovered (`members = ["packages/*"]`), so `brain_mcp` is auto-picked up.
+
+New runtime dep: `mcp>=1.0`. This is the official Python MCP SDK. Ships type stubs (PEP 561) so no mypy override needed.
+
+For the `__main__.py` entry point, the plan is `python -m brain_mcp` spawns the stdio server. In Plan 04 Task 1 we just land the skeleton; actual stdio wiring lands in Task 21 when the CLI `brain mcp install` gets invoked. For now the `__main__` is a stub that prints a version string and exits.
+
+**Server skeleton (Task 1):** `server.py` creates an empty `mcp.server.lowlevel.Server("brain")` instance and a `create_server() -> Server` factory. No tools registered yet. The `list_tools` and `call_tool` handlers return empty list / raise `ValueError("unknown tool")` respectively. Tasks 3+ will populate them.
+
+### Step 1 — Create `packages/brain_mcp/pyproject.toml`
+
+```toml
+[project]
+name = "brain_mcp"
+version = "0.0.1"
+description = "brain MCP server — exposes brain_core primitives over the Model Context Protocol"
+requires-python = ">=3.12"
+dependencies = [
+    "brain_core",
+    "mcp>=1.0",
+]
+
+[project.scripts]
+brain-mcp = "brain_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brain_mcp"]
+
+[tool.uv.sources]
+brain_core = { workspace = true }
+```
+
+### Step 2 — Update root `pyproject.toml`
+
+Add to `[project].dependencies`:
+```toml
+dependencies = [
+    "brain_core",
+    "brain_cli",
+    "brain_mcp",
+]
+```
+
+Add to `[tool.uv.sources]`:
+```toml
+brain_mcp = { workspace = true, editable = false }
+```
+
+### Step 3 — Create `packages/brain_mcp/src/brain_mcp/__init__.py`
+
+```python
+"""brain_mcp — Model Context Protocol server wrapping brain_core primitives."""
+
+__version__ = "0.0.1"
+```
+
+### Step 4 — Create `packages/brain_mcp/src/brain_mcp/__main__.py`
+
+```python
+"""Entry point: `python -m brain_mcp` runs the stdio MCP server.
+
+Task 1 lands a stub that prints the version and exits. Task 21 wires the
+real stdio transport via `mcp.server.stdio.stdio_server`.
+"""
+
+from __future__ import annotations
+
+import sys
+
+from brain_mcp import __version__
+
+
+def main() -> int:
+    print(f"brain_mcp {__version__}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+### Step 5 — Create `packages/brain_mcp/src/brain_mcp/py.typed`
+
+Empty file. PEP 561 marker.
+
+### Step 6 — Create `packages/brain_mcp/src/brain_mcp/server.py` (skeleton)
+
+```python
+"""brain MCP server factory.
+
+Task 1 lands the skeleton — empty tool list, rejecting call_tool handler.
+Tasks 3+ populate via brain_mcp.tools.* modules registered at factory time.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+from mcp.server.lowlevel import Server
+
+
+def create_server() -> Server:
+    """Build a fresh `mcp.server.lowlevel.Server` instance with handlers registered.
+
+    Does NOT start the stdio transport. Callers (brain_mcp.__main__, test
+    harnesses) are responsible for running the server against their chosen
+    transport.
+    """
+    server: Server = Server("brain")
+
+    @server.list_tools()
+    async def handle_list_tools() -> list[types.Tool]:
+        return []
+
+    @server.call_tool()
+    async def handle_call_tool(
+        name: str, arguments: dict[str, Any]
+    ) -> list[types.TextContent]:
+        raise ValueError(f"unknown tool: {name}")
+
+    return server
+```
+
+### Step 7 — Create `packages/brain_mcp/src/brain_mcp/tools/__init__.py` and `resources/__init__.py`
+
+Both empty files. Populated in later tasks.
+
+### Step 8 — Create `packages/brain_mcp/tests/conftest.py`
+
+```python
+"""Shared fixtures for brain_mcp tests.
+
+The `mcp_session` fixture spins up an in-memory MCP server + client pair using
+`mcp.shared.memory.create_client_server_memory_streams`. Each test gets a
+fresh ClientSession already initialized against a fresh server from
+`create_server()`. No stdio, no subprocess, no network.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+import anyio
+import pytest
+from mcp.client.session import ClientSession
+from mcp.shared.memory import create_client_server_memory_streams
+
+from brain_mcp.server import create_server
+
+
+@pytest.fixture
+async def mcp_session() -> AsyncIterator[ClientSession]:
+    server = create_server()
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                lambda: server.run(
+                    server_streams[0],
+                    server_streams[1],
+                    server.create_initialization_options(),
+                )
+            )
+            async with ClientSession(client_streams[0], client_streams[1]) as session:
+                await session.initialize()
+                yield session
+            tg.cancel_scope.cancel()
+```
+
+**Note:** the exact signature of `create_client_server_memory_streams()` and whether the server streams need to be unpacked `(read, write)` vs passed as a tuple to `server.run()` depends on the real SDK shape. Verify against the installed `mcp` package before finalizing — adjust the fixture to match. The `anyio.create_task_group().cancel_scope.cancel()` pattern is the SDK's documented clean-shutdown path.
+
+### Step 9 — Create `packages/brain_mcp/tests/test_server_smoke.py`
+
+```python
+"""Smoke tests for the brain MCP server — empty-tool baseline."""
+
+from __future__ import annotations
+
+from mcp.client.session import ClientSession
+
+
+async def test_initialize_succeeds(mcp_session: ClientSession) -> None:
+    """Session initialization via the in-memory fixture should complete cleanly."""
+    # If the fixture yielded, initialize() already succeeded.
+    result = await mcp_session.list_tools()
+    # Task 1 baseline: zero tools registered.
+    assert result.tools == []
+
+
+async def test_unknown_tool_raises(mcp_session: ClientSession) -> None:
+    """Calling a non-existent tool raises a protocol error."""
+    import pytest
+
+    with pytest.raises(Exception):  # noqa: BLE001 — MCP raises its own error type
+        await mcp_session.call_tool("nonexistent", {})
+```
+
+### Step 10 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_mcp -v
+```
+Expect: **2 passed** (initialize smoke + unknown-tool smoke).
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_mcp && uv run mypy src tests
+```
+Expect: `Success: no issues found in N source files`.
+
+Full suite + 12-point self-review, then:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/ pyproject.toml uv.lock && git commit -m "feat(mcp): plan 04 task 1 — brain_mcp workspace package skeleton"
+```
+
+---
+
+### Task 2 — `brain_mcp.rate_limit.RateLimiter`
+
+**Owning subagent:** brain-mcp-engineer
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/rate_limit.py`
+- Create: `packages/brain_mcp/tests/test_rate_limit.py`
+
+**Context for the implementer:**
+
+Per D7a, rate limiting is an in-memory token bucket on the server instance. Two independent buckets: `patches_per_minute` (default 20), `tokens_per_minute` (default 100_000). Each bucket has a capacity and a refill rate. `RateLimiter.check("patches", cost=1)` returns True if `cost` tokens are available (and deducts them); False if not.
+
+No dependencies beyond stdlib. State lives on the `RateLimiter` instance (not persisted).
+
+Token bucket math:
+- `capacity` tokens maximum
+- `refill_rate` tokens per second (e.g., 20/60 = 0.333/s for patches)
+- On each `check(bucket, cost)`:
+  - `now = time.monotonic()`
+  - `elapsed = now - self._last_refill[bucket]`
+  - `self._tokens[bucket] = min(capacity, self._tokens[bucket] + elapsed * refill_rate)`
+  - `self._last_refill[bucket] = now`
+  - if `self._tokens[bucket] >= cost`: `self._tokens[bucket] -= cost`; return True
+  - else: return False
+
+### Step 1 — Write the failing tests
+
+`packages/brain_mcp/tests/test_rate_limit.py`:
+```python
+"""Tests for brain_mcp.rate_limit.RateLimiter."""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+from brain_mcp.rate_limit import RateLimiter, RateLimitConfig
+
+
+def test_fresh_limiter_allows_up_to_capacity() -> None:
+    cfg = RateLimitConfig(patches_per_minute=5, tokens_per_minute=100)
+    limiter = RateLimiter(cfg)
+    # First 5 patches should all be allowed.
+    for _ in range(5):
+        assert limiter.check("patches", cost=1) is True
+    # 6th should be refused.
+    assert limiter.check("patches", cost=1) is False
+
+
+def test_tokens_bucket_independent_of_patches() -> None:
+    cfg = RateLimitConfig(patches_per_minute=1, tokens_per_minute=100)
+    limiter = RateLimiter(cfg)
+    assert limiter.check("patches", cost=1) is True
+    # Patches bucket now exhausted, but tokens bucket is fresh.
+    assert limiter.check("tokens", cost=50) is True
+    assert limiter.check("tokens", cost=50) is True
+    assert limiter.check("tokens", cost=1) is False
+
+
+def test_unknown_bucket_raises() -> None:
+    limiter = RateLimiter(RateLimitConfig())
+    with pytest.raises(KeyError, match="unknown"):
+        limiter.check("nonexistent", cost=1)
+
+
+def test_bucket_refills_over_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock time.monotonic to advance 30s and confirm the bucket has refilled."""
+    fake_time = 1000.0
+
+    def _now() -> float:
+        return fake_time
+
+    monkeypatch.setattr("brain_mcp.rate_limit.time.monotonic", _now)
+    cfg = RateLimitConfig(patches_per_minute=60)  # 1/s refill
+    limiter = RateLimiter(cfg)
+    # Drain the bucket.
+    for _ in range(60):
+        assert limiter.check("patches", cost=1) is True
+    assert limiter.check("patches", cost=1) is False
+    # Advance 30 seconds — should refill 30 tokens.
+    fake_time += 30.0
+    for _ in range(30):
+        assert limiter.check("patches", cost=1) is True
+    assert limiter.check("patches", cost=1) is False
+
+
+def test_cost_greater_than_capacity_refused() -> None:
+    cfg = RateLimitConfig(tokens_per_minute=100)
+    limiter = RateLimiter(cfg)
+    assert limiter.check("tokens", cost=101) is False
+    # Partial spend should still work.
+    assert limiter.check("tokens", cost=50) is True
+
+
+def test_defaults_match_spec() -> None:
+    cfg = RateLimitConfig()
+    assert cfg.patches_per_minute == 20
+    assert cfg.tokens_per_minute == 100_000
+```
+
+Run: `cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_mcp/tests/test_rate_limit.py -v`
+Expected: FAIL with `ModuleNotFoundError: brain_mcp.rate_limit`.
+
+### Step 2 — Implement `rate_limit.py`
+
+```python
+"""Token-bucket rate limiter for brain_mcp.
+
+Per spec §7: per-session rate limit on patches/min and tokens/min. This is an
+in-memory bucket on the server instance — state is lost on restart, which is
+acceptable for a per-session bound.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RateLimitConfig:
+    patches_per_minute: int = 20
+    tokens_per_minute: int = 100_000
+
+
+class RateLimiter:
+    """Two-bucket token-bucket limiter. `check(bucket, cost)` returns True if
+    the cost was consumed, False if refused."""
+
+    def __init__(self, config: RateLimitConfig) -> None:
+        self._config = config
+        now = time.monotonic()
+        # (capacity, refill_rate_per_second, current_tokens, last_refill_time)
+        self._buckets: dict[str, list[float]] = {
+            "patches": [
+                float(config.patches_per_minute),
+                config.patches_per_minute / 60.0,
+                float(config.patches_per_minute),
+                now,
+            ],
+            "tokens": [
+                float(config.tokens_per_minute),
+                config.tokens_per_minute / 60.0,
+                float(config.tokens_per_minute),
+                now,
+            ],
+        }
+
+    def check(self, bucket: str, *, cost: int) -> bool:
+        if bucket not in self._buckets:
+            raise KeyError(f"unknown rate-limit bucket: {bucket!r}")
+        b = self._buckets[bucket]
+        capacity, refill_rate, current, last = b
+        now = time.monotonic()
+        elapsed = now - last
+        refilled = min(capacity, current + elapsed * refill_rate)
+        if refilled >= cost:
+            b[2] = refilled - cost
+            b[3] = now
+            return True
+        b[2] = refilled
+        b[3] = now
+        return False
+```
+
+### Step 3 — Run tests + self-review + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_mcp && uv run pytest packages/brain_mcp/tests/test_rate_limit.py -v
+```
+Expected: **6 passed**.
+
+Full suite + mypy + ruff + ghost check, then:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/src/brain_mcp/rate_limit.py packages/brain_mcp/tests/test_rate_limit.py && git commit -m "feat(mcp): plan 04 task 2 — RateLimiter token bucket (patches + tokens per minute)"
+```
+
+---
+
+### Task 3 — `brain_mcp.tools.base` — `ToolContext` + JSON schema helpers
+
+**Owning subagent:** brain-mcp-engineer
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/base.py`
+- Create: `packages/brain_mcp/tests/test_tools_base.py`
+
+**Context for the implementer:**
+
+`ToolContext` is the frozen record passed to every MCP tool handler. It holds everything a tool might need: vault root, allowed domains (from the request, NOT global — different calls have different scopes), retrieval index, pending store, state DB, vault writer, LLM provider, cost ledger, rate limiter, undo log. Every MCP tool handler receives one.
+
+`ToolContext.retrieval`, `.llm`, and other heavy types are typed `Any` to avoid import cycles — the concrete tools narrow at use site, just like Plan 03 Tasks 5/17 did.
+
+Also lands two helpers:
+- `scope_guard_path(rel_path: str, ctx: ToolContext) -> Path` — converts an MCP tool's `path` argument to a vault-absolute path, scope-guarded. Raises `ScopeError` on out-of-scope. Centralizes the scope check so every tool has the same behavior.
+- `text_result(text: str, *, data: dict[str, Any] | None = None) -> list[types.TextContent]` — wraps a tool's output into the MCP SDK's `TextContent` list shape. If `data` is provided, serializes it as JSON in a second TextContent.
+
+### Step 1 — Write the failing tests
+
+`packages/brain_mcp/tests/test_tools_base.py`:
+```python
+"""Tests for brain_mcp.tools.base — ToolContext + helpers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from brain_mcp.tools.base import (
+    ToolContext,
+    scope_guard_path,
+    text_result,
+)
+from brain_core.vault.paths import ScopeError
+
+
+def test_tool_context_frozen(tmp_path: Path) -> None:
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+    # Frozen dataclass: attribute assignment fails at runtime.
+    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError or AttributeError
+        ctx.allowed_domains = ("personal",)  # type: ignore[misc]
+
+
+def test_scope_guard_path_happy(tmp_path: Path) -> None:
+    (tmp_path / "research" / "notes").mkdir(parents=True)
+    (tmp_path / "research" / "notes" / "foo.md").write_text("x", encoding="utf-8")
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+    resolved = scope_guard_path("research/notes/foo.md", ctx)
+    assert resolved == (tmp_path / "research" / "notes" / "foo.md").resolve()
+
+
+def test_scope_guard_path_rejects_out_of_scope(tmp_path: Path) -> None:
+    (tmp_path / "personal" / "notes").mkdir(parents=True)
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+    with pytest.raises(ScopeError):
+        scope_guard_path("personal/notes/secret.md", ctx)
+
+
+def test_scope_guard_path_rejects_absolute(tmp_path: Path) -> None:
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+    with pytest.raises(ValueError, match="vault-relative"):
+        scope_guard_path(str(tmp_path / "research" / "foo.md"), ctx)
+
+
+def test_text_result_plain() -> None:
+    out = text_result("hello world")
+    assert len(out) == 1
+    assert out[0].type == "text"
+    assert out[0].text == "hello world"
+
+
+def test_text_result_with_data() -> None:
+    out = text_result("summary", data={"key": "value", "count": 3})
+    assert len(out) == 2
+    assert out[0].text == "summary"
+    assert out[1].type == "text"
+    # Second content is JSON-encoded.
+    import json
+    parsed = json.loads(out[1].text)
+    assert parsed == {"key": "value", "count": 3}
+```
+
+Run: `cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_mcp/tests/test_tools_base.py -v`
+Expected: FAIL with `ModuleNotFoundError: brain_mcp.tools.base`.
+
+### Step 2 — Implement `tools/base.py`
+
+```python
+"""ToolContext + shared helpers for brain_mcp tools.
+
+Every concrete tool in brain_mcp.tools.* receives a ToolContext that carries
+the primitives it might need. Heavy types (retrieval, llm, writer) are typed
+as Any to avoid import cycles — concrete tools narrow at use site.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.vault.paths import scope_guard
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    vault_root: Path
+    allowed_domains: tuple[str, ...]
+    retrieval: Any          # BM25VaultIndex
+    pending_store: Any      # PendingPatchStore
+    state_db: Any           # StateDB
+    writer: Any             # VaultWriter
+    llm: Any                # LLMProvider
+    cost_ledger: Any        # CostLedger
+    rate_limiter: Any       # RateLimiter
+    undo_log: Any           # UndoLog
+
+
+def scope_guard_path(rel_path: str, ctx: ToolContext) -> Path:
+    """Convert a vault-relative string path to an absolute scope-guarded Path.
+
+    Raises:
+        ValueError: if `rel_path` is absolute
+        ScopeError: if the resolved path falls outside ctx.allowed_domains
+    """
+    p = Path(rel_path)
+    if p.is_absolute():
+        raise ValueError(f"path must be vault-relative, not absolute: {rel_path!r}")
+    return scope_guard(
+        ctx.vault_root / p,
+        vault_root=ctx.vault_root,
+        allowed_domains=ctx.allowed_domains,
+    )
+
+
+def text_result(text: str, *, data: dict[str, Any] | None = None) -> list[types.TextContent]:
+    """Wrap a tool's output into the MCP SDK's TextContent list shape.
+
+    If `data` is provided, appends a second TextContent containing the JSON
+    encoding. Clients (Claude Desktop) render both.
+    """
+    out: list[types.TextContent] = [types.TextContent(type="text", text=text)]
+    if data is not None:
+        out.append(
+            types.TextContent(type="text", text=json.dumps(data, indent=2, default=str))
+        )
+    return out
+```
+
+### Step 3 — Run tests + self-review + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_mcp && uv run pytest packages/brain_mcp -v
+```
+Expected: **2 smoke + 6 rate_limit + 6 base = 14 passed** in brain_mcp; full suite + 1 skipped.
+
+12-point self-review (mypy from `packages/brain_mcp/`, ruff, ghost check), then:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/src/brain_mcp/tools/base.py packages/brain_mcp/tests/test_tools_base.py && git commit -m "feat(mcp): plan 04 task 3 — ToolContext + scope_guard_path + text_result helpers"
+```
+
+---
+
+**Checkpoint 1 — pause for main-loop review.**
+
+3 tasks landed. `brain_mcp` package exists, smoke test passes through the in-memory MCP transport, rate limiter works, every tool in Group 2+ has a `ToolContext` shape to rely on. Main loop reviews:
+- Is `ToolContext` carrying the right fields?
+- Does the in-memory test fixture actually work with the real MCP SDK 1.0+ API? (Task 1 verified this empirically with the smoke test.)
+- Is `scope_guard_path`'s centralization useful, or will concrete tools bypass it anyway?
+- Any API drift between the task text and the real `mcp` package version installed?
+
+Before Task 4, the next main-loop dispatch should confirm the rate limiter contract is OK — does every MCP tool check `rate_limiter.check("tokens", cost=...)` before making an LLM call, or is it only checked at the ingest tool layer?
+
+---
 
 ### Group 2 — Read tools (Tasks 4–9)
 
