@@ -15,6 +15,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+# Maximum characters shown in a rendered TOOL_RESULT panel before truncation.
+# Tool outputs (note bodies, search results) can be several KB; 500 chars is
+# enough to convey shape without flooding the terminal.
+_MAX_TOOL_RESULT_CHARS = 500
+
 
 class StreamRenderer:
     """Render ``ChatEvent`` values to a Rich ``Console``."""
@@ -52,8 +57,8 @@ class StreamRenderer:
 
         if kind == ChatEventKind.TOOL_RESULT:
             text = str(data.get("text", ""))
-            if len(text) > 500:
-                text = text[:500] + "..."
+            if len(text) > _MAX_TOOL_RESULT_CHARS:
+                text = text[:_MAX_TOOL_RESULT_CHARS] + "..."
             error = bool(data.get("error", False))
             style = "red" if error else "dim"
             self.console.print(

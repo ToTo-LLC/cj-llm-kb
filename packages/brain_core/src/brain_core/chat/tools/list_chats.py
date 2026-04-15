@@ -27,6 +27,11 @@ class ListChatsTool:
     }
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """List chat threads, optionally filtered by a path substring.
+
+        Note: the `query` argument uses SQL LIKE matching, so `%` and `_`
+        characters act as wildcards. Local KB; not a security concern.
+        """
         if ctx.state_db is None:
             raise RuntimeError("list_chats requires state_db in ToolContext")
         domain_arg = args.get("domain")

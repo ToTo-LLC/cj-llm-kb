@@ -163,6 +163,8 @@ class ChatSession:
         final_text_parts: list[str] = []
 
         try:
+            # Rounds 0..MAX-1 do real work; round MAX is the sentinel cap
+            # check that bails out with "max tool rounds exceeded".
             for round_idx in range(self.MAX_TOOL_ROUNDS + 1):
                 if round_idx == self.MAX_TOOL_ROUNDS:
                     yield ChatEvent(
@@ -378,6 +380,9 @@ class ChatSession:
             )
             raise
         finally:
+            # Partial turns (on exception) are intentionally persisted for
+            # debugging; cost=0 on the user turn, cost accumulated so far on
+            # the assistant turn even when the body is empty.
             now = datetime.now(UTC)
             self._turns.append(
                 ChatTurn(
@@ -443,6 +448,10 @@ class ChatSession:
                 return
 
             self.thread_id = new_thread_id
+            # Vault write first, then state.sqlite DELETE — a crash between
+            # the two leaves an orphan row that `brain doctor --rebuild-cache`
+            # would clean up (CLAUDE.md principle #6: vault is the source of
+            # truth; SQLite is a rebuildable cache).
             if self.state_db is not None:
                 self.state_db.exec(
                     "DELETE FROM chat_threads WHERE thread_id = ?",

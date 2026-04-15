@@ -67,6 +67,9 @@ def apply_patch(
         raise typer.Exit(code=1)
 
     writer = VaultWriter(vault_root=vault)
+    # Bare Exception catch: surface any writer failure (ScopeError,
+    # PatchTooLargeError, FileExistsError, OSError, ...) as a clean exit-1
+    # rather than a traceback. Users on the CLI should see a one-line error.
     try:
         receipt = writer.apply(envelope.patchset, allowed_domains=(first_part,))
     except Exception as exc:

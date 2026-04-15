@@ -26,6 +26,10 @@ from rank_bm25 import BM25Okapi
 from brain_core.state.db import StateDB
 from brain_core.vault.frontmatter import FrontmatterError, parse_frontmatter
 
+# Trimmed to 50 tokens (Plan 03 Task 24 sweep). Modal verbs (would, could,
+# may, might, must, shall) and inflected be-forms (been, being, did) carry
+# enough topical weight in a personal KB that aggressive filtering hurt
+# recall. Keep the list compact and obvious.
 _STOPWORDS: frozenset[str] = frozenset(
     {
         "the",
@@ -39,22 +43,13 @@ _STOPWORDS: frozenset[str] = frozenset(
         "was",
         "were",
         "be",
-        "been",
-        "being",
         "have",
         "has",
         "had",
         "do",
         "does",
-        "did",
         "will",
-        "would",
-        "could",
         "should",
-        "may",
-        "might",
-        "must",
-        "shall",
         "to",
         "of",
         "in",
@@ -86,6 +81,7 @@ _STOPWORDS: frozenset[str] = frozenset(
         "those",
         "it",
         "its",
+        "as",
     }
 )
 
