@@ -7,6 +7,7 @@ readme = "README.md"
 dependencies = [
     "brain_core",
     "brain_cli",
+    "brain_mcp",
 ]
 
 [tool.uv]
@@ -18,6 +19,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 brain_core = { workspace = true, editable = false }
 brain_cli = { workspace = true, editable = false }
+brain_mcp = { workspace = true, editable = false }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
