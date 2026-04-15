@@ -72,7 +72,7 @@ class StreamRenderer:
             target = data.get("target_path", "?")
             self.console.print(
                 Panel(
-                    Text(f"[staged] patch: {target} [{patch_id}]", style="yellow"),
+                    Text(f"📝 patch staged: {target} [{patch_id}]", style="yellow"),
                     title="patch proposed",
                     border_style="yellow",
                     expand=False,

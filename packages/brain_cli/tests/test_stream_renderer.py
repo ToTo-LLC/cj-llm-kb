@@ -48,6 +48,7 @@ def test_renders_patch_proposed_panel() -> None:
     assert "abc123" in out
     assert "research/notes/foo.md" in out
     assert "patch" in out.lower()
+    assert "📝" in out  # user-approved emoji marker for staged patches
 
 
 def test_renders_turn_end_with_cost() -> None:
