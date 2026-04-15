@@ -1016,7 +1016,1121 @@ Before Task 4, the next main-loop dispatch should confirm the rate limiter contr
 
 ### Group 2 — Read tools (Tasks 4–9)
 
-*To be filled in.*
+**Checkpoint after Task 9:** main-loop reviews the full read-tool surface in one pass — scope-guard consistency, error-message plain-English, JSON schema alignment between the 6 tools. Common structural issues are cheaper to batch-fix than to catch one tool at a time.
+
+**Common shape every read-tool task follows:**
+1. Create `packages/brain_mcp/src/brain_mcp/tools/<name>.py` with module-level `NAME`, `DESCRIPTION`, `INPUT_SCHEMA`, and `async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]`
+2. Modify `packages/brain_mcp/src/brain_mcp/server.py` to import the module and add the tool to `list_tools` + dispatch in `call_tool`
+3. Create `packages/brain_mcp/tests/test_tool_<name>.py` with 3 tests: happy path via `mcp_session`, scope-guard rejection, input-schema shape validation
+
+**Shared test helper pattern:** every test file in Group 2 reuses a `seeded_vault` fixture defined once in `conftest.py`. I'll fold that into Task 4 so subsequent tasks can import it.
+
+---
+
+### Task 4 — `brain_list_domains` + `seeded_vault` conftest fixture + server registration plumbing
+
+**Owning subagent:** brain-mcp-engineer
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/list_domains.py`
+- Modify: `packages/brain_mcp/src/brain_mcp/server.py` — add registration plumbing for `brain_mcp.tools.*`
+- Modify: `packages/brain_mcp/tests/conftest.py` — add `seeded_vault` fixture + a `ToolContext` factory that builds everything the tools need
+- Create: `packages/brain_mcp/tests/test_tool_list_domains.py`
+
+**Context for the implementer:**
+
+`brain_list_domains` walks the vault root and returns every directory that sits immediately below it AND contains at least one `.md` file OR an `index.md`. The output is sorted alphabetically. No scope guard on the output (listing domain *names* is not a scope violation — that's just metadata), but this tool is always available regardless of `allowed_domains`.
+
+**Registration plumbing in server.py:** until now `server.py` had an empty `list_tools` / `call_tool` pair. Task 4 refactors them to use a tool registry pattern so subsequent tasks just add entries without touching `list_tools` / `call_tool` directly. The pattern:
+
+```python
+from brain_mcp.tools import list_domains as _list_domains_tool
+# Tasks 5–19 add more imports here
+
+_TOOL_MODULES = [
+    _list_domains_tool,
+    # Tasks 5+ append here
+]
+
+# In create_server():
+@server.list_tools()
+async def handle_list_tools() -> list[types.Tool]:
+    return [
+        types.Tool(name=m.NAME, description=m.DESCRIPTION, inputSchema=m.INPUT_SCHEMA)
+        for m in _TOOL_MODULES
+    ]
+
+@server.call_tool()
+async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+    ctx = _build_tool_context()  # from module-level state (Task 21 wires real one)
+    for m in _TOOL_MODULES:
+        if m.NAME == name:
+            return await m.handle(arguments, ctx)
+    raise ValueError(f"unknown tool: {name}")
+```
+
+**`_build_tool_context` is a stub in Task 4** — it returns a ToolContext with hardcoded/env values pulled from the running server's init kwargs. The real wiring lands in Task 21 (CLI `brain mcp install`) when the server is spawned as a subprocess with vault root + config passed as env vars. For now, `create_server(vault_root=...)` takes a vault_root kwarg that the `_build_tool_context` closes over.
+
+Refactor `create_server()` signature: `create_server(*, vault_root: Path, allowed_domains: tuple[str, ...] = ("research",)) -> Server`. Existing tests (Task 1 smoke) pass `vault_root=tmp_path`.
+
+**`seeded_vault` conftest fixture:** every Group-2 test reuses this. It creates:
+- `research/notes/karpathy.md` (titled "Karpathy", body mentions "LLM wiki pattern")
+- `research/notes/rag.md` (titled "RAG")
+- `research/notes/filler.md` (BM25 IDF filler — Plan 03 Task 6 lesson)
+- `research/index.md` (with bullets for karpathy + rag)
+- `work/notes/meeting.md` (titled "Meeting")
+- `work/index.md`
+- `personal/notes/secret.md` (titled "Secret" — scope-guard target)
+- `BRAIN.md` at vault root (for the `brain_get_brain_md` tool in Task 9)
+
+**ToolContext factory in conftest:** `make_tool_context(vault: Path, *, allowed_domains=("research",))` builds a real ToolContext with real BM25VaultIndex, real StateDB, real PendingPatchStore, real VaultWriter, real UndoLog, real CostLedger. Uses `FakeLLMProvider()` for `llm`. Rate limiter uses generous defaults. Every Group-2 test uses this factory or the higher-level `mcp_session` fixture.
+
+### Step 1 — Extend `conftest.py` with `seeded_vault` + `make_tool_context`
+
+Add to `packages/brain_mcp/tests/conftest.py`:
+
+```python
+from datetime import date
+from pathlib import Path
+
+from brain_core.chat.pending import PendingPatchStore
+from brain_core.chat.retrieval import BM25VaultIndex
+from brain_core.cost.ledger import CostLedger
+from brain_core.llm.fake import FakeLLMProvider
+from brain_core.state.db import StateDB
+from brain_core.vault.undo import UndoLog
+from brain_core.vault.writer import VaultWriter
+
+from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+from brain_mcp.tools.base import ToolContext
+
+
+def _write_note(vault: Path, rel: str, *, title: str, body: str) -> None:
+    p = vault / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\ntitle: {title}\n---\n{body}\n", encoding="utf-8")
+
+
+@pytest.fixture
+def seeded_vault(tmp_path: Path) -> Path:
+    """A small research + work + personal vault used by all read-tool tests."""
+    vault = tmp_path / "vault"
+    _write_note(vault, "research/notes/karpathy.md",
+                title="Karpathy", body="Andrej Karpathy wrote about the LLM wiki pattern.")
+    _write_note(vault, "research/notes/rag.md",
+                title="RAG", body="Retrieval augmented generation.")
+    _write_note(vault, "research/notes/filler.md",
+                title="Filler", body="Cooking recipes and gardening tips.")
+    (vault / "research" / "index.md").write_text(
+        "# research\n- [[karpathy]]\n- [[rag]]\n", encoding="utf-8"
+    )
+    _write_note(vault, "work/notes/meeting.md", title="Meeting", body="Q4 planning.")
+    (vault / "work" / "index.md").write_text("# work\n- [[meeting]]\n", encoding="utf-8")
+    _write_note(vault, "personal/notes/secret.md", title="Secret", body="never read me")
+    (vault / "BRAIN.md").write_text("# BRAIN\n\nYou are brain.\n", encoding="utf-8")
+    return vault
+
+
+def make_tool_context(vault: Path, *, allowed_domains: tuple[str, ...] = ("research",)) -> ToolContext:
+    """Build a real ToolContext wired to all the Plan 01–03 primitives.
+
+    Uses a FakeLLMProvider so no network calls. Rate limiter is generous
+    (1000/min both buckets) so tests never trip it unless they mean to.
+    """
+    db = StateDB.open(vault / ".brain" / "state.sqlite")
+    writer = VaultWriter(vault_root=vault)
+    pending = PendingPatchStore(vault / ".brain" / "pending")
+    retrieval = BM25VaultIndex(vault_root=vault, db=db)
+    retrieval.build(allowed_domains)
+    undo = UndoLog(vault_root=vault)
+    ledger = CostLedger(db_path=vault / ".brain" / "costs.sqlite")
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=1000, tokens_per_minute=1_000_000))
+    return ToolContext(
+        vault_root=vault,
+        allowed_domains=allowed_domains,
+        retrieval=retrieval,
+        pending_store=pending,
+        state_db=db,
+        writer=writer,
+        llm=FakeLLMProvider(),
+        cost_ledger=ledger,
+        rate_limiter=limiter,
+        undo_log=undo,
+    )
+```
+
+Also extend the existing `mcp_session` fixture to accept a `seeded_vault`:
+
+```python
+@pytest.fixture
+async def mcp_session_with_vault(seeded_vault: Path) -> AsyncIterator[ClientSession]:
+    """mcp_session flavor that wires a real vault to the server."""
+    server = create_server(vault_root=seeded_vault, allowed_domains=("research",))
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                lambda: server.run(
+                    server_streams[0],
+                    server_streams[1],
+                    server.create_initialization_options(),
+                )
+            )
+            async with ClientSession(client_streams[0], client_streams[1]) as session:
+                await session.initialize()
+                yield session
+            tg.cancel_scope.cancel()
+```
+
+**Note:** keep the original `mcp_session` (uses `tmp_path` as an empty vault) for Task 1's smoke tests. Both fixtures coexist.
+
+### Step 2 — Write the failing test
+
+`packages/brain_mcp/tests/test_tool_list_domains.py`:
+
+```python
+"""Tests for the brain_list_domains MCP tool."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from mcp.client.session import ClientSession
+
+from brain_mcp.tools.base import ToolContext
+from brain_mcp.tools.list_domains import INPUT_SCHEMA, NAME, handle
+
+
+def test_input_schema_shape() -> None:
+    assert NAME == "brain_list_domains"
+    assert INPUT_SCHEMA["type"] == "object"
+    # No required args.
+    assert INPUT_SCHEMA.get("properties") == {}
+
+
+async def test_handle_returns_sorted_domains(
+    seeded_vault: Path, make_ctx: callable  # noqa: ANN001
+) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    assert len(out) >= 1
+    # The second block is the JSON-encoded data payload.
+    data = json.loads(out[1].text)
+    assert data["domains"] == ["personal", "research", "work"]
+
+
+async def test_mcp_session_list_domains(mcp_session_with_vault: ClientSession) -> None:
+    """End-to-end via the in-memory MCP client."""
+    result = await mcp_session_with_vault.call_tool("brain_list_domains", {})
+    assert len(result.content) >= 1
+    # Find the JSON block.
+    import json
+    for block in result.content:
+        try:
+            data = json.loads(block.text)
+            assert "domains" in data
+            assert "research" in data["domains"]
+            return
+        except (json.JSONDecodeError, AttributeError):
+            continue
+    raise AssertionError("no JSON content block found in tool output")
+```
+
+Note: the `make_ctx` fixture is a convenience wrapper that returns the `make_tool_context` callable — add it to `conftest.py`:
+
+```python
+@pytest.fixture
+def make_ctx() -> Any:
+    return make_tool_context
+```
+
+Run: `cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_mcp/tests/test_tool_list_domains.py -v`
+Expected: FAIL with `ModuleNotFoundError: brain_mcp.tools.list_domains`.
+
+### Step 3 — Implement `tools/list_domains.py`
+
+```python
+"""brain_list_domains — list top-level domain directories in the vault."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_list_domains"
+DESCRIPTION = (
+    "List the top-level domain directories in the vault "
+    "(research / work / personal / ...). Metadata-only; returns names sorted alphabetically."
+)
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {},
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    domains: list[str] = []
+    for child in sorted(ctx.vault_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name.startswith("."):
+            continue  # Skip .brain, .git, etc.
+        # Must contain at least one .md file OR an index.md to count as a domain.
+        if (child / "index.md").exists() or any(child.rglob("*.md")):
+            domains.append(child.name)
+    text = "\n".join(f"- {d}" for d in domains) if domains else "(no domains)"
+    return text_result(text, data={"domains": domains})
+```
+
+### Step 4 — Refactor `server.py` for registration plumbing
+
+```python
+"""brain MCP server factory.
+
+Tool modules in brain_mcp.tools.* each export NAME, DESCRIPTION, INPUT_SCHEMA,
+and `async def handle(arguments, ctx)`. The factory registers all of them into
+one list_tools / call_tool pair.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import mcp.types as types
+from mcp.server.lowlevel import Server
+
+from brain_mcp.tools import list_domains as _list_domains_tool
+from brain_mcp.tools.base import ToolContext
+
+# Task 5+ will append more modules here.
+_TOOL_MODULES: list[Any] = [
+    _list_domains_tool,
+]
+
+
+def create_server(
+    *,
+    vault_root: Path,
+    allowed_domains: tuple[str, ...] = ("research",),
+) -> Server:
+    """Build a fresh `mcp.server.lowlevel.Server` with brain tools registered.
+
+    Does NOT start transport — callers run the returned Server against their
+    chosen transport (stdio in __main__, in-memory in tests).
+    """
+    server: Server = Server("brain")
+
+    def _build_ctx() -> ToolContext:
+        """Build a fresh ToolContext per call. Task 21 wires the real factory
+        when the server runs as a subprocess; Group 2 uses a stub that binds
+        the values passed to create_server()."""
+        # Stub: uses the vault_root + allowed_domains from the server factory.
+        # Task 21 replaces this with a real builder that constructs the full
+        # set of primitives (retrieval, writer, pending_store, etc).
+        # For Group 2 read tools, we only need the first few fields.
+        from brain_core.chat.pending import PendingPatchStore
+        from brain_core.chat.retrieval import BM25VaultIndex
+        from brain_core.cost.ledger import CostLedger
+        from brain_core.llm.fake import FakeLLMProvider
+        from brain_core.state.db import StateDB
+        from brain_core.vault.undo import UndoLog
+        from brain_core.vault.writer import VaultWriter
+
+        from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+
+        db = StateDB.open(vault_root / ".brain" / "state.sqlite")
+        writer = VaultWriter(vault_root=vault_root)
+        pending = PendingPatchStore(vault_root / ".brain" / "pending")
+        retrieval = BM25VaultIndex(vault_root=vault_root, db=db)
+        retrieval.build(allowed_domains)
+        return ToolContext(
+            vault_root=vault_root,
+            allowed_domains=allowed_domains,
+            retrieval=retrieval,
+            pending_store=pending,
+            state_db=db,
+            writer=writer,
+            llm=FakeLLMProvider(),
+            cost_ledger=CostLedger(db_path=vault_root / ".brain" / "costs.sqlite"),
+            rate_limiter=RateLimiter(RateLimitConfig()),
+            undo_log=UndoLog(vault_root=vault_root),
+        )
+
+    @server.list_tools()
+    async def handle_list_tools() -> list[types.Tool]:
+        return [
+            types.Tool(name=m.NAME, description=m.DESCRIPTION, inputSchema=m.INPUT_SCHEMA)
+            for m in _TOOL_MODULES
+        ]
+
+    @server.call_tool()
+    async def handle_call_tool(
+        name: str, arguments: dict[str, Any]
+    ) -> list[types.TextContent]:
+        ctx = _build_ctx()
+        for m in _TOOL_MODULES:
+            if m.NAME == name:
+                return await m.handle(arguments, ctx)
+        raise ValueError(f"unknown tool: {name}")
+
+    return server
+```
+
+**IMPORTANT:** the existing Task 1 `test_server_smoke.py` passed `create_server()` with no args. Update those tests to pass `vault_root=tmp_path`. Keep them passing.
+
+### Step 5 — Run tests + self-review + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_mcp && uv run pytest packages/brain_mcp -v
+```
+
+Expected: Task 1 smokes (2 passed, after updating to pass vault_root) + Task 2 rate limiter (6) + Task 3 base (6) + Task 4 list_domains (3) = **17 passed**.
+
+12-point self-review, then:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/src/brain_mcp/server.py packages/brain_mcp/src/brain_mcp/tools/list_domains.py packages/brain_mcp/tests/conftest.py packages/brain_mcp/tests/test_tool_list_domains.py packages/brain_mcp/tests/test_server_smoke.py && git commit -m "feat(mcp): plan 04 task 4 — brain_list_domains + server registration plumbing"
+```
+
+---
+
+### Task 5 — `brain_get_index`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/get_index.py`
+- Modify: `packages/brain_mcp/src/brain_mcp/server.py` — append `get_index` to `_TOOL_MODULES`
+- Create: `packages/brain_mcp/tests/test_tool_get_index.py`
+
+**Context:** reads `<domain>/index.md`. Optional `domain` arg; defaults to `ctx.allowed_domains[0]`. Scope-guarded. Missing index returns `"(no index yet)"` — not an error. Matches Plan 03 Task 8 `list_index` tool's behavior but returns via MCP `TextContent`.
+
+### Step 1 — Failing test
+
+`test_tool_get_index.py`:
+
+```python
+"""Tests for brain_get_index."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from mcp.client.session import ClientSession
+
+from brain_mcp.tools.base import ToolContext
+from brain_mcp.tools.get_index import NAME, handle
+from brain_core.vault.paths import ScopeError
+
+
+def test_name() -> None:
+    assert NAME == "brain_get_index"
+
+
+async def test_default_domain_reads_first_allowed(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    text = out[0].text
+    assert "karpathy" in text
+
+
+async def test_explicit_domain(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"domain": "research"}, ctx)
+    assert "karpathy" in out[0].text
+
+
+async def test_out_of_scope_raises(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(ScopeError):
+        await handle({"domain": "personal"}, ctx)
+
+
+async def test_missing_index_returns_empty(tmp_path: Path, make_ctx) -> None:
+    # Fresh vault with no index.md.
+    vault = tmp_path / "empty"
+    (vault / "research").mkdir(parents=True)
+    ctx = make_ctx(vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    assert out[0].text == "(no index yet)"
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_get_index — read a domain's index.md via MCP."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.vault.frontmatter import FrontmatterError, parse_frontmatter
+from brain_core.vault.paths import ScopeError, scope_guard
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_get_index"
+DESCRIPTION = "Read the <domain>/index.md file. Defaults to the first allowed domain."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "domain": {
+            "type": "string",
+            "description": "Domain name. Omit to use the first allowed domain.",
+        },
+    },
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    domain = str(arguments.get("domain") or ctx.allowed_domains[0])
+    if domain not in ctx.allowed_domains:
+        raise ScopeError(f"domain {domain!r} not in allowed {ctx.allowed_domains}")
+    index_path = scope_guard(
+        ctx.vault_root / domain / "index.md",
+        vault_root=ctx.vault_root,
+        allowed_domains=ctx.allowed_domains,
+    )
+    if not index_path.exists():
+        return text_result("(no index yet)", data={"domain": domain, "body": ""})
+    raw = index_path.read_text(encoding="utf-8")
+    try:
+        fm, body = parse_frontmatter(raw)
+    except FrontmatterError:
+        fm, body = {}, raw
+    return text_result(body, data={"domain": domain, "frontmatter": fm, "body": body})
+```
+
+Append `from brain_mcp.tools import get_index as _get_index_tool` and add to `_TOOL_MODULES` in `server.py`.
+
+### Step 3 — Run + self-review + commit
+
+Expected: 17 + 5 = **22 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 5 — brain_get_index tool"
+```
+
+---
+
+### Task 6 — `brain_read_note`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/read_note.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_read_note.py`
+
+**Context:** wraps Plan 03 Task 7's `ReadNoteTool` semantics. Required `path` (vault-relative), scope-guarded, returns `{frontmatter, body, path}`. Rejects absolute paths with `ValueError`, missing files with `FileNotFoundError`, lenient `FrontmatterError` fallback.
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_reads_in_scope_note(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"path": "research/notes/karpathy.md"}, ctx)
+    assert "LLM wiki pattern" in out[0].text
+
+async def test_out_of_scope_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(ScopeError):
+        await handle({"path": "personal/notes/secret.md"}, ctx)
+
+async def test_missing_file_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(FileNotFoundError, match="not found"):
+        await handle({"path": "research/notes/nope.md"}, ctx)
+
+async def test_absolute_path_rejected(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    absolute = str(seeded_vault / "research" / "notes" / "karpathy.md")
+    with pytest.raises(ValueError, match="vault-relative"):
+        await handle({"path": absolute}, ctx)
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_read_note — read a note by vault-relative path via MCP."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.vault.frontmatter import FrontmatterError, parse_frontmatter
+from brain_mcp.tools.base import ToolContext, scope_guard_path, text_result
+
+NAME = "brain_read_note"
+DESCRIPTION = "Read a note by vault-relative path. Returns frontmatter + body."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Vault-relative path like 'research/notes/karpathy.md'"},
+    },
+    "required": ["path"],
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    raw = str(arguments["path"])
+    full = scope_guard_path(raw, ctx)
+    if not full.exists():
+        raise FileNotFoundError(f"note {raw!r} not found in vault")
+    text = full.read_text(encoding="utf-8")
+    try:
+        fm, body = parse_frontmatter(text)
+    except FrontmatterError:
+        fm, body = {}, text
+    return text_result(body, data={"frontmatter": fm, "body": body, "path": raw})
+```
+
+Register in `server.py`. Commit.
+
+Expected after Task 6: **22 + 4 = 26 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 6 — brain_read_note tool (scope-guarded)"
+```
+
+---
+
+### Task 7 — `brain_search`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/search.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_search.py`
+
+**Context:** wraps `ctx.retrieval.search(query, domains=..., top_k=...)` — same shape as Plan 03 Task 6's `SearchVaultTool`. Belt-and-braces scope_guard every returned hit, clamp `top_k` at 20, reject out-of-scope `domains` arg with ScopeError, empty query returns empty.
+
+### Step 1 — Failing test (5 tests)
+
+```python
+async def test_returns_in_scope_hits(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"query": "karpathy llm"}, ctx)
+    import json
+    data = json.loads(out[1].text)
+    paths = [h["path"] for h in data["hits"]]
+    assert "research/notes/karpathy.md" in paths
+    assert not any("personal" in p for p in paths)
+
+async def test_top_k_clamped(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"query": "karpathy", "top_k": 500}, ctx)
+    import json
+    data = json.loads(out[1].text)
+    assert data["top_k_used"] == 20
+
+async def test_out_of_scope_domain_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(ScopeError):
+        await handle({"query": "karpathy", "domains": ["personal"]}, ctx)
+
+async def test_empty_query_returns_empty(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"query": "   "}, ctx)
+    import json
+    data = json.loads(out[1].text)
+    assert data["hits"] == []
+
+async def test_rate_limiter_tokens_consumed(seeded_vault, make_ctx) -> None:
+    """Each search consumes from the tokens bucket (search counts as cost=1)."""
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"query": "karpathy"}, ctx)
+    # Rate limiter ran (check didn't raise). Assertion: search succeeded.
+    assert out is not None
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_search — BM25 search over vault notes in active scope."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.vault.paths import ScopeError, scope_guard
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_search"
+DESCRIPTION = "BM25 search over notes in the allowed domains. Returns ranked hits with snippets."
+_MAX_TOP_K = 20
+_DEFAULT_TOP_K = 5
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "query": {"type": "string"},
+        "top_k": {"type": "integer", "minimum": 1, "maximum": _MAX_TOP_K},
+        "domains": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["query"],
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    query = str(arguments.get("query", "")).strip()
+    top_k = min(int(arguments.get("top_k", _DEFAULT_TOP_K)), _MAX_TOP_K)
+    requested = tuple(arguments.get("domains") or ctx.allowed_domains)
+    for d in requested:
+        if d not in ctx.allowed_domains:
+            raise ScopeError(f"domain {d!r} not in allowed {ctx.allowed_domains}")
+
+    if not query:
+        return text_result("(empty query)", data={"hits": [], "top_k_used": top_k})
+
+    hits = ctx.retrieval.search(query, domains=requested, top_k=top_k)
+    verified: list[dict[str, Any]] = []
+    for h in hits:
+        # Belt-and-braces re-verification per Plan 03 Task 6.
+        scope_guard(
+            ctx.vault_root / h.path,
+            vault_root=ctx.vault_root,
+            allowed_domains=ctx.allowed_domains,
+        )
+        verified.append(
+            {
+                "path": h.path.as_posix(),
+                "title": h.title,
+                "snippet": h.snippet,
+                "score": round(h.score, 4),
+            }
+        )
+    lines = [f"- {h['path']} — {h['title']}" for h in verified] or ["(no hits)"]
+    return text_result("\n".join(lines), data={"hits": verified, "top_k_used": top_k})
+```
+
+Register. Commit. Expected: 26 + 5 = **31 passed**.
+
+---
+
+### Task 8 — `brain_recent`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/recent.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_recent.py`
+
+**Context:** per D6a, filesystem walk by `mtime_ns`. Optional `domain` arg (defaults to all allowed), optional `limit` (default 10, max 50). Returns notes sorted by `mtime_ns DESC`. Excludes `chats/` directories (they're chat threads, not source notes).
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_returns_recent_sorted(seeded_vault, make_ctx) -> None:
+    # Touch one note to make it most recent.
+    import os
+    target = seeded_vault / "research" / "notes" / "rag.md"
+    now = time.time()
+    os.utime(target, (now, now))
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({"limit": 5}, ctx)
+    import json
+    data = json.loads(out[1].text)
+    assert data["notes"][0]["path"] == "research/notes/rag.md"
+
+async def test_default_limit_is_10(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    import json
+    data = json.loads(out[1].text)
+    assert data["limit_used"] == 10
+
+async def test_excludes_chats_directory(seeded_vault, make_ctx) -> None:
+    (seeded_vault / "research" / "chats").mkdir(exist_ok=True)
+    (seeded_vault / "research" / "chats" / "old.md").write_text("x", encoding="utf-8")
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    import json
+    data = json.loads(out[1].text)
+    paths = [n["path"] for n in data["notes"]]
+    assert not any("chats" in p for p in paths)
+
+async def test_out_of_scope_domain_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(ScopeError):
+        await handle({"domain": "personal"}, ctx)
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_recent — recently modified notes via filesystem walk (D6a)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.vault.paths import ScopeError
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_recent"
+DESCRIPTION = "List recently modified notes across allowed domains, sorted newest first."
+_DEFAULT_LIMIT = 10
+_MAX_LIMIT = 50
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "domain": {"type": "string"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": _MAX_LIMIT},
+    },
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    limit = min(int(arguments.get("limit", _DEFAULT_LIMIT)), _MAX_LIMIT)
+    domain_arg = arguments.get("domain")
+    if domain_arg and domain_arg not in ctx.allowed_domains:
+        raise ScopeError(f"domain {domain_arg!r} not in allowed {ctx.allowed_domains}")
+    domains = (domain_arg,) if domain_arg else ctx.allowed_domains
+
+    entries: list[tuple[int, str, str]] = []
+    for domain in domains:
+        domain_root = ctx.vault_root / domain
+        if not domain_root.exists():
+            continue
+        for md in domain_root.rglob("*.md"):
+            rel = md.relative_to(ctx.vault_root)
+            if "chats" in rel.parts:
+                continue  # Exclude chat threads per D6a.
+            stat = md.stat()
+            entries.append((stat.st_mtime_ns, rel.as_posix(), datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()))
+
+    entries.sort(reverse=True)
+    top = entries[:limit]
+    notes = [{"path": p, "modified_at": t} for (_, p, t) in top]
+    lines = [f"- {n['path']} ({n['modified_at']})" for n in notes] or ["(no recent notes)"]
+    return text_result("\n".join(lines), data={"notes": notes, "limit_used": limit})
+```
+
+Register. Commit. Expected: 31 + 4 = **35 passed**.
+
+---
+
+### Task 9 — `brain_get_brain_md`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/get_brain_md.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_get_brain_md.py`
+
+**Context:** reads `BRAIN.md` at vault root. No args. Missing file returns `"(no BRAIN.md yet — run setup wizard)"`. No scope-guard needed: BRAIN.md is vault-global configuration/system-prompt, not domain content.
+
+### Step 1 — Failing test (3 tests)
+
+```python
+async def test_reads_brain_md(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    assert "You are brain" in out[0].text
+
+async def test_missing_returns_friendly(tmp_path, make_ctx) -> None:
+    vault = tmp_path / "empty"
+    (vault / "research").mkdir(parents=True)
+    ctx = make_ctx(vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    assert "no BRAIN.md" in out[0].text
+
+async def test_input_schema_no_args() -> None:
+    from brain_mcp.tools.get_brain_md import INPUT_SCHEMA
+    assert INPUT_SCHEMA["properties"] == {}
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_get_brain_md — read the vault-root BRAIN.md system prompt."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_get_brain_md"
+DESCRIPTION = "Read BRAIN.md at the vault root — the user's system prompt / persona / working rules."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {},
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    brain_md = ctx.vault_root / "BRAIN.md"
+    if not brain_md.exists():
+        return text_result(
+            "(no BRAIN.md yet — run `brain setup` to seed one)",
+            data={"exists": False, "body": ""},
+        )
+    body = brain_md.read_text(encoding="utf-8")
+    return text_result(body, data={"exists": True, "body": body})
+```
+
+Register. Commit. Expected: 35 + 3 = **38 passed**.
+
+---
+
+**Checkpoint 2 — pause for main-loop review.**
+
+9 tasks landed. All 6 read tools registered in `server.py`, all exercised via the in-memory MCP transport, all scope-guard the boundaries correctly. Main-loop reviews:
+- Are the 6 read tools' error messages consistent in voice and actionability?
+- Is `data` payload shape consistent (always an object, always has a `frontmatter` / `body` / `domains` / `hits` / `notes` wrapper key per tool)?
+- Is the `server.py` dispatch loop manageable at 6 tools — does appending Tasks 10+ stay clean?
+- Does `_build_ctx()` creating a fresh `StateDB` + `BM25VaultIndex` on every tool call cause any cross-test pollution, or is the per-call cost fine?
+
+---
+
+### Task 10 — 3 MCP resources (single-task bundle)
+
+**Owning subagent:** brain-mcp-engineer
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/resources/brain_md.py`
+- Create: `packages/brain_mcp/src/brain_mcp/resources/domain_index.py`
+- Create: `packages/brain_mcp/src/brain_mcp/resources/config_public.py`
+- Modify: `packages/brain_mcp/src/brain_mcp/server.py` — register resources via `@server.list_resources()` / `@server.read_resource()`
+- Create: `packages/brain_mcp/tests/test_resources.py`
+
+**Context for the implementer:**
+
+MCP resources are a separate surface from tools: clients can list resources and read them by URI. The MCP SDK provides `@server.list_resources()` + `@server.read_resource()` decorator pairs. Resources are identified by a URI string (we use the `brain://` scheme per spec).
+
+Three resources per spec §7:
+1. `brain://BRAIN.md` — the vault-root BRAIN.md
+2. `brain://<domain>/index.md` — per-domain index, ONE resource URI per allowed domain
+3. `brain://config/public` — JSON with the non-secret parts of the current config
+
+**`config/public` filtering:** `brain_core.config.schema.Config` has multiple subsections. The "public" version MUST exclude anything from `SecretsStore` or that would expose API keys. The safest approach: build a `Config.model_dump(exclude={"llm": {"api_key"}, ...})` or manually construct a public-safe dict. Check `brain_core.config.schema` for the field list — if there's any field that starts with `api_key`, `secret`, `password`, `token`, exclude it. For Plan 04 Task 10: start with a hardcoded allowlist (`{"vault_root", "active_domain", "budget", "log_llm_payloads"}`) and expand later.
+
+**Resource URI parsing:** `brain://<domain>/index.md` has a dynamic segment. Use `urllib.parse.urlparse(uri)` to extract the domain from the host or path component. Scope-guard: the `<domain>` MUST be in `ctx.allowed_domains` or `read_resource` raises.
+
+### Step 1 — Failing test (6 tests — 2 per resource)
+
+```python
+"""Tests for brain_mcp resources."""
+
+from __future__ import annotations
+
+import json
+
+from mcp.client.session import ClientSession
+
+
+async def test_list_resources_returns_three(mcp_session_with_vault: ClientSession) -> None:
+    result = await mcp_session_with_vault.list_resources()
+    uris = [str(r.uri) for r in result.resources]
+    assert "brain://BRAIN.md" in uris
+    assert any(u.startswith("brain://") and u.endswith("/index.md") for u in uris)
+    assert "brain://config/public" in uris
+
+
+async def test_read_brain_md(mcp_session_with_vault: ClientSession) -> None:
+    result = await mcp_session_with_vault.read_resource("brain://BRAIN.md")
+    assert len(result.contents) >= 1
+    assert "You are brain" in result.contents[0].text
+
+
+async def test_read_domain_index(mcp_session_with_vault: ClientSession) -> None:
+    result = await mcp_session_with_vault.read_resource("brain://research/index.md")
+    assert any("karpathy" in c.text for c in result.contents)
+
+
+async def test_read_config_public(mcp_session_with_vault: ClientSession) -> None:
+    result = await mcp_session_with_vault.read_resource("brain://config/public")
+    data = json.loads(result.contents[0].text)
+    # Must NOT contain secrets.
+    assert "api_key" not in json.dumps(data).lower()
+    assert "secret" not in json.dumps(data).lower()
+
+
+async def test_read_out_of_scope_domain_index_raises(mcp_session_with_vault: ClientSession) -> None:
+    # Session is allowed_domains=("research",); personal should refuse.
+    import pytest
+    with pytest.raises(Exception):
+        await mcp_session_with_vault.read_resource("brain://personal/index.md")
+
+
+async def test_read_unknown_resource_raises(mcp_session_with_vault: ClientSession) -> None:
+    import pytest
+    with pytest.raises(Exception):
+        await mcp_session_with_vault.read_resource("brain://nonexistent")
+```
+
+### Step 2 — Implement resources
+
+`brain_mcp/resources/brain_md.py`:
+```python
+"""brain://BRAIN.md resource."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+URI = "brain://BRAIN.md"
+NAME = "BRAIN.md"
+DESCRIPTION = "Vault-root BRAIN.md — the user's system prompt and working rules."
+MIME_TYPE = "text/markdown"
+
+
+def read(vault_root: Path) -> str:
+    brain_md = vault_root / "BRAIN.md"
+    if not brain_md.exists():
+        return ""
+    return brain_md.read_text(encoding="utf-8")
+```
+
+`brain_mcp/resources/domain_index.py`:
+```python
+"""brain://<domain>/index.md resource — dynamic per-domain."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from urllib.parse import urlparse
+
+from brain_core.vault.paths import ScopeError, scope_guard
+
+MIME_TYPE = "text/markdown"
+
+
+def uri_for(domain: str) -> str:
+    return f"brain://{domain}/index.md"
+
+
+def parse_domain(uri: str) -> str:
+    """Extract the domain from brain://<domain>/index.md."""
+    parsed = urlparse(uri)
+    if parsed.scheme != "brain":
+        raise ValueError(f"not a brain:// URI: {uri!r}")
+    # 'brain://research/index.md' → netloc='research', path='/index.md'
+    domain = parsed.netloc
+    if not domain or parsed.path != "/index.md":
+        raise ValueError(f"not a domain index URI: {uri!r}")
+    return domain
+
+
+def read(uri: str, *, vault_root: Path, allowed_domains: tuple[str, ...]) -> str:
+    domain = parse_domain(uri)
+    if domain not in allowed_domains:
+        raise ScopeError(f"domain {domain!r} not in allowed {allowed_domains}")
+    idx = scope_guard(
+        vault_root / domain / "index.md",
+        vault_root=vault_root,
+        allowed_domains=allowed_domains,
+    )
+    if not idx.exists():
+        return ""
+    return idx.read_text(encoding="utf-8")
+```
+
+`brain_mcp/resources/config_public.py`:
+```python
+"""brain://config/public — non-secret subset of the current config."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from brain_core.config.loader import load_config
+from brain_core.config.schema import Config
+
+URI = "brain://config/public"
+NAME = "config/public"
+DESCRIPTION = "Non-secret subset of the brain configuration (vault root, active domain, budget)."
+MIME_TYPE = "application/json"
+
+# Fields that are safe to expose. Any field not in this allowlist is omitted.
+_PUBLIC_FIELDS: frozenset[str] = frozenset({
+    "vault_root",
+    "active_domain",
+    "budget",
+    "log_llm_payloads",
+})
+
+
+def read(vault_root: Path) -> str:
+    cfg: Config = load_config(vault_root=vault_root)
+    full = cfg.model_dump(mode="json")
+    public = {k: v for k, v in full.items() if k in _PUBLIC_FIELDS}
+    return json.dumps(public, indent=2, default=str)
+```
+
+**Note on `load_config`:** check the actual signature in `brain_core.config.loader` — Plan 01 landed it but the kwarg may differ. Verify and adjust the call site.
+
+### Step 3 — Register in server.py
+
+Add to `create_server()`:
+
+```python
+import mcp.types as types
+from brain_mcp.resources import brain_md, domain_index, config_public
+
+
+@server.list_resources()
+async def handle_list_resources() -> list[types.Resource]:
+    resources = [
+        types.Resource(
+            uri=brain_md.URI,
+            name=brain_md.NAME,
+            description=brain_md.DESCRIPTION,
+            mimeType=brain_md.MIME_TYPE,
+        ),
+        types.Resource(
+            uri=config_public.URI,
+            name=config_public.NAME,
+            description=config_public.DESCRIPTION,
+            mimeType=config_public.MIME_TYPE,
+        ),
+    ]
+    # One resource per allowed domain.
+    for domain in allowed_domains:
+        resources.append(
+            types.Resource(
+                uri=domain_index.uri_for(domain),
+                name=f"{domain}/index.md",
+                description=f"Index for the {domain} domain.",
+                mimeType=domain_index.MIME_TYPE,
+            )
+        )
+    return resources
+
+
+@server.read_resource()
+async def handle_read_resource(uri: str) -> str:
+    if uri == brain_md.URI:
+        return brain_md.read(vault_root)
+    if uri == config_public.URI:
+        return config_public.read(vault_root)
+    if uri.startswith("brain://") and uri.endswith("/index.md"):
+        return domain_index.read(uri, vault_root=vault_root, allowed_domains=allowed_domains)
+    raise ValueError(f"unknown resource: {uri}")
+```
+
+**Important:** check the `types.Resource` field names — the MCP SDK may use `mimeType` or `mime_type` depending on version. Verify against the installed package.
+
+### Step 4 — Run + self-review + commit
+
+Expected: 38 + 6 = **44 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 10 — 3 brain:// resources (BRAIN.md, domain index, config/public)"
+```
+
+---
 
 ### Group 3 — Resources (Task 10)
 
