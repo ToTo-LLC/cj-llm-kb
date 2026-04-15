@@ -106,6 +106,13 @@ def test_old_text_not_unique_raises(
     assert store.list() == []
 
 
+def test_empty_old_raises(env: tuple[Path, ToolContext, PendingPatchStore]) -> None:
+    _, ctx, store = env
+    with pytest.raises(ValueError, match="old text must be non-empty"):
+        EditOpenDocTool().run({"old": "", "new": "x", "reason": "z"}, ctx)
+    assert store.list() == []
+
+
 def test_missing_open_doc_file_raises(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     (vault / "research").mkdir(parents=True)

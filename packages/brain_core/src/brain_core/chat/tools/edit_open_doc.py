@@ -46,6 +46,8 @@ class EditOpenDocTool:
             raise FileNotFoundError(f"open doc {ctx.open_doc_path} not found")
         body = full.read_text(encoding="utf-8")
         old = str(args["old"])
+        if not old:
+            raise ValueError("old text must be non-empty")
         occurrences = body.count(old)
         if occurrences == 0:
             raise ValueError(f"old text not found in {ctx.open_doc_path}")

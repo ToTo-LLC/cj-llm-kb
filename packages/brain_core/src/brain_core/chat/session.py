@@ -89,12 +89,10 @@ class ChatSession:
 
     def _build_effective_registry(self) -> ToolRegistry:
         mode_allowlist = MODES[self.config.mode].tool_allowlist
-        filtered = self.registry.subset(allowlist=mode_allowlist)
+        allowlist = mode_allowlist
         if self.config.open_doc_path is None:
-            return filtered.subset(
-                allowlist=tuple(name for name in mode_allowlist if name != "edit_open_doc")
-            )
-        return filtered
+            allowlist = tuple(name for name in mode_allowlist if name != "edit_open_doc")
+        return self.registry.subset(allowlist=allowlist)
 
     def switch_mode(self, new_mode: ChatMode) -> None:
         """Swap the chat mode and rebuild the effective tool registry."""

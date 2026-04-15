@@ -109,6 +109,10 @@ class StreamRenderer:
             )
             return
 
+        # Fallback for any future ChatEventKind the renderer does not know yet:
+        # emit a dim debug line rather than silently dropping the event.
+        self.console.print(Text(f"[unknown event kind: {kind}]", style="dim"))
+
     def _end_assistant_text(self) -> None:
         if self._in_assistant_text:
             self.console.print()

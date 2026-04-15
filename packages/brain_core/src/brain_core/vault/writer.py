@@ -17,7 +17,7 @@ from filelock import FileLock
 
 from brain_core.vault.index import IndexEntry, IndexFile
 from brain_core.vault.log import LogEntry, LogFile
-from brain_core.vault.paths import scope_guard
+from brain_core.vault.paths import ScopeError, scope_guard
 from brain_core.vault.types import PatchSet
 
 _INDEX_LINE_RE = re.compile(r"^- \[\[([^\]]+)\]\]\s*—\s*(.*)$")
@@ -141,7 +141,7 @@ class VaultWriter:
         src_rel = src_abs.relative_to(self.vault_root)
         dst_rel = dst_abs.relative_to(self.vault_root)
         if src_rel.parts[0] != dst_rel.parts[0]:
-            raise PermissionError(
+            raise ScopeError(
                 f"rename across domains not allowed: {src_rel.parts[0]} -> {dst_rel.parts[0]}"
             )
         lock = FileLock(str(self._locks_dir / "global.lock"))

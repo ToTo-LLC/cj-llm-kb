@@ -65,6 +65,17 @@ def test_renders_turn_end_with_cost() -> None:
     assert "0.0123" in out
 
 
+def test_renders_unknown_event_kind_fallback() -> None:
+    """Future ChatEventKind values should not silently drop — emit a debug line."""
+    renderer, buf = _make_renderer()
+    # Bypass pydantic validation to simulate a kind the renderer does not know.
+    event = ChatEvent.model_construct(kind="future_kind_xyz", data={})  # type: ignore[arg-type]
+    renderer.render(event)
+    out = buf.getvalue()
+    assert "unknown event kind" in out
+    assert "future_kind_xyz" in out
+
+
 def test_renders_error_panel() -> None:
     renderer, buf = _make_renderer()
     renderer.render(ChatEvent(kind=ChatEventKind.ERROR, data={"message": "boom went the dynamite"}))
