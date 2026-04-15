@@ -186,7 +186,7 @@ class VaultWriter:
 
     def _write_rename_undo_record(self, undo_id: str, src: Path, dst: Path) -> None:
         target = self._undo_dir / f"{undo_id}.txt"
-        target.write_text(f"RENAME\nSRC\t{src}\nDST\t{dst}\n", encoding="utf-8")
+        target.write_text(f"RENAME\nSRC\t{src}\nDST\t{dst}\n", encoding="utf-8", newline="\n")
 
 
 def _sanitize_log_summary(text: str) -> str:

@@ -184,3 +184,38 @@ class TestRenameFile:
         assert contents.startswith("RENAME")
         assert "SRC" in contents
         assert "DST" in contents
+
+    def test_rename_undo_record_uses_lf_line_endings(
+        self, ephemeral_vault: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Regression (Plan 03 Task 22 cross-platform sweep): the rename undo
+        # record must be written with LF line endings on every platform so it
+        # matches the rest of the vault's on-disk convention. Path.write_text
+        # without newline="\n" translates \n -> os.linesep on Windows, which
+        # would produce CRLF. We can't run on Windows in local CI, so we
+        # intercept Path.write_text and assert newline="\n" is explicitly
+        # passed for the rename undo record.
+        import pathlib
+
+        real_write_text = pathlib.Path.write_text
+        seen_kwargs: list[dict[str, object]] = []
+
+        def spy_write_text(self_: Path, data: str, **kwargs: object) -> int:
+            if ".brain/undo/" in self_.as_posix() or ".brain\\undo\\" in str(self_):
+                seen_kwargs.append(dict(kwargs))
+            return real_write_text(self_, data, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(pathlib.Path, "write_text", spy_write_text)
+
+        src = ephemeral_vault / "research" / "sources" / "old.md"
+        src.write_text("body", encoding="utf-8")
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        dst = ephemeral_vault / "research" / "sources" / "new.md"
+        writer.rename_file(src, dst, allowed_domains=("research",))
+
+        assert seen_kwargs, "rename undo record was not written via Path.write_text"
+        rename_call = seen_kwargs[-1]
+        assert rename_call.get("newline") == "\n", (
+            f"rename undo record must be written with newline='\\n' to avoid "
+            f"CRLF translation on Windows; got kwargs={rename_call}"
+        )
