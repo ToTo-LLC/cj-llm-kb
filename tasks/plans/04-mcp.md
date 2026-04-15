@@ -3307,7 +3307,488 @@ git commit -m "feat(mcp): plan 04 task 18 — brain_undo_last tool"
 
 ### Group 6 — Maintenance tools (Task 19)
 
-*To be filled in.*
+**Checkpoint after Task 19:** main-loop reviews the whole tool surface — all 17 tools registered (6 read + 3 ingest + 5 write + 3 maintenance — the lint stub counts toward the 17). Last tool-level gate before the Claude Desktop integration in Tasks 20–21.
+
+---
+
+### Task 19 — `CostLedger.summary` + 4 maintenance tools (bundled)
+
+**Owning subagents:** brain-core-engineer (for `CostLedger.summary`) + brain-mcp-engineer (for the 4 tool modules)
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/cost/ledger.py` — add `CostLedger.summary()` method + `CostSummary` dataclass (D5a)
+- Modify: `packages/brain_core/tests/cost/test_ledger.py` — add tests for the new method
+- Create: `packages/brain_mcp/src/brain_mcp/tools/cost_report.py`
+- Create: `packages/brain_mcp/src/brain_mcp/tools/lint.py` (D4a stub)
+- Create: `packages/brain_mcp/src/brain_mcp/tools/config_get.py`
+- Create: `packages/brain_mcp/src/brain_mcp/tools/config_set.py`
+- Modify: `packages/brain_mcp/src/brain_mcp/server.py` — register all 4 tools
+- Create: `packages/brain_mcp/tests/test_tool_cost_report.py`
+- Create: `packages/brain_mcp/tests/test_tool_lint.py`
+- Create: `packages/brain_mcp/tests/test_tool_config_get_set.py`
+
+**Context:**
+Four small tools bundled into one task because each is ≤30 LoC and they share a test file pattern. Also lands the additive `CostLedger.summary()` method per D5a — a single method, doesn't touch existing ledger code.
+
+The bundled task structure: do `CostLedger.summary()` first (it unblocks `brain_cost_report`), then the 4 tools in any order, then one commit per sub-task (4 commits total for Task 19 — it's a bundled task but not a bundled commit).
+
+### Sub-task 19A — `CostLedger.summary()` + `CostSummary`
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/cost/ledger.py`
+- Modify: `packages/brain_core/tests/cost/test_ledger.py`
+
+### Step 1 — Failing test
+
+Add to `test_ledger.py`:
+
+```python
+def test_summary_returns_typed_record(tmp_path: Path) -> None:
+    from datetime import date
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    today = date(2026, 4, 15)
+    ledger.record(CostEntry(
+        timestamp=datetime(2026, 4, 15, 10, 0, tzinfo=UTC),
+        operation="summarize", model="claude-sonnet-4-6",
+        input_tokens=1000, output_tokens=500, cost_usd=0.05,
+        domain="research",
+    ))
+    ledger.record(CostEntry(
+        timestamp=datetime(2026, 4, 15, 11, 0, tzinfo=UTC),
+        operation="integrate", model="claude-sonnet-4-6",
+        input_tokens=2000, output_tokens=800, cost_usd=0.12,
+        domain="work",
+    ))
+    summary = ledger.summary(today=today, month=(2026, 4))
+    assert summary.today_usd == pytest.approx(0.17)
+    assert summary.month_usd == pytest.approx(0.17)
+    assert summary.by_domain == {"research": pytest.approx(0.05), "work": pytest.approx(0.12)}
+
+
+def test_summary_empty_ledger(tmp_path: Path) -> None:
+    from datetime import date
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    summary = ledger.summary(today=date(2026, 4, 15), month=(2026, 4))
+    assert summary.today_usd == 0.0
+    assert summary.month_usd == 0.0
+    assert summary.by_domain == {}
+```
+
+### Step 2 — Implement
+
+Add to `ledger.py`:
+
+```python
+@dataclass(frozen=True)
+class CostSummary:
+    today_usd: float
+    month_usd: float
+    by_domain: dict[str, float]
+
+
+class CostLedger:
+    # ... existing methods unchanged ...
+
+    def summary(self, *, today: date, month: tuple[int, int]) -> CostSummary:
+        """Return a typed summary: today's total, this month's total, today's
+        breakdown by domain. Used by brain_cost_report MCP tool."""
+        return CostSummary(
+            today_usd=self.total_for_day(today),
+            month_usd=self.total_for_month(month[0], month[1]),
+            by_domain=self.total_by_domain(today),
+        )
+```
+
+### Step 3 — Run + commit sub-task 19A
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core/tests/cost/test_ledger.py -v
+```
+
+Expected: the 2 new tests pass plus the existing ledger tests green. Then:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_core/src/brain_core/cost/ledger.py packages/brain_core/tests/cost/test_ledger.py && git commit -m "feat(cost): plan 04 task 19a — CostLedger.summary()"
+```
+
+### Sub-task 19B — `brain_cost_report` tool
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/cost_report.py`
+- Create: `packages/brain_mcp/tests/test_tool_cost_report.py`
+- Modify: `server.py`
+
+### Step 1 — Failing test (3 tests)
+
+```python
+"""Tests for brain_cost_report."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+from brain_core.cost.ledger import CostEntry
+from brain_mcp.tools.cost_report import NAME, handle
+
+
+def test_name() -> None:
+    assert NAME == "brain_cost_report"
+
+
+async def test_cost_report_with_entries(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    ctx.cost_ledger.record(CostEntry(
+        timestamp=datetime.now(UTC),
+        operation="summarize", model="claude-sonnet-4-6",
+        input_tokens=1000, output_tokens=500, cost_usd=0.04,
+        domain="research",
+    ))
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["today_usd"] >= 0.04
+    assert data["month_usd"] >= 0.04
+    assert "research" in data["by_domain"]
+
+
+async def test_cost_report_empty_ledger(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["today_usd"] == 0.0
+    assert data["month_usd"] == 0.0
+    assert data["by_domain"] == {}
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_cost_report — return today / month / by-domain cost summary."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_cost_report"
+DESCRIPTION = "Return the cost ledger summary: today's total USD, this month's total USD, and today's by-domain breakdown."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {},
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    now = datetime.now(UTC)
+    today = now.date()
+    summary = ctx.cost_ledger.summary(today=today, month=(now.year, now.month))
+    text = (
+        f"today: ${summary.today_usd:.4f}\n"
+        f"month: ${summary.month_usd:.4f}\n"
+        f"by domain today: {', '.join(f'{d}=${c:.4f}' for d, c in summary.by_domain.items()) or '(empty)'}"
+    )
+    return text_result(
+        text,
+        data={
+            "today_usd": summary.today_usd,
+            "month_usd": summary.month_usd,
+            "by_domain": summary.by_domain,
+        },
+    )
+```
+
+Register. Commit.
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/src/brain_mcp/tools/cost_report.py packages/brain_mcp/src/brain_mcp/server.py packages/brain_mcp/tests/test_tool_cost_report.py && git commit -m "feat(mcp): plan 04 task 19b — brain_cost_report tool"
+```
+
+### Sub-task 19C — `brain_lint` stub (D4a)
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/lint.py`
+- Create: `packages/brain_mcp/tests/test_tool_lint.py`
+- Modify: `server.py`
+
+Per D4a, `brain_lint` is a stub returning `{"status": "not_implemented", "message": "Plan 09 will land the real lint engine"}`. Registers the tool surface so MCP clients discover it; real implementation deferred.
+
+### Step 1 — Failing test (2 tests)
+
+```python
+async def test_lint_stub_returns_not_implemented(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "not_implemented"
+    assert "Plan 09" in data["message"]
+
+
+def test_lint_input_schema_has_no_required() -> None:
+    from brain_mcp.tools.lint import INPUT_SCHEMA
+    assert INPUT_SCHEMA.get("required", []) == []
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_lint — STUB. Plan 09 will land the real lint engine."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_lint"
+DESCRIPTION = "[Stub] Vault lint — checks for broken wikilinks, orphan notes, missing frontmatter. Not yet implemented."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "domain": {"type": "string", "description": "Optional domain to lint"},
+    },
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    return text_result(
+        "brain_lint is not yet implemented — scheduled for Plan 09.",
+        data={
+            "status": "not_implemented",
+            "message": "Plan 09 will land the real lint engine.",
+        },
+    )
+```
+
+Register. Commit.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 19c — brain_lint stub (Plan 09 deferred)"
+```
+
+### Sub-task 19D — `brain_config_get` + `brain_config_set` (2 tools in one sub-commit)
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/config_get.py`
+- Create: `packages/brain_mcp/src/brain_mcp/tools/config_set.py`
+- Create: `packages/brain_mcp/tests/test_tool_config_get_set.py`
+- Modify: `server.py`
+
+**Context:**
+- `brain_config_get(key)` reads a single config field. Refuses any key that looks like a secret (substring `api_key`, `secret`, `token`, `password`, case-insensitive).
+- `brain_config_set(key, value)` writes a single field. Same secret refusal. Also refuses non-whitelisted keys (same allowlist as `config/public` resource from Task 10) — user-settable fields are a narrow set: `active_domain`, `budget.daily_cap_usd`, `log_llm_payloads`.
+
+### Step 1 — Failing test (5 tests in `test_tool_config_get_set.py`)
+
+```python
+"""Tests for brain_config_get and brain_config_set."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from brain_mcp.tools.config_get import handle as get_handle
+from brain_mcp.tools.config_set import handle as set_handle
+
+
+async def test_config_get_public_field(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await get_handle({"key": "active_domain"}, ctx)
+    data = json.loads(out[1].text)
+    assert "value" in data
+    assert data["key"] == "active_domain"
+
+
+async def test_config_get_refuses_secret_key(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(PermissionError, match="secret"):
+        await get_handle({"key": "llm.api_key"}, ctx)
+
+
+async def test_config_set_settable_field(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await set_handle({"key": "active_domain", "value": "work"}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "updated"
+    assert data["key"] == "active_domain"
+
+
+async def test_config_set_refuses_secret_key(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(PermissionError, match="secret"):
+        await set_handle({"key": "llm.api_key", "value": "sk-leak"}, ctx)
+
+
+async def test_config_set_refuses_non_whitelisted_key(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(PermissionError, match="not settable"):
+        await set_handle({"key": "vault_root", "value": "/tmp/hack"}, ctx)
+```
+
+### Step 2 — Implement `config_get.py`
+
+```python
+"""brain_config_get — read a single config field, refusing secrets."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.config.loader import load_config
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_config_get"
+DESCRIPTION = "Read a config field by key (e.g. 'active_domain'). Refuses keys that look like secrets."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {"key": {"type": "string"}},
+    "required": ["key"],
+}
+
+_SECRET_SUBSTRINGS: frozenset[str] = frozenset({"api_key", "secret", "token", "password"})
+
+
+def _looks_like_secret(key: str) -> bool:
+    lowered = key.lower()
+    return any(s in lowered for s in _SECRET_SUBSTRINGS)
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    key = str(arguments["key"])
+    if _looks_like_secret(key):
+        raise PermissionError(f"refusing to expose secret-like key {key!r}")
+
+    cfg = load_config(vault_root=ctx.vault_root)
+    data = cfg.model_dump(mode="json")
+
+    # Support dotted-key lookup: "budget.daily_cap_usd"
+    value: Any = data
+    for part in key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            raise KeyError(f"config key {key!r} not found")
+        value = value[part]
+
+    return text_result(
+        f"{key} = {value!r}",
+        data={"key": key, "value": value},
+    )
+```
+
+### Step 3 — Implement `config_set.py`
+
+```python
+"""brain_config_set — set a whitelisted config field."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_config_set"
+DESCRIPTION = "Set a whitelisted config field (active_domain, budget.daily_cap_usd, log_llm_payloads)."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "key": {"type": "string"},
+        "value": {},  # any — validated at apply time
+    },
+    "required": ["key", "value"],
+}
+
+_SECRET_SUBSTRINGS: frozenset[str] = frozenset({"api_key", "secret", "token", "password"})
+_SETTABLE_KEYS: frozenset[str] = frozenset({
+    "active_domain",
+    "budget.daily_cap_usd",
+    "log_llm_payloads",
+})
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    key = str(arguments["key"])
+    if any(s in key.lower() for s in _SECRET_SUBSTRINGS):
+        raise PermissionError(f"refusing to set secret-like key {key!r}")
+    if key not in _SETTABLE_KEYS:
+        raise PermissionError(
+            f"key {key!r} is not settable via MCP — settable keys: {sorted(_SETTABLE_KEYS)}"
+        )
+
+    # For Plan 04 we acknowledge the intent but DON'T actually write the config file.
+    # Config file writes need a proper schema round-trip + validation that is
+    # non-trivial for nested fields. Defer actual persistence to Plan 07 web UI's
+    # Settings page. This tool returns success for discoverability but logs that
+    # the value was not persisted.
+    value = arguments["value"]
+    return text_result(
+        f"set {key} = {value!r} (IN-MEMORY ONLY — persistence deferred to Plan 07)",
+        data={
+            "status": "updated",
+            "key": key,
+            "value": value,
+            "persisted": False,
+            "note": "Plan 04 acknowledges the write but doesn't persist. Use brain_cli for now.",
+        },
+    )
+```
+
+**DESIGN NOTE:** `brain_config_set` deliberately does NOT write to disk in Plan 04. Writing the config file correctly requires typed round-tripping through `Config.model_validate(...)` + YAML/TOML serialization, which is more work than the rest of Task 19 combined. The stub returns `status=updated` and `persisted=false` so the MCP tool surface is complete and discoverable; real persistence lands in Plan 07's Settings page. **Confirm with the user during review** — if they want real persistence in Plan 04, scope it explicitly. Add to Task 24 deferral list regardless.
+
+### Step 4 — Register 4 maintenance tools in server.py
+
+Append:
+```python
+from brain_mcp.tools import cost_report as _cost_report_tool
+from brain_mcp.tools import lint as _lint_tool
+from brain_mcp.tools import config_get as _config_get_tool
+from brain_mcp.tools import config_set as _config_set_tool
+
+_TOOL_MODULES = [
+    # ... existing Tasks 4-18 entries ...
+    _cost_report_tool,
+    _lint_tool,
+    _config_get_tool,
+    _config_set_tool,
+]
+```
+
+### Step 5 — Run + final commit for sub-task 19D
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_mcp -v 2>&1 | tail -15
+```
+
+Expected after Task 19 (all sub-tasks): 75 + 2 (sub-19A in brain_core) + 3 (19B cost_report) + 2 (19C lint) + 5 (19D config_get_set) = **87 passed in brain_mcp**, plus 2 new in brain_core tests/cost.
+
+Combined full suite: 366 + 14 foundation + ... ≈ **~455 passed + 5 skipped** at the end of Task 19.
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/src/brain_mcp/tools/config_get.py packages/brain_mcp/src/brain_mcp/tools/config_set.py packages/brain_mcp/tests/test_tool_config_get_set.py packages/brain_mcp/src/brain_mcp/server.py && git commit -m "feat(mcp): plan 04 task 19d — brain_config_get + brain_config_set (set is in-memory only)"
+```
+
+---
+
+**Checkpoint 5 — pause for main-loop review.**
+
+19 tasks landed, all 17 tools registered. Full MCP tool surface live. Main loop asks:
+- Is `brain_config_set` in-memory-only acceptable, or does Plan 04 need to land real persistence? (Track in Task 24 deferrals either way.)
+- Is the secret-substring blocklist `{api_key, secret, token, password}` strong enough?
+- Are the `settable_keys` restrictive enough? `active_domain` switching via MCP might be weird — clients probably shouldn't be able to change scope mid-session. Consider dropping `active_domain` from `_SETTABLE_KEYS`.
+- Does `load_config` gracefully handle a fresh vault with no config file? If not, `brain_config_get` returns a confusing error to the MCP client.
+
+---
 
 ### Group 7 — Claude Desktop integration (Tasks 20–21)
 
