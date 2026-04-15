@@ -5025,6 +5025,11 @@ Total `brain_core` must not regress from Plan 03's 91%.
 #### Step 2 — Mini hardening sweep
 
 Collect deferred items from the running Plan 04 review log. Expected items based on the groups:
+
+**Already tracked during execution:**
+- **Task 2 — RateLimiter NICE-TO-HAVEs:** (1) refactor `list[float]` bucket state to a `_Bucket` dataclass for better mypy narrowing; (2) remove or document the unused `self._config` field; (3) defensive `elapsed = max(0.0, now - last)` guard against monkeypatch clock-backwards.
+- **Task 3 — ToolContext:** add a one-line class docstring documenting the heavy-`Any` convention for downstream tool authors.
+- **Task 4 — server.py:** (1) build `_TOOL_BY_NAME = {m.NAME: m for m in _TOOL_MODULES}` dict lookup once in `create_server()` instead of linear scan on every tool call; (2) extract `build_tool_context(...)` helper into `brain_mcp.tools.context` and call from both `server._build_ctx` and conftest's `make_tool_context` to prevent drift; (3) startup-time assertion loop in `create_server()` validating each `ToolModule` has `NAME: str`, `DESCRIPTION: str`, `INPUT_SCHEMA: dict`, callable `handle` — catches typos at boot instead of first `list_tools()` call; (4) `seeded_vault` fixture should pass `newline="\n"` on `write_text` calls per CLAUDE.md principle #8.
 - `_build_ctx` in `server.py` rebuilds `StateDB` + `BM25VaultIndex` on every call (Task 4 concern) — if profiling shows this is slow, cache per-server-instance. Else document and defer.
 - `IngestPipeline` construction inline in `brain_ingest` tool — if it's >20 lines, extract to `brain_core.ingest.factory.build_default_pipeline(llm, writer, ledger)` helper.
 - `brain_config_set` in-memory-only — document explicitly in the tool docstring that persistence lands in Plan 07.
