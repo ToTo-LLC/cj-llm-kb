@@ -159,3 +159,36 @@ def test_path_uses_first_domain(
     persistence.write(thread_id=tid, config=cfg, turns=[_turn(TurnRole.USER, "x")])
     assert (vault / "research" / "chats" / f"{tid}.md").exists()
     assert not (vault / "work" / "chats" / f"{tid}.md").exists()
+
+
+def test_section_splitter_treats_fenced_heading_as_boundary(
+    env: tuple[Path, VaultWriter, StateDB, ThreadPersistence],
+) -> None:
+    """Known limitation: `^## User$` inside a fenced code block still splits a turn.
+
+    The multiline section regex is intentionally line-oriented and does not track
+    fenced code blocks. If an assistant turn quotes literal markdown containing
+    `## User` at column 0, round-tripping through `read()` will produce an extra
+    synthetic User turn. This test documents that behavior so anyone tightening
+    the parser in a later plan sees it explicitly.
+    """
+    vault, _, _, persistence = env
+    cfg = ChatSessionConfig(mode=ChatMode.ASK, domains=("research",))
+    tid = "2026-04-14-fenced-adversarial"
+    adversarial = "here is a sample chat file:\n```\n## User\nfake\n```\n(end)\n"
+    persistence.write(
+        thread_id=tid,
+        config=cfg,
+        turns=[
+            _turn(TurnRole.USER, "show me a chat file"),
+            _turn(TurnRole.ASSISTANT, adversarial),
+        ],
+    )
+    loaded = persistence.read(vault / "research" / "chats" / f"{tid}.md")
+    roles = [t.role for t in loaded.turns]
+    # Documented limitation: the fenced `## User` is picked up as a real heading.
+    assert roles == [TurnRole.USER, TurnRole.ASSISTANT, TurnRole.USER]
+    # The assistant content before the fake header round-trips.
+    assert "here is a sample chat file" in loaded.turns[1].content
+    # The synthetic turn carries the content that followed the fake header.
+    assert "fake" in loaded.turns[2].content

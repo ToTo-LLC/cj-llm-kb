@@ -156,9 +156,42 @@ class TestRenameFile:
         src.write_text("body", encoding="utf-8")
         writer = VaultWriter(vault_root=ephemeral_vault)
         dst = ephemeral_vault / "work" / "sources" / "new.md"
-        with pytest.raises(PermissionError, match="rename across domains"):
+        # Plan 03 Task 24 Batch A: the specific error is ScopeError (a
+        # PermissionError subclass), not a bare PermissionError.
+        with pytest.raises(ScopeError, match="rename across domains"):
             writer.rename_file(src, dst, allowed_domains=("research", "work"))
         assert src.exists()
+
+    def test_rename_file_rejects_src_outside_vault(
+        self, ephemeral_vault: Path, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside.md"
+        outside.write_text("body", encoding="utf-8")
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        dst = ephemeral_vault / "research" / "sources" / "new.md"
+        with pytest.raises(PermissionError):  # ScopeError is a PermissionError
+            writer.rename_file(outside, dst, allowed_domains=("research",))
+        assert outside.exists()
+
+    def test_rename_file_rejects_dst_outside_vault(
+        self, ephemeral_vault: Path, tmp_path: Path
+    ) -> None:
+        src = ephemeral_vault / "research" / "sources" / "old.md"
+        src.write_text("body", encoding="utf-8")
+        outside_dst = tmp_path / "escape.md"
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        with pytest.raises(PermissionError):
+            writer.rename_file(src, outside_dst, allowed_domains=("research",))
+        assert src.exists()
+        assert not outside_dst.exists()
+
+    def test_rename_file_src_must_exist(self, ephemeral_vault: Path) -> None:
+        writer = VaultWriter(vault_root=ephemeral_vault)
+        src = ephemeral_vault / "research" / "sources" / "ghost.md"
+        dst = ephemeral_vault / "research" / "sources" / "new.md"
+        with pytest.raises(FileNotFoundError):
+            writer.rename_file(src, dst, allowed_domains=("research",))
+        assert not dst.exists()
 
     def test_rename_file_refuses_overwrite(self, ephemeral_vault: Path) -> None:
         src = ephemeral_vault / "research" / "sources" / "a.md"

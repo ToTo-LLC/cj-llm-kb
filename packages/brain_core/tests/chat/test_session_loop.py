@@ -23,7 +23,13 @@ from brain_core.chat.tools.read_note import ReadNoteTool
 from brain_core.chat.tools.search_vault import SearchVaultTool
 from brain_core.chat.types import ChatEventKind, ChatMode, ChatSessionConfig
 from brain_core.llm.fake import FakeLLMProvider
-from brain_core.llm.types import ToolUse
+from brain_core.llm.types import (
+    LLMRequest,
+    LLMResponse,
+    LLMStreamChunk,
+    TokenUsage,
+    ToolUse,
+)
 from brain_core.state.db import StateDB
 
 EnvTuple = tuple[Path, FakeLLMProvider, ToolRegistry, BM25VaultIndex, PendingPatchStore, StateDB]
@@ -258,3 +264,56 @@ async def test_set_open_doc_appends_system_turn(env: EnvTuple) -> None:
     # Setting to same None is a no-op.
     session.set_open_doc(None)
     assert len([t for t in session._turns if t.role.value == "system"]) == 2
+
+
+class _CombinedChunkProvider:
+    """Minimal provider that yields a single chunk combining delta + usage.
+
+    Real Anthropic streams deliver delta and usage as separate events, but the
+    `LLMStreamChunk` schema permits a combined shape. This provider exercises
+    that path so future SDK changes do not silently regress.
+    """
+
+    name = "combined-chunk"
+
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:  # pragma: no cover
+        raise NotImplementedError
+
+    async def stream(self, request: LLMRequest):  # type: ignore[no-untyped-def]
+        self.requests.append(request)
+        # Single combined chunk: text delta AND usage in the same message.
+        # done=False — the stream terminates by iterator exhaustion, not a
+        # sentinel, to prove the loop does not depend on `done=True` firing.
+        yield LLMStreamChunk(
+            delta="hi",
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            done=False,
+        )
+
+
+async def test_turn_handles_combined_delta_and_usage_chunk(env: EnvTuple) -> None:
+    vault, _fake, registry, retrieval, pending, db = env
+    compiler = ContextCompiler(vault_root=vault, mode_prompt="MODE PROMPT")
+    cfg = ChatSessionConfig(mode=ChatMode.ASK, domains=("research",))
+    session = ChatSession(
+        config=cfg,
+        llm=_CombinedChunkProvider(),  # type: ignore[arg-type]
+        compiler=compiler,
+        registry=registry,
+        retrieval=retrieval,
+        pending_store=pending,
+        state_db=db,
+        vault_root=vault,
+        thread_id="2026-04-14-draft-combined",
+    )
+    events = [e async for e in session.turn("hi")]
+    deltas = [e for e in events if e.kind == ChatEventKind.DELTA]
+    assert len(deltas) == 1
+    assert deltas[0].data["text"] == "hi"
+    assert events[-1].kind == ChatEventKind.TURN_END
+    # Assistant turn captured with the combined text.
+    assistant_turns = [t for t in session._turns if t.role.value == "assistant"]
+    assert assistant_turns[-1].content == "hi"

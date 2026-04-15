@@ -55,6 +55,17 @@ def test_missing_file_raises_friendly(ctx: ToolContext) -> None:
         ReadNoteTool().run({"path": "research/notes/missing.md"}, ctx)
 
 
+def test_note_without_frontmatter_falls_back(ctx: ToolContext) -> None:
+    """Raw markdown (no `---` fence) must not raise — lenient fallback returns empty fm."""
+    raw_body = "# Raw note\n\nNo frontmatter fence here.\n"
+    (ctx.vault_root / "research" / "notes" / "raw.md").write_text(raw_body, encoding="utf-8")
+    result = ReadNoteTool().run({"path": "research/notes/raw.md"}, ctx)
+    assert result.data is not None
+    assert result.data["frontmatter"] == {}
+    assert result.data["body"] == raw_body
+    assert result.text == raw_body
+
+
 def test_absolute_path_rejected(ctx: ToolContext) -> None:
     absolute = (ctx.vault_root / "research" / "notes" / "karpathy.md").as_posix()
     with pytest.raises(ValueError, match="vault-relative"):
