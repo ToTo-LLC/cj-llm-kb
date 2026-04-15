@@ -2138,11 +2138,1172 @@ git commit -m "feat(mcp): plan 04 task 10 — 3 brain:// resources (BRAIN.md, do
 
 ### Group 4 — Ingest tools (Tasks 11–13)
 
-*To be filled in.*
+**Checkpoint after Task 13:** main-loop reviews the ingest tool surface. Main risks: `autonomous` flag semantics must match Plan 02 pipeline exactly, FakeLLMProvider queue ordering in tests is fiddly, rate-limiter token accounting must actually fire on LLM calls.
+
+---
+
+### Task 11 — `brain_ingest`
+
+**Owning subagent:** brain-mcp-engineer
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/ingest.py`
+- Modify: `packages/brain_mcp/src/brain_mcp/server.py`
+- Create: `packages/brain_mcp/tests/test_tool_ingest.py`
+
+**Context for the implementer:**
+
+Per D8a, `brain_ingest` is a single async tool with an `autonomous` flag. The handler:
+1. Takes `{source, autonomous=false, domain_override=None}` input
+2. Constructs an `IngestPipeline` instance bound to `ctx.llm`, `ctx.writer` (when autonomous), `ctx.cost_ledger`, the pipeline's own prompt templates
+3. Calls `pipeline.run(source=...)` to produce a classified `PatchSet`
+4. If `autonomous=False` (default): stages the PatchSet via `ctx.pending_store.put(patchset=..., source_thread="mcp-ingest", mode=ChatMode.BRAINSTORM, tool="brain_ingest", target_path=..., reason=...)`. Return `{"status": "pending", "patch_id": env.patch_id, "target_path": ...}`.
+5. If `autonomous=True`: applies the PatchSet via `ctx.writer.apply(patchset, allowed_domains=ctx.allowed_domains)`. Return `{"status": "applied", "undo_id": receipt.undo_id, "applied_files": [str(p) for p in receipt.applied_files]}`.
+6. Either way, call `ctx.rate_limiter.check("patches", cost=1)` before step 3. If refused, return `{"status": "rate_limited", "retry_after": "~60s"}` without running the pipeline.
+7. Before calling the pipeline, `ctx.rate_limiter.check("tokens", cost=<rough_estimate>)` — rough estimate = 8000 (the pipeline does summarize + integrate + classify = ~3 LLM calls averaging ~2500 tokens each). If refused, return rate-limited.
+
+**ChatMode import for the pending store `put()` call:** `from brain_core.chat.types import ChatMode`. Using `BRAINSTORM` is a convenience — the MCP staging flow isn't really Brainstorm mode, but the `mode` field on `PendingEnvelope` requires a ChatMode value and Brainstorm is the closest semantic match ("staged for human approval"). Alternative: add a new `ChatMode.INGEST` value to Plan 03's enum, but that's out of scope for Plan 04 — defer.
+
+**`IngestPipeline` construction** — check the real `brain_core.ingest.pipeline.IngestPipeline` dataclass fields before writing the handler. Its `__init__` (per `packages/brain_core/src/brain_core/ingest/pipeline.py`) requires at least `classify_model`, probably a summarize and integrate model too, plus dispatcher handlers. The MCP layer is NOT the right place to build a pipeline from scratch — there should be a `build_ingest_pipeline(llm, ...)` factory somewhere in brain_core or brain_cli. If there isn't one, Task 11 must either (a) construct one inline in the tool handler (ugly but explicit), or (b) add a `brain_core.ingest.factory.build_default_pipeline(llm, writer, ledger)` helper as a small additive change.
+
+**Recommendation for the implementer:** start by checking `scripts/demo-plan-02.py` — it constructs an `IngestPipeline` by hand for the demo. Copy that construction pattern into the MCP tool handler. If it's >20 lines of wiring, extract into a `_build_pipeline_for_mcp()` helper INSIDE `tools/ingest.py` (keeps the scope to Plan 04).
+
+### Step 1 — Read the Plan 02 demo for the pipeline construction pattern
+
+```bash
+cat scripts/demo-plan-02.py | head -80
+```
+
+Note the exact kwargs passed to `IngestPipeline(...)`. Copy them. Adjust `classify_model` / `summarize_model` / `integrate_model` to `"claude-haiku-4-5"` / `"claude-sonnet-4-6"` / `"claude-sonnet-4-6"` defaults (hardcoded for now; Plan 05 will wire them to config).
+
+### Step 2 — Write the failing test (~5 tests)
+
+```python
+"""Tests for brain_ingest MCP tool.
+
+All tests use FakeLLMProvider so no network. The pipeline itself is Plan 02
+code exercised by Plan 02 demo fixtures — we just verify the MCP layer wires
+it correctly and respects the autonomous flag.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from brain_mcp.tools.base import ToolContext
+from brain_mcp.tools.ingest import NAME, handle
+from brain_core.chat.pending import PendingPatchStore
+from brain_core.prompts.schemas import SummarizeOutput
+
+
+def _queue_ingest_pipeline_responses(fake_llm) -> None:  # noqa: ANN001
+    """Queue the 3 LLM calls an ingest run makes: summarize, classify, integrate."""
+    # Summarize step returns a SummarizeOutput JSON.
+    fake_llm.queue(
+        SummarizeOutput(
+            title="Karpathy LLM Wiki",
+            key_points=["LLM compiles raw material into a wiki"],
+            entities=[],
+            concepts=["LLM wiki pattern"],
+            body_markdown="Karpathy proposed the LLM wiki pattern.",
+        ).model_dump_json()
+    )
+    # Classify step returns a ClassifyOutput.
+    fake_llm.queue('{"domain": "research", "confidence": 0.9, "reason": "research topic"}')
+    # Integrate step returns a PatchSet JSON (new_files only).
+    fake_llm.queue(
+        '{"new_files": [{"path": "research/sources/karpathy-llm-wiki.md", '
+        '"content": "# Karpathy LLM Wiki\\n\\nbody"}], "edits": [], '
+        '"index_entries": [], "log_entry": "ingested", "reason": "ingest test"}'
+    )
+
+
+async def test_ingest_default_stages_patch(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    _queue_ingest_pipeline_responses(ctx.llm)
+    out = await handle(
+        {"source": "https://example.com/karpathy-wiki"},  # URL handler mocked
+        ctx,
+    )
+    data = json.loads(out[1].text)
+    assert data["status"] == "pending"
+    assert "patch_id" in data
+    # Vault file NOT created yet — staged only.
+    assert not (seeded_vault / "research" / "sources" / "karpathy-llm-wiki.md").exists()
+    # Pending queue has the staged patch.
+    pending = ctx.pending_store.list()
+    assert any(env.tool == "brain_ingest" for env in pending)
+
+
+async def test_ingest_autonomous_applies_immediately(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    _queue_ingest_pipeline_responses(ctx.llm)
+    out = await handle(
+        {"source": "https://example.com/karpathy-wiki", "autonomous": True},
+        ctx,
+    )
+    data = json.loads(out[1].text)
+    assert data["status"] == "applied"
+    assert "undo_id" in data
+    # Vault file DID get created.
+    assert (seeded_vault / "research" / "sources" / "karpathy-llm-wiki.md").exists()
+
+
+async def test_ingest_rate_limited_patches(seeded_vault: Path, make_ctx) -> None:
+    from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+    ctx_dict = make_ctx(seeded_vault, allowed_domains=("research",)).__dict__
+    # Replace rate limiter with a drained one.
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=1))
+    limiter.check("patches", cost=1)  # drain
+    tight_ctx = ToolContext(**{**ctx_dict, "rate_limiter": limiter})
+    out = await handle({"source": "https://example.com/x"}, tight_ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "rate_limited"
+
+
+async def test_ingest_input_schema() -> None:
+    from brain_mcp.tools.ingest import INPUT_SCHEMA
+    assert INPUT_SCHEMA["required"] == ["source"]
+    assert "autonomous" in INPUT_SCHEMA["properties"]
+    assert INPUT_SCHEMA["properties"]["autonomous"]["default"] is False
+
+
+async def test_ingest_cost_ledger_updated(seeded_vault: Path, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    _queue_ingest_pipeline_responses(ctx.llm)
+    await handle({"source": "https://example.com/x"}, ctx)
+    # Pipeline records cost for each LLM call; exact value depends on FakeLLMProvider.
+    from datetime import date
+    total = ctx.cost_ledger.total_for_day(date.today())
+    assert total >= 0.0  # Non-negative; Fake may return 0
+```
+
+**IMPORTANT:** the URL handler path is `brain_core.ingest.handlers.url.URLHandler` which calls `httpx.AsyncClient().get(...)`. In tests, either monkeypatch the httpx client OR use a pre-fetched source type (e.g. `{"source": "plain text content", "source_type": "text"}`). The cleanest path: support an optional `source_type` override in `brain_ingest` so tests can pass `{"source": "raw text body", "source_type": "text"}` and skip the URL fetch entirely. Add that to the INPUT_SCHEMA.
+
+### Step 3 — Implement the handler
+
+```python
+"""brain_ingest — ingest a source via the Plan 02 pipeline, stage or apply."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.chat.types import ChatMode
+from brain_core.ingest.pipeline import IngestPipeline
+from brain_core.vault.types import PatchSet
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_ingest"
+DESCRIPTION = (
+    "Ingest a source (URL, text, file path) into the vault via the Plan 02 "
+    "summarize+classify+integrate pipeline. Default: stages the resulting "
+    "PatchSet for human approval. Pass `autonomous=true` to apply immediately."
+)
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "source": {"type": "string", "description": "URL, file path, or raw text content"},
+        "source_type": {
+            "type": "string",
+            "enum": ["auto", "url", "text", "pdf", "email"],
+            "default": "auto",
+        },
+        "autonomous": {"type": "boolean", "default": False},
+        "domain_override": {"type": "string"},
+    },
+    "required": ["source"],
+}
+
+# Rough token estimate for one ingest run (summarize + classify + integrate).
+_INGEST_TOKEN_ESTIMATE = 8000
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    # Rate-limit check BEFORE any pipeline work.
+    if not ctx.rate_limiter.check("patches", cost=1):
+        return text_result(
+            "rate limited (patches/min)",
+            data={"status": "rate_limited", "bucket": "patches", "retry_after_seconds": 60},
+        )
+    if not ctx.rate_limiter.check("tokens", cost=_INGEST_TOKEN_ESTIMATE):
+        return text_result(
+            "rate limited (tokens/min)",
+            data={"status": "rate_limited", "bucket": "tokens", "retry_after_seconds": 60},
+        )
+
+    source = str(arguments["source"])
+    autonomous = bool(arguments.get("autonomous", False))
+    domain_override = arguments.get("domain_override")
+
+    pipeline = _build_pipeline_for_mcp(ctx)
+    result = await pipeline.run(
+        source=source,
+        source_type_override=arguments.get("source_type", "auto"),
+        domain_override=domain_override,
+    )
+
+    if result.status != "ok":
+        return text_result(
+            f"ingest failed: {result.error}",
+            data={"status": "failed", "error": result.error, "stage": result.failed_stage},
+        )
+
+    patchset: PatchSet = result.patchset
+
+    if autonomous:
+        receipt = ctx.writer.apply(patchset, allowed_domains=ctx.allowed_domains)
+        return text_result(
+            f"applied {len(receipt.applied_files)} file(s)",
+            data={
+                "status": "applied",
+                "undo_id": receipt.undo_id,
+                "applied_files": [p.as_posix() for p in receipt.applied_files],
+            },
+        )
+    else:
+        # Stage via PendingPatchStore. target_path = first new_file if any, else first edit.
+        target_path = Path(".")
+        if patchset.new_files:
+            target_path = patchset.new_files[0].path
+        elif patchset.edits:
+            target_path = patchset.edits[0].path
+        envelope = ctx.pending_store.put(
+            patchset=patchset,
+            source_thread="mcp-ingest",
+            mode=ChatMode.BRAINSTORM,  # closest semantic match; MCP has no dedicated mode
+            tool="brain_ingest",
+            target_path=target_path,
+            reason=patchset.reason or f"ingested from {source[:100]}",
+        )
+        return text_result(
+            f"staged patch {envelope.patch_id}",
+            data={
+                "status": "pending",
+                "patch_id": envelope.patch_id,
+                "target_path": str(envelope.target_path),
+            },
+        )
+
+
+def _build_pipeline_for_mcp(ctx: ToolContext) -> IngestPipeline:
+    """Construct an IngestPipeline wired to the ctx's llm + ledger.
+
+    Mirrors scripts/demo-plan-02.py's pipeline construction. Kept inline here
+    rather than factored into brain_core to keep Plan 04 scope tight.
+    """
+    # Import here to avoid cycles at module-load time.
+    from brain_core.ingest.dispatcher import default_dispatcher
+
+    return IngestPipeline(
+        vault_root=ctx.vault_root,
+        llm=ctx.llm,
+        dispatcher=default_dispatcher(),
+        writer=ctx.writer,
+        cost_ledger=ctx.cost_ledger,
+        classify_model="claude-haiku-4-5",
+        summarize_model="claude-sonnet-4-6",
+        integrate_model="claude-sonnet-4-6",
+    )
+```
+
+**WARNING:** the `IngestPipeline` kwargs above are best-guess based on the Plan 02 demo pattern. Before shipping, the implementer MUST read the actual `IngestPipeline.__init__` signature (or `@dataclass` fields) and match exactly. `default_dispatcher()` may not exist — check `brain_core.ingest.dispatcher` for the real factory name. If it's called something else (e.g. `SourceDispatcher()` or `build_dispatcher()`), use that.
+
+Register in `server.py`. Commit. Expected after Task 11: **44 + 5 = 49 passed** in brain_mcp.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 11 — brain_ingest tool (staged or autonomous)"
+```
+
+---
+
+### Task 12 — `brain_classify`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/classify.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_classify.py`
+
+**Context:** wraps Plan 02's `brain_core.ingest.classifier.classify(content, model, llm)` function. Takes `{content: str, hint?: str}` and returns `{domain, confidence, reason}`. Scope-guard: the returned `domain` MUST be in `ctx.allowed_domains` — if the classifier returns `personal` but the caller isn't authorized, convert the response to `{"domain": "unknown", "confidence": 0.0, "reason": "classification not in allowed scope"}`. No rate-limit on the patches bucket (classification doesn't produce patches); DO consume from the tokens bucket (cost=~1000).
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_classify_research_content(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research", "work"))
+    ctx.llm.queue('{"domain": "research", "confidence": 0.85, "reason": "LLM-related"}')
+    out = await handle({"content": "Andrej Karpathy on transformers"}, ctx)
+    data = json.loads(out[1].text)
+    assert data["domain"] == "research"
+    assert data["confidence"] == 0.85
+
+
+async def test_classify_out_of_scope_domain_sanitized(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    ctx.llm.queue('{"domain": "personal", "confidence": 0.9, "reason": "private stuff"}')
+    out = await handle({"content": "my weekend plans"}, ctx)
+    data = json.loads(out[1].text)
+    assert data["domain"] == "unknown"  # sanitized because personal not in allowed_domains
+
+
+async def test_classify_rate_limited(seeded_vault, make_ctx) -> None:
+    from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+    from dataclasses import replace
+    base = make_ctx(seeded_vault, allowed_domains=("research",))
+    limiter = RateLimiter(RateLimitConfig(tokens_per_minute=500))  # below 1000 cost
+    ctx = replace(base, rate_limiter=limiter)  # frozen dataclass
+    out = await handle({"content": "x"}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "rate_limited"
+
+
+async def test_classify_input_schema() -> None:
+    from brain_mcp.tools.classify import INPUT_SCHEMA
+    assert INPUT_SCHEMA["required"] == ["content"]
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_classify — classify content into a domain via the Plan 02 classifier."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.ingest.classifier import classify
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_classify"
+DESCRIPTION = "Classify a chunk of content into one of the user's vault domains. Returns {domain, confidence, reason}."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "content": {"type": "string", "description": "Content to classify (first ~2KB is used)"},
+        "hint": {"type": "string", "description": "Optional hint about the source"},
+    },
+    "required": ["content"],
+}
+
+_CLASSIFY_TOKEN_COST = 1000
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    if not ctx.rate_limiter.check("tokens", cost=_CLASSIFY_TOKEN_COST):
+        return text_result(
+            "rate limited (tokens/min)",
+            data={"status": "rate_limited", "bucket": "tokens"},
+        )
+
+    content = str(arguments["content"])
+    hint = arguments.get("hint")
+
+    result = await classify(
+        content=content[:2048],
+        llm=ctx.llm,
+        model="claude-haiku-4-5",
+        hint=hint,
+    )
+
+    # Sanitize: if the classifier returned an out-of-scope domain, don't leak the classification.
+    if result.domain not in ctx.allowed_domains:
+        return text_result(
+            "(classification not in allowed scope)",
+            data={
+                "domain": "unknown",
+                "confidence": 0.0,
+                "reason": f"classifier returned {result.domain!r} which is not in allowed domains",
+            },
+        )
+
+    return text_result(
+        f"{result.domain} (confidence={result.confidence:.2f})",
+        data={
+            "domain": result.domain,
+            "confidence": result.confidence,
+            "reason": result.reason,
+        },
+    )
+```
+
+**WARNING:** verify `classify()` signature in `brain_core.ingest.classifier`. The real function may be named differently, take a `ClassifyInput` object, or return `ClassifyResult`. Adjust the handler to match.
+
+Register. Commit. Expected: 49 + 4 = **53 passed**.
+
+---
+
+### Task 13 — `brain_bulk_import`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/bulk_import.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_bulk_import.py`
+
+**Context:** wraps Plan 02's `brain_core.ingest.bulk.BulkImporter`. Takes `{folder: str (vault-relative or absolute), dry_run: bool = True}`. Default is dry-run per spec §7. Returns a summary of the plan (file count, classified domains, per-file status). If `dry_run=False`, this is equivalent to running `brain_ingest` for every file — which is heavy. Refuse `dry_run=False` if the folder contains >20 files without an explicit `max_files` arg to prevent accidental bulk-apply runs.
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_bulk_import_dry_run_returns_plan(seeded_vault, make_ctx, tmp_path) -> None:
+    source_folder = tmp_path / "inbox"
+    source_folder.mkdir()
+    (source_folder / "a.txt").write_text("first file", encoding="utf-8")
+    (source_folder / "b.txt").write_text("second file", encoding="utf-8")
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    ctx.llm.queue('{"domain": "research", "confidence": 0.9, "reason": "x"}')
+    ctx.llm.queue('{"domain": "research", "confidence": 0.9, "reason": "y"}')
+    out = await handle({"folder": str(source_folder), "dry_run": True}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "planned"
+    assert data["file_count"] == 2
+    # No vault writes happened.
+    assert not any((seeded_vault / "research" / "sources").rglob("*.md"))
+
+
+async def test_bulk_import_default_is_dry_run(seeded_vault, make_ctx, tmp_path) -> None:
+    source_folder = tmp_path / "inbox"
+    source_folder.mkdir()
+    (source_folder / "a.txt").write_text("x", encoding="utf-8")
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    ctx.llm.queue('{"domain": "research", "confidence": 0.9, "reason": "x"}')
+    out = await handle({"folder": str(source_folder)}, ctx)  # no dry_run → default
+    data = json.loads(out[1].text)
+    assert data["status"] == "planned"
+
+
+async def test_bulk_import_refuses_large_folder_without_max_files(seeded_vault, make_ctx, tmp_path) -> None:
+    source_folder = tmp_path / "inbox"
+    source_folder.mkdir()
+    for i in range(25):
+        (source_folder / f"{i}.txt").write_text("x", encoding="utf-8")
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle(
+        {"folder": str(source_folder), "dry_run": False},  # large + apply
+        ctx,
+    )
+    data = json.loads(out[1].text)
+    assert data["status"] == "refused"
+    assert "max_files" in data["reason"]
+
+
+async def test_bulk_import_missing_folder_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(FileNotFoundError):
+        await handle({"folder": "/tmp/nonexistent-folder-abc123"}, ctx)
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_bulk_import — plan (or apply) a bulk import from a folder."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.ingest.bulk import BulkImporter
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_bulk_import"
+DESCRIPTION = (
+    "Plan (or apply) a bulk import from a folder of source files. "
+    "Default is dry_run=True. Applying >20 files requires explicit max_files."
+)
+_LARGE_FOLDER_THRESHOLD = 20
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "folder": {"type": "string", "description": "Absolute path to the source folder"},
+        "dry_run": {"type": "boolean", "default": True},
+        "max_files": {"type": "integer", "minimum": 1},
+    },
+    "required": ["folder"],
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    folder = Path(str(arguments["folder"]))
+    if not folder.exists() or not folder.is_dir():
+        raise FileNotFoundError(f"folder not found: {folder}")
+
+    dry_run = bool(arguments.get("dry_run", True))
+    max_files = arguments.get("max_files")
+
+    files = [f for f in folder.rglob("*") if f.is_file()]
+
+    if not dry_run and len(files) > _LARGE_FOLDER_THRESHOLD and max_files is None:
+        return text_result(
+            f"refused: folder has {len(files)} files (>20); pass max_files to proceed",
+            data={
+                "status": "refused",
+                "reason": f"bulk apply to {len(files)} files requires explicit max_files cap",
+                "file_count": len(files),
+            },
+        )
+
+    importer = BulkImporter(llm=ctx.llm, classify_model="claude-haiku-4-5")
+    plan = await importer.plan(folder=folder, max_files=max_files)
+
+    if dry_run:
+        return text_result(
+            f"planned {len(plan.items)} file(s)",
+            data={
+                "status": "planned",
+                "file_count": len(plan.items),
+                "items": [
+                    {
+                        "path": str(item.source_path),
+                        "classified_domain": item.classified_domain,
+                        "confidence": item.confidence,
+                    }
+                    for item in plan.items
+                ],
+            },
+        )
+
+    # Apply path — run the pipeline per item. This is expensive; the threshold check above protects us.
+    from brain_core.ingest.pipeline import IngestPipeline
+    from brain_core.ingest.dispatcher import default_dispatcher
+    pipeline = IngestPipeline(
+        vault_root=ctx.vault_root,
+        llm=ctx.llm,
+        dispatcher=default_dispatcher(),
+        writer=ctx.writer,
+        cost_ledger=ctx.cost_ledger,
+        classify_model="claude-haiku-4-5",
+        summarize_model="claude-sonnet-4-6",
+        integrate_model="claude-sonnet-4-6",
+    )
+    applied: list[str] = []
+    failed: list[str] = []
+    for item in plan.items:
+        try:
+            result = await pipeline.run(source=str(item.source_path))
+            if result.status == "ok":
+                ctx.writer.apply(result.patchset, allowed_domains=ctx.allowed_domains)
+                applied.append(str(item.source_path))
+            else:
+                failed.append(str(item.source_path))
+        except Exception:  # noqa: BLE001
+            failed.append(str(item.source_path))
+
+    return text_result(
+        f"applied {len(applied)} file(s), {len(failed)} failed",
+        data={"status": "applied", "applied": applied, "failed": failed},
+    )
+```
+
+**WARNING:** `BulkImporter.plan(...)` signature must be verified. Per Plan 02 source, it returns `BulkPlan(items=[BulkItem(...)])`. `BulkItem` has fields `source_path`, `classified_domain`, `confidence`. Check before shipping.
+
+Register. Commit. Expected: 53 + 4 = **57 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 13 — brain_bulk_import tool (dry-run default)"
+```
+
+---
+
+**Checkpoint 3 — pause for main-loop review.**
+
+13 tasks landed. Ingest tool surface complete. Main loop review focus:
+- Does `IngestPipeline` construction match the real Plan 02 signature? (This was the predicted friction point.)
+- Is the `ChatMode.BRAINSTORM` placeholder for MCP staging OK, or does Plan 04 need a new enum value?
+- Does the rate limiter actually fire on LLM-call paths, or does it only check at the tool entry point?
+- Is `_LARGE_FOLDER_THRESHOLD = 20` the right number for bulk_import safety?
+
+---
 
 ### Group 5 — Write/patch tools (Tasks 14–18)
 
-*To be filled in.*
+**Checkpoint after Task 18:** main-loop reviews the whole patch lifecycle surface — stage → list → apply → reject → undo. This is the last group before maintenance tools; after it the tool surface is almost complete.
+
+**Common shape:** every write/patch tool already has a Plan 03 analog (`chat.tools.propose_note`, `chat.pending.PendingPatchStore`, `vault.writer.VaultWriter`). The MCP tool is a thin wrapper — grab the input args, scope-guard, delegate to the existing primitive, translate the result to `text_result`. If you find yourself writing >80 LoC of logic in a tool handler, stop — the work probably belongs in brain_core.
+
+---
+
+### Task 14 — `brain_propose_note`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/propose_note.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_propose_note.py`
+
+**Context:** same shape as Plan 03 Task 10's `ProposeNoteTool` — takes `{path, content, reason}`, scope-guards, constructs `PatchSet(new_files=[NewFile(path, content)])`, stages via `ctx.pending_store.put(...)`. Never writes to the vault. Zero `write_text` in this file (same self-review rule as Plan 03 Task 10). Rate-limiter consumes from `patches` bucket (cost=1).
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_stages_a_pending_patch(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle(
+        {
+            "path": "research/notes/new-idea.md",
+            "content": "# new idea\n\nbody",
+            "reason": "captured from MCP client",
+        },
+        ctx,
+    )
+    data = json.loads(out[1].text)
+    assert "patch_id" in data
+    # Vault unchanged.
+    assert not (seeded_vault / "research" / "notes" / "new-idea.md").exists()
+    # One pending patch.
+    assert len(ctx.pending_store.list()) == 1
+
+async def test_out_of_scope_path_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(ScopeError):
+        await handle(
+            {"path": "personal/notes/secret.md", "content": "x", "reason": "no"},
+            ctx,
+        )
+    assert ctx.pending_store.list() == []
+
+async def test_absolute_path_rejected(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    absolute = str(seeded_vault / "research" / "notes" / "x.md")
+    with pytest.raises(ValueError, match="vault-relative"):
+        await handle({"path": absolute, "content": "x", "reason": "no"}, ctx)
+
+async def test_rate_limit_patches_bucket(seeded_vault, make_ctx) -> None:
+    from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+    from dataclasses import replace
+    base = make_ctx(seeded_vault, allowed_domains=("research",))
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=1))
+    limiter.check("patches", cost=1)  # drain
+    ctx = replace(base, rate_limiter=limiter)
+    out = await handle(
+        {"path": "research/notes/x.md", "content": "x", "reason": "x"},
+        ctx,
+    )
+    data = json.loads(out[1].text)
+    assert data["status"] == "rate_limited"
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_propose_note — stage a new-note patch via MCP."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.chat.types import ChatMode
+from brain_core.vault.types import NewFile, PatchSet
+from brain_mcp.tools.base import ToolContext, scope_guard_path, text_result
+
+NAME = "brain_propose_note"
+DESCRIPTION = "Stage a new note for approval. Does NOT write to the vault — the user applies it via brain_apply_patch."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Vault-relative path like 'research/notes/foo.md'"},
+        "content": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["path", "content", "reason"],
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    if not ctx.rate_limiter.check("patches", cost=1):
+        return text_result(
+            "rate limited (patches/min)",
+            data={"status": "rate_limited", "bucket": "patches"},
+        )
+
+    raw_path = str(arguments["path"])
+    # scope_guard_path raises ScopeError or ValueError on bad input.
+    scope_guard_path(raw_path, ctx)
+    p = Path(raw_path)
+
+    patchset = PatchSet(
+        new_files=[NewFile(path=p, content=str(arguments["content"]))],
+        reason=str(arguments["reason"]),
+    )
+    envelope = ctx.pending_store.put(
+        patchset=patchset,
+        source_thread="mcp-propose",
+        mode=ChatMode.BRAINSTORM,  # MCP has no chat mode; BRAINSTORM is closest semantically
+        tool="brain_propose_note",
+        target_path=p,
+        reason=str(arguments["reason"]),
+    )
+    return text_result(
+        f"staged new note at {p.as_posix()} (patch {envelope.patch_id})",
+        data={
+            "status": "pending",
+            "patch_id": envelope.patch_id,
+            "target_path": p.as_posix(),
+        },
+    )
+```
+
+Register. Commit. Expected: 57 + 4 = **61 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 14 — brain_propose_note tool (staged only)"
+```
+
+---
+
+### Task 15 — `brain_list_pending_patches`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/list_pending_patches.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_list_pending_patches.py`
+
+**Context:** wraps `ctx.pending_store.list()`. Returns a JSON list of envelopes: `[{patch_id, created_at, tool, target_path, reason, mode}]`. Optional `limit` arg (default 20, max 100). **Does NOT include the patchset body** — that would leak content. Use `brain_read_note` or a hypothetical `brain_inspect_patch` (out of scope for Plan 04) to see the body.
+
+### Step 1 — Failing test (3 tests)
+
+```python
+async def test_lists_pending_patches(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    # Stage 2 patches via the store directly.
+    from brain_core.chat.types import ChatMode
+    from brain_core.vault.types import NewFile, PatchSet
+    for i in range(2):
+        ctx.pending_store.put(
+            patchset=PatchSet(new_files=[NewFile(path=Path(f"research/notes/x{i}.md"), content="x")], reason=f"r{i}"),
+            source_thread="test",
+            mode=ChatMode.BRAINSTORM,
+            tool="brain_propose_note",
+            target_path=Path(f"research/notes/x{i}.md"),
+            reason=f"r{i}",
+        )
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["count"] == 2
+    assert len(data["patches"]) == 2
+    # Must NOT include the full patchset body.
+    assert "new_files" not in data["patches"][0]
+
+
+async def test_empty_returns_empty(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["count"] == 0
+    assert data["patches"] == []
+
+
+async def test_limit_capped(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    for i in range(5):
+        ctx.pending_store.put(
+            patchset=PatchSet(new_files=[NewFile(path=Path(f"research/notes/x{i}.md"), content="x")], reason="r"),
+            source_thread="t",
+            mode=ChatMode.BRAINSTORM,
+            tool="brain_propose_note",
+            target_path=Path(f"research/notes/x{i}.md"),
+            reason="r",
+        )
+    out = await handle({"limit": 3}, ctx)
+    data = json.loads(out[1].text)
+    assert len(data["patches"]) == 3
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_list_pending_patches — list staged patches without exposing bodies."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_list_pending_patches"
+DESCRIPTION = "List staged patches (pending human approval). Returns envelope metadata only — patchset bodies are NOT included."
+_DEFAULT_LIMIT = 20
+_MAX_LIMIT = 100
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "limit": {"type": "integer", "minimum": 1, "maximum": _MAX_LIMIT},
+    },
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    limit = min(int(arguments.get("limit", _DEFAULT_LIMIT)), _MAX_LIMIT)
+    envelopes = ctx.pending_store.list()[:limit]
+    patches = [
+        {
+            "patch_id": env.patch_id,
+            "created_at": env.created_at.isoformat(),
+            "tool": env.tool,
+            "target_path": str(env.target_path),
+            "reason": env.reason[:200],  # truncate long reasons
+            "mode": env.mode.value,
+        }
+        for env in envelopes
+    ]
+    lines = [f"- {p['patch_id']} {p['tool']} → {p['target_path']}" for p in patches] or ["(no pending patches)"]
+    return text_result(
+        "\n".join(lines),
+        data={"count": len(patches), "patches": patches},
+    )
+```
+
+Register. Commit. Expected: 61 + 3 = **64 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 15 — brain_list_pending_patches tool"
+```
+
+---
+
+### Task 16 — `brain_apply_patch`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/apply_patch.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_apply_patch.py`
+
+**Context:** takes `{patch_id: str}`. Looks up the envelope via `ctx.pending_store.get(patch_id)`. Derives `allowed_domains` from the envelope's `target_path.parts[0]` — which MUST be in `ctx.allowed_domains`. Calls `ctx.writer.apply(envelope.patchset, allowed_domains=(domain,))`. On success, calls `ctx.pending_store.mark_applied(patch_id)` and returns `{status, undo_id, applied_files}`. On `PendingPatchStore.get` returning None → `KeyError`. On scope violation → `ScopeError`.
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_apply_patch_writes_vault(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    # Stage a patch.
+    patchset = PatchSet(new_files=[NewFile(path=Path("research/notes/applied.md"), content="# hi")], reason="x")
+    env = ctx.pending_store.put(
+        patchset=patchset,
+        source_thread="t",
+        mode=ChatMode.BRAINSTORM,
+        tool="brain_propose_note",
+        target_path=Path("research/notes/applied.md"),
+        reason="x",
+    )
+    out = await handle({"patch_id": env.patch_id}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "applied"
+    assert "undo_id" in data
+    # File now exists.
+    assert (seeded_vault / "research" / "notes" / "applied.md").exists()
+    # Patch moved out of pending.
+    assert ctx.pending_store.get(env.patch_id) is None
+
+async def test_apply_unknown_patch_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(KeyError):
+        await handle({"patch_id": "nonexistent"}, ctx)
+
+async def test_apply_cross_domain_refused(seeded_vault, make_ctx) -> None:
+    """A patch targeting personal/ from a research-scoped session must refuse."""
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    # Stage a patch targeting personal/ via direct store write (bypasses scope_guard)
+    patchset = PatchSet(new_files=[NewFile(path=Path("personal/notes/sneaky.md"), content="x")], reason="x")
+    env = ctx.pending_store.put(
+        patchset=patchset,
+        source_thread="t",
+        mode=ChatMode.BRAINSTORM,
+        tool="brain_propose_note",
+        target_path=Path("personal/notes/sneaky.md"),
+        reason="x",
+    )
+    with pytest.raises(ScopeError):
+        await handle({"patch_id": env.patch_id}, ctx)
+
+async def test_apply_rate_limited(seeded_vault, make_ctx) -> None:
+    from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+    from dataclasses import replace
+    base = make_ctx(seeded_vault, allowed_domains=("research",))
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=1))
+    limiter.check("patches", cost=1)
+    ctx = replace(base, rate_limiter=limiter)
+    # Stage a patch using the original ctx's pending_store (shared with tight ctx).
+    patchset = PatchSet(new_files=[NewFile(path=Path("research/notes/x.md"), content="x")], reason="x")
+    env = base.pending_store.put(
+        patchset=patchset, source_thread="t", mode=ChatMode.BRAINSTORM,
+        tool="brain_propose_note", target_path=Path("research/notes/x.md"), reason="x",
+    )
+    out = await handle({"patch_id": env.patch_id}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "rate_limited"
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_apply_patch — apply a staged patch to the vault via VaultWriter."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.vault.paths import ScopeError
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_apply_patch"
+DESCRIPTION = "Apply a staged patch to the vault. Routes through VaultWriter; moves envelope to applied/."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {"patch_id": {"type": "string"}},
+    "required": ["patch_id"],
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    if not ctx.rate_limiter.check("patches", cost=1):
+        return text_result(
+            "rate limited (patches/min)",
+            data={"status": "rate_limited", "bucket": "patches"},
+        )
+
+    patch_id = str(arguments["patch_id"])
+    envelope = ctx.pending_store.get(patch_id)
+    if envelope is None:
+        raise KeyError(f"patch {patch_id!r} not found")
+
+    # Derive domain from the target path; must be in allowed_domains.
+    target_parts = envelope.target_path.parts
+    if not target_parts:
+        raise ValueError(f"cannot derive domain from target_path {envelope.target_path}")
+    domain = target_parts[0]
+    if domain not in ctx.allowed_domains:
+        raise ScopeError(f"patch targets domain {domain!r} not in allowed {ctx.allowed_domains}")
+
+    receipt = ctx.writer.apply(envelope.patchset, allowed_domains=(domain,))
+    ctx.pending_store.mark_applied(patch_id)
+    return text_result(
+        f"applied patch {patch_id} → {len(receipt.applied_files)} file(s)",
+        data={
+            "status": "applied",
+            "patch_id": patch_id,
+            "undo_id": receipt.undo_id,
+            "applied_files": [p.as_posix() for p in receipt.applied_files],
+        },
+    )
+```
+
+Register. Commit. Expected: 64 + 4 = **68 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 16 — brain_apply_patch tool"
+```
+
+---
+
+### Task 17 — `brain_reject_patch`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/reject_patch.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_reject_patch.py`
+
+**Context:** takes `{patch_id, reason}`. Calls `ctx.pending_store.reject(patch_id, reason)` which moves to `pending/rejected/`. Zero vault writes. Unknown patch_id → `KeyError` from the store.
+
+### Step 1 — Failing test (3 tests)
+
+```python
+async def test_reject_moves_patch(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    patchset = PatchSet(new_files=[NewFile(path=Path("research/notes/x.md"), content="x")], reason="x")
+    env = ctx.pending_store.put(
+        patchset=patchset, source_thread="t", mode=ChatMode.BRAINSTORM,
+        tool="brain_propose_note", target_path=Path("research/notes/x.md"), reason="x",
+    )
+    out = await handle({"patch_id": env.patch_id, "reason": "not useful"}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "rejected"
+    # Pending/ no longer has it.
+    assert ctx.pending_store.get(env.patch_id) is None
+    # Rejected/ does.
+    assert (seeded_vault / ".brain" / "pending" / "rejected" / f"{env.patch_id}.json").exists()
+
+async def test_reject_unknown_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(KeyError):
+        await handle({"patch_id": "nope", "reason": "x"}, ctx)
+
+async def test_reject_requires_reason() -> None:
+    from brain_mcp.tools.reject_patch import INPUT_SCHEMA
+    assert "reason" in INPUT_SCHEMA["required"]
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_reject_patch — reject a staged patch."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_reject_patch"
+DESCRIPTION = "Reject a staged patch. Moves the envelope to pending/rejected/ with the given reason."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "patch_id": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["patch_id", "reason"],
+}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    patch_id = str(arguments["patch_id"])
+    reason = str(arguments["reason"])
+    ctx.pending_store.reject(patch_id, reason=reason)  # raises KeyError on unknown
+    return text_result(
+        f"rejected patch {patch_id}",
+        data={"status": "rejected", "patch_id": patch_id, "reason": reason},
+    )
+```
+
+Register. Commit. Expected: 68 + 3 = **71 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 17 — brain_reject_patch tool"
+```
+
+---
+
+### Task 18 — `brain_undo_last`
+
+**Files:**
+- Create: `packages/brain_mcp/src/brain_mcp/tools/undo_last.py`
+- Modify: `server.py`
+- Create: `packages/brain_mcp/tests/test_tool_undo_last.py`
+
+**Context:** wraps `ctx.undo_log.revert(undo_id)`. But MCP gets the undo_id from the caller, not "last" — rename the tool's INPUT_SCHEMA to take an explicit `undo_id` argument. The "last" semantics land if the caller omits `undo_id`: we query `state.sqlite` or the undo log directory for the most recent undo record. Simplest implementation: scan `<vault>/.brain/undo/` directory for files, sort by filename (undo_id is a timestamp prefix — Plan 01 guarantees sortability), pick the last one.
+
+### Step 1 — Failing test (4 tests)
+
+```python
+async def test_undo_explicit_id(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    # Apply a patch to get an undo_id.
+    patchset = PatchSet(new_files=[NewFile(path=Path("research/notes/new.md"), content="# hi")], reason="x")
+    receipt = ctx.writer.apply(patchset, allowed_domains=("research",))
+    assert (seeded_vault / "research" / "notes" / "new.md").exists()
+    out = await handle({"undo_id": receipt.undo_id}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "reverted"
+    assert not (seeded_vault / "research" / "notes" / "new.md").exists()
+
+async def test_undo_last_without_id(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    patchset = PatchSet(new_files=[NewFile(path=Path("research/notes/new.md"), content="# hi")], reason="x")
+    ctx.writer.apply(patchset, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "reverted"
+
+async def test_undo_no_history(tmp_path, make_ctx) -> None:
+    vault = tmp_path / "empty"
+    (vault / "research").mkdir(parents=True)
+    ctx = make_ctx(vault, allowed_domains=("research",))
+    out = await handle({}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "nothing_to_undo"
+
+async def test_undo_unknown_id_raises(seeded_vault, make_ctx) -> None:
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(Exception):  # UndoLog.revert raises on unknown
+        await handle({"undo_id": "20990101T000000000000"}, ctx)
+```
+
+### Step 2 — Implement
+
+```python
+"""brain_undo_last — revert the most recent vault write via UndoLog."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import mcp.types as types
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_undo_last"
+DESCRIPTION = "Revert the most recent vault write (or a specified undo_id) via UndoLog."
+INPUT_SCHEMA: dict[str, Any] = {  # noqa: RUF012
+    "type": "object",
+    "properties": {
+        "undo_id": {"type": "string", "description": "Explicit undo_id; omit to undo the most recent."},
+    },
+}
+
+
+def _find_latest_undo_id(vault_root: Path) -> str | None:
+    undo_dir = vault_root / ".brain" / "undo"
+    if not undo_dir.exists():
+        return None
+    files = sorted(undo_dir.glob("*.txt"))
+    if not files:
+        return None
+    return files[-1].stem  # filename without .txt extension
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    undo_id = arguments.get("undo_id")
+    if not undo_id:
+        undo_id = _find_latest_undo_id(ctx.vault_root)
+        if undo_id is None:
+            return text_result(
+                "nothing to undo — no undo history",
+                data={"status": "nothing_to_undo"},
+            )
+
+    ctx.undo_log.revert(str(undo_id))  # raises on unknown
+    return text_result(
+        f"reverted undo_id={undo_id}",
+        data={"status": "reverted", "undo_id": undo_id},
+    )
+```
+
+**WARNING:** `UndoLog.revert(undo_id)` raises what? Check the actual signature in `brain_core/vault/undo.py`. If it raises `FileNotFoundError` or a custom error on unknown id, the test's `pytest.raises(Exception)` is loose but correct. Tighten to the actual exception type in review.
+
+Register. Commit. Expected: 71 + 4 = **75 passed**.
+
+```bash
+git commit -m "feat(mcp): plan 04 task 18 — brain_undo_last tool"
+```
+
+---
+
+**Checkpoint 4 — pause for main-loop review.**
+
+18 tasks landed. Full patch lifecycle live via MCP: stage → list → apply → reject → undo. Main-loop review:
+- Every patch write routes through `VaultWriter.apply` or `PendingPatchStore` — no raw vault writes.
+- `brain_undo_last`'s "most recent" heuristic uses filename sort — is the undo_id format sortable by default? (Plan 01's format is `YYYYMMDDTHHMMSS` microseconds, so yes.)
+- Rate limiter fires on `brain_propose_note`, `brain_apply_patch`, `brain_ingest` (consume `patches` bucket). Does it fire on `brain_undo_last`? Currently NO — reverting is a user-safety action and shouldn't be rate-limited. Confirm that's the right call.
+
+---
 
 ### Group 6 — Maintenance tools (Task 19)
 
