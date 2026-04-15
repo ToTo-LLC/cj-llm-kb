@@ -5,6 +5,8 @@ from __future__ import annotations
 import typer
 
 from brain_cli import __version__
+from brain_cli.commands.chat import chat
+from brain_cli.commands.patches import patches_app
 
 app = typer.Typer(
     name="brain",
@@ -12,6 +14,9 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+app.command()(chat)
+app.add_typer(patches_app, name="patches")
 
 
 def _version_callback(value: bool) -> None:
