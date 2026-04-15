@@ -126,3 +126,39 @@ _none_
 - **2026-04-14 — VCR cassette infrastructure landed, recording deferred.** Task 20 landed `pytest-vcr` marker, `vcr_config` fixture with header redaction (`authorization`, `x-api-key`, `anthropic-api-key`), empty cassettes directory, and docs at `docs/testing/prompts-vcr.md` with the `skipif` test template. Tasks 21 (record) and 22 (contract assertions) deferred indefinitely — they need an `ANTHROPIC_API_KEY` and are not a merge gate per the plan. When a key is available, a future implementer can copy the template from the docs and land both in one sitting.
 
 - **Plan 02 → Plan 03 handoff items:** (1) `ClassifyOutput.domain` is a hardcoded `Literal["research","work","personal"]` — revisit when configurable domains are needed. (2) `failures.record_failure` silently overwrites on slug collision — add timestamp suffix for retry history. (3) `timeout=30.0` in URLHandler is hardcoded — plumb via config once Task 17-equivalent orchestrator design for Plan 03 (chat) decides how. (4) Related-notes retrieval for `_integrate` is stubbed — lands in a later plan. (5) Tasks 21–22 VCR cassettes deferred.
+
+### Plan 03 — Chat
+
+- **2026-04-15 — Plan 03 complete.** 366 passed + 5 skipped, 91% total brain_core coverage, mypy strict clean in both packages, ruff + format clean. Demo gate green: `uv run python scripts/demo-plan-03.py` → `PLAN 03 DEMO OK` (7 gates: Ask mode, Brainstorm propose_note, Draft edit_open_doc, thread persistence, auto-title rename, idempotency, scope guard). Tagged `plan-03-chat`. 42 commits since `plan-02-ingestion`.
+
+- **Coverage note.** `brain_core.chat.*` averages 96% (autotitle 94, context 100, modes 100, pending 99, persistence 99, retrieval 93, session 88, tools 93–100, types 100). `brain_core.state.db` 97%. `brain_cli.commands.chat` 58%, `brain_cli.commands.patches` 55% — below the 85% target because the interactive stdin paths are only exercised by the demo, not the unit tests. Rendering (`stream.py`) is 80%. Total brain_core 91% (down from Plan 02's 94% — the delta is almost entirely the Anthropic provider at 35%, unchanged from Plan 01, plus the chat session loop's streaming branches). Gap documented; no feature-freeze-breaking fixes in Task 25.
+
+- **Subagent-driven development retrospective.** 25 tasks, 6 groups, 7 checkpoints. Main loop dispatched fresh `brain-core-engineer` subagents per task with spec-compliance review + code-quality review in parallel after each. Two-stage review caught consistency issues the spec reviewer missed: Task 10 `is` vs `==` spec bug, Task 14 brace escaping in wrong prompt section, Task 17 `set_open_doc` SYSTEM turn inconsistency, Task 18 `len == 4` fragility, Task 20 missing 📝 emoji. Most tasks landed on first try. Tasks 2, 3, 14, 17, 18, 19, 20 needed follow-up fix commits (all caught by reviewers, not by post-hoc debugging). Checkpoint cadence (after Tasks 3, 11, 14, 15, 18, 20, 25) let main loop pause for user review without stalling per-task progress.
+
+- **Handoff items to Plan 04 (MCP server):**
+  - `state.sqlite` ready to extend — add a new migration file in `packages/brain_core/src/brain_core/state/migrations/0002_*.sql` for any MCP-specific tables (tool_call audit log, rate-limit tracking, etc.) without touching `0001_chat_and_bm25.sql`.
+  - `PendingPatchStore` is reusable by MCP's `brain_propose_note` tool — same file-per-patch queue format.
+  - `BM25VaultIndex` retrieval is reusable by MCP's `brain_search` tool.
+  - `LLMProvider.complete(request)` with `request.tools` works end-to-end; MCP's stdio tool surface can wrap it.
+  - Chat thread format at `<domain>/chats/<id>.md` is the canonical persisted thread — MCP can read these for cross-session history if needed.
+  - `ChatSession` is NOT reusable by MCP (Claude Desktop IS the chat in MCP world per spec §6). MCP exposes READ tools only.
+
+- **2026-04-15 — uv `[project.scripts]` + `package = false` gotcha.** A workspace root with `[tool.uv] package = false` silently ignores `[project.scripts]`. Entry points must live in the packaged workspace member's own `pyproject.toml`. Discovered in Task 19. Relevant for Plan 04+ any time a new workspace member (brain_mcp, brain_api, brain_web) needs a console script.
+
+- **2026-04-15 — PEP 561 `py.typed` marker needed from day one.** `brain_core` was missing `src/brain_core/py.typed`, causing 24 spurious mypy import-untyped errors when running mypy from `packages/brain_cli/`. Fixed in Task 20. Every new workspace member needs a `py.typed` marker file.
+
+- **2026-04-15 — `editable = false` workaround bites source edits.** The Plan 01 workaround for uv's hidden-`.pth` bug means every source edit requires `uv sync --reinstall-package <pkg>` to propagate. Hit this during most of Plan 03's follow-up fix commits. Operational friction, no correctness concern. Still waiting on upstream uv fix.
+
+- **2026-04-15 — Self-review mypy-from-wrong-cwd trap.** Implementers running `uv run mypy src tests` from the repo root (vs `packages/brain_core/`) hit "no mypy config, no issues found in 0 files" or phantom "pre-existing errors in unrelated files" and report false status. Task 8, 14, 16, 20 all tripped on this. **Rule for future plan execution:** self-review checklist must say `cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_core && uv run mypy src tests` explicitly.
+
+- **2026-04-15 — Plan-author API verification.** Plan 03 text referenced imagined APIs (`PromptLoader` class, `FakeLLMProvider.queue_response`) instead of the real Plan 02 shapes (`load_prompt` function, `.queue`). Implementers correctly adapted. **Rule for future plan authoring:** open the real source files and verify signatures before writing task prompts.
+
+- **2026-04-15 — Plan-author spec bug: `is` vs `==` on round-tripped pydantic models.** Plan 03 Task 10 spec asserted `result.proposed_patch is env_obj` but `store.list()` re-reads from disk and reconstructs `PendingEnvelope` — identity equality is structurally impossible. Implementer flagged and relaxed to `==`. **Rule:** for any assertion involving an object that round-trips through serialization, use `==` not `is`.
+
+- **2026-04-15 — Plan-author arithmetic traps: `len(turns) == 4` bypassed by slash commands.** Plan 03 Task 18 spec used `len(_turns) == 4` to detect "end of turn 2", but any SYSTEM turn appended by `switch_mode`/`switch_scope`/`set_open_doc` between turns 1 and 2 bypasses it (count becomes 5 at the moment the check fires, never matches again). Fixed to count USER turns. **Rule:** state-detection checks should count INVARIANT data (USER turns monotonically increase by 1 per real turn), not ALL data.
+
+- **2026-04-15 — Two scope-sensitive deviations were approved.** `VaultWriter.rename_file` (Task 14a) and the `LLMProvider` tool_use extension (Task 15) both touched Plan 01/02 code. Both were additive, both preserved existing behavior, both passed regression with zero Plan 02 test changes. **Rule:** touching existing code is OK when the change is strictly additive, has a clear hard regression gate, and is documented in the plan as an explicit exception.
+
+- **2026-04-15 — Cross-platform surprises from Task 22.** One finding: `_write_rename_undo_record` was missing `newline="\n"`, would have produced CRLF on Windows. Fixed with a regression test that monkeypatches `Path.write_text` to assert the kwarg. Zero other findings. Plan 03 code held up well to the cross-platform audit because every writer routes through `_atomic_write_text` (which already enforces LF) or `os.replace` (atomic on both OS).
+
+- **2026-04-15 — Task 24 hardening sweep.** 22 deferred items grouped into 4 batches (A behavior, B tests, C comments, D defer). 3 commits landed (`3cbb8a6`, `9f1db05`, `197dec9`), +9 new regression tests. Batch D items (5 NICE-TO-HAVEs) deferred to Plan 07 or later without commit — documented in lessons.

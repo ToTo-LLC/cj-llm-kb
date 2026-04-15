@@ -4139,12 +4139,67 @@ git commit -m "docs: close plan 03 (chat) — tag plan-03-chat"
 
 ## Review
 
-*To be filled in by the implementer at Task 25. Template:*
+**Plan 03 — Chat: complete.**
 
-- **Task count:** 25 (planned) / ? (actual)
-- **Commits since `plan-02-ingestion`:** ?
-- **Test counts:** brain_core (?) + brain_cli (?) = ? total
-- **Coverage:** brain_core ?% · brain_cli ?%
-- **Demo receipt:** (paste output of `scripts/demo-plan-03.py`)
-- **Lessons captured:** (link to new entries in `tasks/lessons.md`)
-- **Handoff to Plan 04:** (state.sqlite / pending queue / retrieval cache notes)
+- **Tag:** `plan-03-chat`
+- **Completed:** 2026-04-15
+- **Task count:** 25 (planned) / 25 (actual, none added or dropped)
+- **Commits since `plan-02-ingestion`:** 42
+- **Test counts:** brain_core (343 passed, 5 skipped) + brain_cli (23 passed) = 366 total passed, 5 skipped
+- **Coverage:** brain_core 91% total · `brain_core.chat.*` ~96% avg · `brain_core.state.db` 97% · `brain_cli.commands.chat` 58% (interactive stdin paths exercised by demo, not unit tests)
+- **Gates:** mypy strict clean (brain_core 142 files, brain_cli 14 files), ruff + format clean, ghost-file check 0
+- **Demo receipt:**
+
+```
+[gate 1] Ask mode with tool call
+  OK  TOOL_CALL event emitted
+  OK  search_vault tool called
+  OK  DELTA events emitted for answer text
+  OK  Ask mode does NOT emit PATCH_PROPOSED
+[gate 2] Brainstorm mode with propose_note
+  OK  PATCH_PROPOSED event emitted
+  OK  vault file at proposed path does NOT exist
+  OK  pending queue has a propose_note entry
+[gate 3] Draft mode with edit_open_doc
+  OK  PATCH_PROPOSED event emitted
+  OK  open doc still contains ORIGINAL text (no vault write)
+  OK  open doc does NOT contain NEW text
+[gate 4] Thread persistence
+  OK  chats/ has at least 3 thread files (found 3)
+  OK  2026-04-15-draft-ask001.md has frontmatter
+  OK  2026-04-15-draft-ask001.md frontmatter has mode
+  OK  2026-04-15-draft-ask001.md frontmatter has scope
+  OK  2026-04-15-draft-ask001.md has User section
+  OK  2026-04-15-draft-ask001.md has Assistant section
+  OK  2026-04-15-draft-bs0001.md has frontmatter
+  OK  2026-04-15-draft-bs0001.md frontmatter has mode
+  OK  2026-04-15-draft-bs0001.md frontmatter has scope
+  OK  2026-04-15-draft-bs0001.md has User section
+  OK  2026-04-15-draft-bs0001.md has Assistant section
+  OK  2026-04-15-draft-df0001.md has frontmatter
+  OK  2026-04-15-draft-df0001.md frontmatter has mode
+  OK  2026-04-15-draft-df0001.md frontmatter has scope
+  OK  2026-04-15-draft-df0001.md has User section
+  OK  2026-04-15-draft-df0001.md has Assistant section
+[gate 5] Auto-title after turn 2
+  OK  draft thread file exists after turn 1
+  OK  thread_id changed after turn 2
+  OK  new thread_id contains auto-title slug
+  OK  new thread_id does NOT contain 'draft'
+  OK  old thread file was renamed away
+  OK  new thread file exists at renamed path
+  OK  state.sqlite chat_threads has new thread_id row
+  OK  state.sqlite no longer has draft thread row
+[gate 6] Idempotency
+  OK  re-opening StateDB yields identical chat_threads rows
+  OK  no thread files added or removed on re-open
+[gate 7] Scope guard rejects personal/ in research session
+  OK  one TOOL_RESULT event emitted
+  OK  TOOL_RESULT flagged as error
+  OK  error message mentions personal/scope
+
+PLAN 03 DEMO OK
+```
+
+- **Lessons captured:** see `tasks/lessons.md` → `### Plan 03 — Chat`.
+- **Handoff to Plan 04:** state.sqlite extensible via new migration files (`0002_*.sql`) without touching `0001_chat_and_bm25.sql`; `PendingPatchStore` reusable for MCP `brain_propose_note`; `BM25VaultIndex` retrieval reusable for MCP `brain_search`; `LLMProvider.complete(request.tools=...)` ready for MCP wire format; persisted chat threads at `<domain>/chats/<id>.md` are the canonical cross-session history surface; `ChatSession` itself is NOT reused by MCP (Claude Desktop IS the chat per spec §6).

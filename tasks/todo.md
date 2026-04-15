@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | 01 | [Foundation](./plans/01-foundation.md) | ✅ Complete (2026-04-13, tag `plan-01-foundation`) | Tested `brain_core` library (config, vault, llm, cost) green on Mac + Windows CI | brain-core-engineer, brain-test-engineer |
 | 02 | [Ingestion](./plans/02-ingestion.md) | ✅ Complete (2026-04-14, tag `plan-02-ingestion`) | 9-stage ingest pipeline with 5-source demo passing (`PLAN 02 DEMO OK`); Tasks 21–22 VCR cassettes deferred until API key available | brain-core-engineer, brain-prompt-engineer |
-| 03 | Chat | ⏸ Not yet written | `brain chat` Ask / Brainstorm / Draft working in terminal | brain-core-engineer, brain-prompt-engineer |
+| 03 | [Chat](./plans/03-chat.md) | ✅ Complete (2026-04-15, tag `plan-03-chat`) | `brain chat` Ask/Brainstorm/Draft modes working in terminal with 366 tests across brain_core + brain_cli; 7-gate demo passing (`PLAN 03 DEMO OK`); VCR chat cassettes deferred per D7a | brain-core-engineer, brain-prompt-engineer |
 | 04 | MCP + Claude Desktop | ⏸ Not yet written | Claude Desktop reads / searches / ingests over MCP | brain-mcp-engineer |
 | 05 | API | ⏸ Not yet written | FastAPI + WebSocket backend, curl-driven end-to-end | brain-core-engineer |
 | 06 | UI Design | ⏸ Not yet written | Approved design artifacts at `docs/design/` (hard gate) | brain-ui-designer |

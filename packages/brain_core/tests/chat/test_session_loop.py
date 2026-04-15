@@ -300,7 +300,7 @@ async def test_turn_handles_combined_delta_and_usage_chunk(env: EnvTuple) -> Non
     cfg = ChatSessionConfig(mode=ChatMode.ASK, domains=("research",))
     session = ChatSession(
         config=cfg,
-        llm=_CombinedChunkProvider(),  # type: ignore[arg-type]
+        llm=_CombinedChunkProvider(),
         compiler=compiler,
         registry=registry,
         retrieval=retrieval,
