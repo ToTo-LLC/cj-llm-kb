@@ -79,12 +79,47 @@ redacts these headers before writing cassettes:
 Before committing new cassettes, grep them for any `sk-` or token-like
 strings that may have slipped through.
 
+## Chat prompts (Plan 03 Task 21)
+
+Four chat-related prompts have rendering tests and deferred cassette
+skeletons:
+
+- `test_chat_ask.py` — Ask mode (plain-text prompt loaded via
+  `brain_core.chat.modes.MODES`)
+- `test_chat_brainstorm.py` — Brainstorm mode (plain-text)
+- `test_chat_draft.py` — Draft mode (plain-text)
+- `test_chat_autotitle.py` — structured-output prompt with YAML
+  frontmatter, loaded via `load_prompt("chat_autotitle")`
+
+The rendering tests run on every CI — they assert structural properties
+of the prompt text (length, required keywords, template placeholders)
+without ever hitting the network. The contract test skeletons are
+decorated with `@pytest.mark.skipif(True, ...)` and raise
+`NotImplementedError` in the body, so they always skip until a future
+session records real cassettes.
+
+### Recording the chat cassettes
+
+When an Anthropic API key is available:
+
+```
+export ANTHROPIC_API_KEY=sk-...
+RUN_LIVE_LLM_TESTS=1 uv run pytest packages/brain_core/tests/prompts -v -k chat
+```
+
+Then:
+1. Remove the `skipif(True, ...)` from each contract test.
+2. Fill in the body with a real `LLMRequest` + `AnthropicProvider` call
+   plus assertions on the response shape.
+3. Commit the new cassettes under `cassettes/`.
+
 ## Current status
 
 **Task 20 (scaffolding):** complete. Marker registered, VCR config in place,
 cassettes dir present but empty.
 
-**Task 21 (recording):** deferred. Will land whenever an Anthropic API key is
-available.
+**Task 21 (chat rendering tests + cassette skeletons):** complete. 12
+rendering tests green, 4 contract test skeletons skipped.
 
-**Task 22 (contract assertions):** deferred. Depends on Task 21.
+**Recording + contract assertions:** deferred. Will land whenever an
+Anthropic API key is available.
