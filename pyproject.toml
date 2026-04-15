@@ -9,9 +9,6 @@ dependencies = [
     "brain_cli",
 ]
 
-[project.scripts]
-brain = "brain_cli.app:app"
-
 [tool.uv]
 package = false
 
