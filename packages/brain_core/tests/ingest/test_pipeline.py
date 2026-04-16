@@ -232,3 +232,116 @@ async def test_ingest_records_failure_on_exception(ephemeral_vault: Path, tmp_pa
     # Failure record written
     failed_files = list((ephemeral_vault / "raw" / "inbox" / "failed").glob("*.error.json"))
     assert len(failed_files) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests 6-8 — `apply` kwarg (staged-mode extension for Plan 04 brain_ingest)
+# ---------------------------------------------------------------------------
+
+
+def _queue_happy_path_responses(fake: FakeLLMProvider) -> None:
+    """Queue classify + summarize + integrate responses for a successful run."""
+    fake.queue('{"source_type":"text","domain":"research","confidence":0.95}')
+    fake.queue(
+        SummarizeOutput(
+            title="hello",
+            summary="A greeting.",
+            key_points=["says hi"],
+            entities=[],
+            concepts=[],
+            open_questions=[],
+        ).model_dump_json()
+    )
+    fake.queue(
+        PatchSet(
+            index_entries=[
+                IndexEntryPatch(section="Sources", line="- [[hello]] — greeting", domain="research")
+            ],
+            log_entry="## [2026-04-16 12:00] ingest | source | [[hello]]",
+            reason="test",
+        ).model_dump_json()
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_default_still_applies(ephemeral_vault: Path, fixtures_dir: Path) -> None:
+    """Regression: the default call (no apply kwarg) still writes to the vault.
+
+    Guards against a breakage where `apply=True` default ever flips or the
+    pre-extension behavior changes.
+    """
+    fake = FakeLLMProvider()
+    _queue_happy_path_responses(fake)
+
+    p = IngestPipeline(
+        vault_root=ephemeral_vault,
+        writer=VaultWriter(vault_root=ephemeral_vault),
+        llm=fake,
+        summarize_model="claude-sonnet-4-6",
+        integrate_model="claude-sonnet-4-6",
+        classify_model="claude-haiku-4-5-20251001",
+    )
+    res = await p.ingest(fixtures_dir / "hello.txt", allowed_domains=("research",))
+    assert res.status is IngestStatus.OK
+    assert res.note_path is not None
+    assert res.note_path.exists(), "default apply=True must still write vault file"
+    assert res.patchset is None, "default run returns no patchset"
+
+
+@pytest.mark.asyncio
+async def test_ingest_apply_false_returns_patchset(
+    ephemeral_vault: Path, fixtures_dir: Path
+) -> None:
+    """apply=False: pipeline returns PatchSet, vault is untouched."""
+    fake = FakeLLMProvider()
+    _queue_happy_path_responses(fake)
+
+    p = IngestPipeline(
+        vault_root=ephemeral_vault,
+        writer=VaultWriter(vault_root=ephemeral_vault),
+        llm=fake,
+        summarize_model="claude-sonnet-4-6",
+        integrate_model="claude-sonnet-4-6",
+        classify_model="claude-haiku-4-5-20251001",
+    )
+    res = await p.ingest(
+        fixtures_dir / "hello.txt",
+        allowed_domains=("research",),
+        apply=False,
+    )
+    assert res.status is IngestStatus.OK
+    assert res.note_path is not None
+    assert not res.note_path.exists(), "apply=False must NOT write vault file"
+    assert res.patchset is not None, "apply=False must populate patchset"
+    # Stage 8 prepends the source note as the first new_file.
+    assert res.patchset.new_files, "patchset should contain at least the source note"
+    assert res.patchset.new_files[0].path == res.note_path
+
+
+@pytest.mark.asyncio
+async def test_ingest_apply_false_preserves_failure_handling(
+    ephemeral_vault: Path, tmp_path: Path
+) -> None:
+    """Pipeline failures still return FAILED (no patchset) with apply=False.
+
+    Matches the `apply=True` failure contract: the try/except wraps stages 2-9,
+    so raising mid-stage yields FAILED regardless of the flag.
+    """
+    fake = FakeLLMProvider()
+    # Queue classify but nothing for summarize — summarize call will raise.
+    fake.queue('{"source_type":"text","domain":"research","confidence":0.95}')
+
+    p = IngestPipeline(
+        vault_root=ephemeral_vault,
+        writer=VaultWriter(vault_root=ephemeral_vault),
+        llm=fake,
+        summarize_model="s",
+        integrate_model="s",
+        classify_model="c",
+    )
+    src = tmp_path / "hello.txt"
+    src.write_text("hello body", encoding="utf-8")
+    res = await p.ingest(src, allowed_domains=("research",), apply=False)
+    assert res.status is IngestStatus.FAILED
+    assert res.errors
+    assert res.patchset is None, "FAILED results never carry a patchset"

@@ -44,6 +44,7 @@ class IngestPipeline:
         *,
         allowed_domains: tuple[str, ...],
         domain_override: str | None = None,
+        apply: bool = True,
     ) -> IngestResult:
         """Full 9-stage source-to-wiki pipeline.
 
@@ -60,6 +61,18 @@ class IngestPipeline:
 
         The entire body (stages 2-9) is wrapped in a broad exception handler
         that records a .error.json failure record and returns FAILED.
+
+        Args:
+            apply: When True (default), Stage 9 writes the PatchSet via
+                ``self.writer.apply(...)`` and returns an ``IngestResult`` with
+                ``patchset=None`` — matches pre-apply-kwarg behavior. When
+                False, Stage 9 is skipped: the built PatchSet is returned on
+                ``IngestResult.patchset`` and the vault is NOT mutated. The
+                caller is then responsible for either applying the patch
+                (``writer.apply(patchset, allowed_domains=(result.note_path.parts[<domain>],))``)
+                or staging it via ``PendingPatchStore.put(...)``. Status paths
+                other than OK (SKIPPED_DUPLICATE / QUARANTINED / FAILED) are
+                unaffected by this flag — they never produce a patchset.
         """
         now = datetime.now(tz=UTC)
 
@@ -134,12 +147,21 @@ class IngestPipeline:
             )
             integrate_patch.new_files.insert(0, NewFile(path=note_path, content=note_content))
 
-            # Stage 9: Apply
-            self.writer.apply(integrate_patch, allowed_domains=(domain,))
+            # Stage 9: Apply (or stage)
+            if apply:
+                self.writer.apply(integrate_patch, allowed_domains=(domain,))
+                return IngestResult(
+                    status=IngestStatus.OK,
+                    note_path=note_path,
+                    extracted=extracted,
+                )
+            # apply=False — return the PatchSet for the caller to stage/apply.
+            # note_path is the INTENDED path; nothing has been written.
             return IngestResult(
                 status=IngestStatus.OK,
                 note_path=note_path,
                 extracted=extracted,
+                patchset=integrate_patch,
             )
 
         except Exception as exc:
