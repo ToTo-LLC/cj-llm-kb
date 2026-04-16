@@ -23,12 +23,14 @@ from mcp.server.lowlevel import Server
 from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
 from brain_mcp.tools import get_index as _get_index_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
+from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools.base import ToolContext, ToolModule
 
-# Task 6+ appends more modules here.
+# Task 7+ appends more modules here.
 _TOOL_MODULES: list[ToolModule] = [
     _list_domains_tool,
     _get_index_tool,
+    _read_note_tool,
 ]
 
 
