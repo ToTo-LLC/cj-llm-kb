@@ -28,6 +28,7 @@ from brain_mcp.resources import config_public as _config_public_res
 from brain_mcp.resources import domain_index as _domain_index_res
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
+from brain_mcp.tools import ingest as _ingest_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
 from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools import recent as _recent_tool
@@ -42,6 +43,7 @@ _TOOL_MODULES: list[ToolModule] = [
     _search_tool,
     _recent_tool,
     _get_brain_md_tool,
+    _ingest_tool,
 ]
 
 
