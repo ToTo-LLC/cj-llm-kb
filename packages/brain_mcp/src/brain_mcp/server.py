@@ -19,8 +19,13 @@ from brain_core.state.db import StateDB
 from brain_core.vault.undo import UndoLog
 from brain_core.vault.writer import VaultWriter
 from mcp.server.lowlevel import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+from pydantic import AnyUrl
 
 from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+from brain_mcp.resources import brain_md as _brain_md_res
+from brain_mcp.resources import config_public as _config_public_res
+from brain_mcp.resources import domain_index as _domain_index_res
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
@@ -109,5 +114,55 @@ def create_server(
                 result: list[types.TextContent] = await m.handle(arguments, ctx)
                 return result
         raise ValueError(f"unknown tool: {name}")
+
+    @server.list_resources()
+    async def handle_list_resources() -> list[types.Resource]:
+        resources: list[types.Resource] = [
+            types.Resource(
+                uri=AnyUrl(_brain_md_res.URI),
+                name=_brain_md_res.NAME,
+                description=_brain_md_res.DESCRIPTION,
+                mimeType=_brain_md_res.MIME_TYPE,
+            ),
+            types.Resource(
+                uri=AnyUrl(_config_public_res.URI),
+                name=_config_public_res.NAME,
+                description=_config_public_res.DESCRIPTION,
+                mimeType=_config_public_res.MIME_TYPE,
+            ),
+        ]
+        # One resource per allowed domain — enables Claude Desktop to surface
+        # an index.md chooser that respects scope (personal is never listed
+        # in a research-scoped session).
+        for domain in allowed_domains:
+            resources.append(
+                types.Resource(
+                    uri=AnyUrl(_domain_index_res.uri_for(domain)),
+                    name=f"{domain}/index.md",
+                    description=f"Index for the {domain} domain.",
+                    mimeType=_domain_index_res.MIME_TYPE,
+                )
+            )
+        return resources
+
+    @server.read_resource()
+    async def handle_read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
+        # MCP SDK gives us AnyUrl; compare via its str form so the hardcoded
+        # URIs in resource modules stay plain strings (matches list_resources()).
+        uri_str = str(uri)
+        if uri_str == _brain_md_res.URI:
+            body = _brain_md_res.read(vault_root)
+            return [ReadResourceContents(content=body, mime_type=_brain_md_res.MIME_TYPE)]
+        if uri_str == _config_public_res.URI:
+            body = _config_public_res.read(vault_root)
+            return [ReadResourceContents(content=body, mime_type=_config_public_res.MIME_TYPE)]
+        if uri_str.startswith("brain://") and uri_str.endswith("/index.md"):
+            body = _domain_index_res.read(
+                uri_str,
+                vault_root=vault_root,
+                allowed_domains=allowed_domains,
+            )
+            return [ReadResourceContents(content=body, mime_type=_domain_index_res.MIME_TYPE)]
+        raise ValueError(f"unknown resource: {uri_str}")
 
     return server
