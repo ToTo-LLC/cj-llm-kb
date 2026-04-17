@@ -123,3 +123,34 @@ rendering tests green, 4 contract test skeletons skipped.
 
 **Recording + contract assertions:** deferred. Will land whenever an
 Anthropic API key is available.
+
+## Plan 04 — MCP tool cassettes
+
+Three MCP-layer ingest tools have deferred contract test skeletons under
+`packages/brain_mcp/tests/prompts/`:
+
+- `test_brain_ingest_contract.py` — `brain_ingest` tool
+- `test_brain_classify_contract.py` — `brain_classify` tool
+- `test_brain_bulk_import_contract.py` — `brain_bulk_import` tool
+
+Each is a real-API contract test (the MCP tool layer calls the actual
+Anthropic API) and is **not a merge gate**. They run in a dedicated CI job
+gated on `ANTHROPIC_API_KEY` and never block PRs. Per Plan 04 D9a, no
+cassettes are recorded yet; each skeleton is decorated with
+`@pytest.mark.skipif(True, ...)` and raises `NotImplementedError` so
+accidental skipif removal fails loud.
+
+### Recording the MCP cassettes
+
+```
+export ANTHROPIC_API_KEY=sk-...
+RUN_LIVE_LLM_TESTS=1 uv run pytest -k brain_ingest_contract packages/brain_mcp/tests/prompts -v
+```
+
+Then for each contract test:
+1. Remove the `@pytest.mark.skipif(True, ...)` decorator.
+2. Replace the `NotImplementedError` body with a real assertion against
+   the recorded response (PatchSet shape, domain classification, cost
+   ledger entry, etc.).
+3. Commit the new cassette under
+   `packages/brain_mcp/tests/prompts/cassettes/`.
