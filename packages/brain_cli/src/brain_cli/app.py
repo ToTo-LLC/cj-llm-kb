@@ -6,6 +6,7 @@ import typer
 
 from brain_cli import __version__
 from brain_cli.commands.chat import chat
+from brain_cli.commands.mcp import mcp_app
 from brain_cli.commands.patches import patches_app
 
 app = typer.Typer(
@@ -17,6 +18,7 @@ app = typer.Typer(
 
 app.command()(chat)
 app.add_typer(patches_app, name="patches")
+app.add_typer(mcp_app, name="mcp")
 
 
 def _version_callback(value: bool) -> None:
