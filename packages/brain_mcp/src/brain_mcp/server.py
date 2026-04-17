@@ -26,6 +26,7 @@ from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
 from brain_mcp.resources import brain_md as _brain_md_res
 from brain_mcp.resources import config_public as _config_public_res
 from brain_mcp.resources import domain_index as _domain_index_res
+from brain_mcp.tools import apply_patch as _apply_patch_tool
 from brain_mcp.tools import bulk_import as _bulk_import_tool
 from brain_mcp.tools import classify as _classify_tool
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
@@ -52,6 +53,7 @@ _TOOL_MODULES: list[ToolModule] = [
     _bulk_import_tool,
     _propose_note_tool,
     _list_pending_patches_tool,
+    _apply_patch_tool,
 ]
 
 
