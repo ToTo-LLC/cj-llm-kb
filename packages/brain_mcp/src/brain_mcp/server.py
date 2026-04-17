@@ -32,6 +32,7 @@ from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
 from brain_mcp.tools import ingest as _ingest_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
+from brain_mcp.tools import propose_note as _propose_note_tool
 from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools import recent as _recent_tool
 from brain_mcp.tools import search as _search_tool
@@ -48,6 +49,7 @@ _TOOL_MODULES: list[ToolModule] = [
     _ingest_tool,
     _classify_tool,
     _bulk_import_tool,
+    _propose_note_tool,
 ]
 
 
