@@ -41,9 +41,17 @@ async def test_out_of_scope_raises(
 async def test_missing_index_returns_empty(
     tmp_path: Path, make_ctx: Callable[..., ToolContext]
 ) -> None:
+    """Plan 04 Task 25: the miss-path data dict has the same shape as the
+    happy path so clients can unconditionally read data["frontmatter"] and
+    data["body"] without a KeyError."""
+    import json
+
     # Fresh vault with no index.md.
     vault = tmp_path / "empty"
     (vault / "research").mkdir(parents=True)
     ctx = make_ctx(vault, allowed_domains=("research",))
     out = await handle({}, ctx)
     assert out[0].text == "(no index yet)"
+    data = json.loads(out[1].text)
+    # Shape parity with the happy path.
+    assert data == {"domain": "research", "frontmatter": {}, "body": ""}

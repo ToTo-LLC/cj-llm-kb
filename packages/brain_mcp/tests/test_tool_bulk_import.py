@@ -113,3 +113,78 @@ async def test_bulk_import_missing_folder_raises(
     missing = tmp_path / "definitely-not-here"
     with pytest.raises(FileNotFoundError):
         await handle({"folder": str(missing)}, ctx)
+
+
+async def test_bulk_import_apply_runs_pipeline_per_item(
+    tmp_path: Path, make_ctx: Callable[..., ToolContext]
+) -> None:
+    """Plan 04 Task 25 coverage: apply-phase bucketing (applied / quarantined /
+    duplicate / failed) and the final ``status=applied`` response shape. Uses
+    a tiny 2-file folder and empty PatchSets in the integrate response so the
+    pipeline finishes without needing a full summarize+integrate happy path.
+    """
+    from brain_core.prompts.schemas import SummarizeOutput
+    from brain_core.vault.types import PatchSet
+
+    vault = _research_vault(tmp_path)
+    source_folder = tmp_path / "inbox"
+    source_folder.mkdir()
+    (source_folder / "a.txt").write_text("first doc", encoding="utf-8")
+    (source_folder / "b.txt").write_text("second doc", encoding="utf-8")
+
+    ctx = make_ctx(vault, allowed_domains=("research",))
+    # plan() phase: one classify per file.
+    ctx.llm.queue('{"source_type":"text","domain":"research","confidence":0.9}')
+    ctx.llm.queue('{"source_type":"text","domain":"research","confidence":0.9}')
+    # apply() phase per file: summarize (valid JSON) + integrate (empty patchset
+    # still serializes; IngestPipeline accepts it as a "no-op" integrate).
+    for title in ("first", "second"):
+        ctx.llm.queue(
+            SummarizeOutput(
+                title=title,
+                summary="A test document.",
+                key_points=["point"],
+                entities=[],
+                concepts=[],
+                open_questions=[],
+            ).model_dump_json()
+        )
+        ctx.llm.queue(
+            PatchSet(new_files=[], log_entry=f"## ingest | {title}", reason="test").model_dump_json()
+        )
+
+    out = await handle(
+        {"folder": str(source_folder), "dry_run": False, "max_files": 2},
+        ctx,
+    )
+    data = json.loads(out[1].text)
+    assert data["status"] == "applied"
+    # The bucketing keys must all be present even when empty, for client
+    # convenience.
+    assert set(data.keys()) == {"status", "applied", "quarantined", "duplicate", "failed"}
+    assert len(data["applied"]) + len(data["quarantined"]) + len(data["duplicate"]) + len(
+        data["failed"]
+    ) == 2
+
+
+async def test_bulk_import_rate_limited_when_token_budget_exceeded(
+    tmp_path: Path, make_ctx: Callable[..., ToolContext]
+) -> None:
+    """Plan 04 Task 25 coverage: a RateLimiter refusal returns status=rate_limited
+    and never calls the LLM (queue stays loaded), demonstrating the pre-plan
+    check fires correctly."""
+    vault = _research_vault(tmp_path)
+    source_folder = tmp_path / "inbox"
+    source_folder.mkdir()
+    (source_folder / "a.txt").write_text("single doc", encoding="utf-8")
+
+    ctx = make_ctx(vault, allowed_domains=("research",))
+    # Deliberately do NOT queue any LLM responses; if the tool called through
+    # to plan() the FakeLLMProvider would raise on empty queue. The rate-limit
+    # refusal must fire first.
+    # Drain the tokens bucket so any token-cost check refuses.
+    assert ctx.rate_limiter.check("tokens", cost=1_000_000)  # exhausts budget
+    out = await handle({"folder": str(source_folder)}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "rate_limited"
+    assert data["bucket"] == "tokens"

@@ -24,8 +24,8 @@ from brain_mcp.tools.base import ToolContext, text_result
 
 NAME = "brain_config_set"
 DESCRIPTION = (
-    "Set a whitelisted config field (active_domain, budget.daily_cap_usd, "
-    "log_llm_payloads). Plan 04: in-memory only — persistence lands in Plan 07."
+    "Set a whitelisted config field (budget.daily_usd, log_llm_payloads). "
+    "Plan 04: in-memory only — persistence lands in Plan 07."
 )
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -37,10 +37,15 @@ INPUT_SCHEMA: dict[str, Any] = {
 }
 
 _SECRET_SUBSTRINGS: frozenset[str] = frozenset({"api_key", "secret", "token", "password"})
+# Allowlist of config keys that may be set via MCP. ``active_domain`` is
+# deliberately excluded: scope is set per-session by the caller's allowed
+# domains, not by a persisted mid-session toggle. ``vault_path`` and the
+# ``llm.*`` keys are also out of scope for MCP (clients must not reroot the
+# vault or swap the model from a tool call). ``budget.daily_usd`` matches the
+# real schema field (``BudgetConfig.daily_usd``).
 _SETTABLE_KEYS: frozenset[str] = frozenset(
     {
-        "active_domain",
-        "budget.daily_cap_usd",
+        "budget.daily_usd",
         "log_llm_payloads",
     }
 )

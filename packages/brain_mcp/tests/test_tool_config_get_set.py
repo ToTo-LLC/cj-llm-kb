@@ -40,11 +40,26 @@ async def test_config_get_refuses_secret_key(
 async def test_config_set_settable_field(
     seeded_vault: Path, make_ctx: Callable[..., ToolContext]
 ) -> None:
+    """Plan 04 Task 25: settable keys are (budget.daily_usd, log_llm_payloads).
+    active_domain was removed from the allowlist — mid-session scope changes
+    are dodgy; scope is set per-session via allowed_domains, not via config.
+    budget.daily_cap_usd was renamed to budget.daily_usd to match
+    BudgetConfig.daily_usd."""
     ctx = make_ctx(seeded_vault, allowed_domains=("research",))
-    out = await set_handle({"key": "active_domain", "value": "work"}, ctx)
+    out = await set_handle({"key": "budget.daily_usd", "value": 10.0}, ctx)
     data = json.loads(out[1].text)
     assert data["status"] == "updated"
-    assert data["key"] == "active_domain"
+    assert data["key"] == "budget.daily_usd"
+    assert data["persisted"] is False
+
+
+async def test_config_set_refuses_active_domain(
+    seeded_vault: Path, make_ctx: Callable[..., ToolContext]
+) -> None:
+    """active_domain is no longer settable via MCP (Plan 04 Task 25)."""
+    ctx = make_ctx(seeded_vault, allowed_domains=("research",))
+    with pytest.raises(PermissionError, match="not settable"):
+        await set_handle({"key": "active_domain", "value": "work"}, ctx)
 
 
 async def test_config_set_refuses_secret_key(
