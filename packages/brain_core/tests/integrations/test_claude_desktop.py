@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -119,8 +120,10 @@ class TestVerify:
 
     def test_verify_installed_with_valid_executable(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.json"
-        # Use a real executable that exists on every POSIX system.
-        install(config_path=config_path, command="/bin/sh")
+        # Use sys.executable (the running Python interpreter) — guaranteed to
+        # exist on every platform the test suite runs on (Mac, Windows, Linux).
+        # Hardcoding /bin/sh would fail the Windows CI matrix.
+        install(config_path=config_path, command=sys.executable)
         result = verify(config_path=config_path)
         assert result.config_exists is True
         assert result.entry_present is True
@@ -128,8 +131,83 @@ class TestVerify:
 
     def test_verify_installed_with_missing_executable(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.json"
-        install(config_path=config_path, command="/definitely/not/a/real/path/brain-mcp")
+        # Build a path guaranteed not to exist on ANY platform by pointing
+        # below tmp_path. Hardcoding a POSIX-flavored path would still "work"
+        # on Windows (the file wouldn't exist there either) but this is more
+        # obviously correct regardless of OS.
+        missing = tmp_path / "definitely" / "not" / "a" / "real" / "brain-mcp"
+        install(config_path=config_path, command=str(missing))
         result = verify(config_path=config_path)
         assert result.config_exists is True
         assert result.entry_present is True
         assert result.executable_resolves is False
+
+
+class TestCrossPlatformProperties:
+    """Plan 04 Task 23 — pin the cross-platform invariants the audit asserts.
+
+    These tests fail loudly if a future change reintroduces a POSIX-only test
+    executable, adds a Windows-unsafe character to the backup filename, or
+    writes CRLF line endings to ``claude_desktop_config.json``.
+    """
+
+    def test_backup_filename_has_no_windows_reserved_chars(self, tmp_path: Path) -> None:
+        # Windows forbids : < > " | ? * \ / in filenames. Backup timestamps must
+        # use `-` separators, not `:`, so the filename is portable.
+        path = tmp_path / "config.json"
+        path.write_text('{"existing": true}', encoding="utf-8")
+        backup = write_config(path, {"updated": True})
+        assert backup is not None
+        forbidden = set(':<>"|?*')
+        assert not (forbidden & set(backup.name)), (
+            f"backup filename {backup.name!r} contains Windows-forbidden chars"
+        )
+
+    def test_write_config_uses_lf_line_endings_on_disk(self, tmp_path: Path) -> None:
+        # Read raw bytes — `write_text(newline="\n")` must prevent the platform
+        # default CRLF translation on Windows. If someone removes the newline
+        # kwarg, this assertion catches it.
+        path = tmp_path / "config.json"
+        write_config(path, {"mcpServers": {"brain": {"command": "x"}}})
+        raw = path.read_bytes()
+        assert b"\r\n" not in raw, f"CRLF found in config: {raw!r}"
+        assert raw.endswith(b"\n")
+
+    def test_verify_valid_executable_test_does_not_hardcode_posix_path(self) -> None:
+        # Regression pin — if someone re-introduces `/bin/sh` or similar in the
+        # valid-executable test, the Windows matrix would break silently until
+        # CI ran. We assemble the forbidden patterns at runtime from their
+        # non-adjacent parts so this very assertion doesn't self-match.
+        test_file = Path(__file__)
+        source = test_file.read_text(encoding="utf-8")
+        posix_binaries = ("sh", "bash", "dash")
+        # Build the strings at runtime so the literals never appear verbatim
+        # in the test source itself.
+        quote_styles = ('"', "'")
+        forbidden = []
+        for binary in posix_binaries:
+            for q in quote_styles:
+                forbidden.append(f"command={q}/bin/{binary}{q}")
+                forbidden.append(f"command={q}/usr/bin/{binary}{q}")
+        for pattern in forbidden:
+            assert pattern not in source, (
+                f"POSIX-only executable {pattern!r} reappeared — "
+                "use sys.executable instead for cross-platform safety"
+            )
+
+    def test_detect_config_path_no_hardcoded_slashes_in_source(self) -> None:
+        # The implementation must build paths via pathlib's `/` operator, not
+        # string concatenation with hardcoded separators. Grep the source of
+        # `claude_desktop.py` for forbidden literal path strings.
+        import brain_core.integrations.claude_desktop as mod
+
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        forbidden_literals = [
+            '"Library/Application Support/Claude/claude_desktop_config.json"',
+            '"\\Claude\\claude_desktop_config.json"',
+            '".config/Claude/claude_desktop_config.json"',
+        ]
+        for literal in forbidden_literals:
+            assert literal not in src, (
+                f"hardcoded path literal {literal!r} found — use pathlib instead"
+            )
