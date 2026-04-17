@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
+import pytest
 from brain_core.cost.ledger import CostEntry, CostLedger
 
 
@@ -54,3 +55,45 @@ def test_persists_across_instances(tmp_path: Path) -> None:
         )
     )
     assert CostLedger(db_path=db).total_for_day(now.date()) == 0.001
+
+
+def test_summary_returns_typed_record(tmp_path: Path) -> None:
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    today = date(2026, 4, 15)
+    ledger.record(
+        CostEntry(
+            timestamp=datetime(2026, 4, 15, 10, 0, tzinfo=UTC),
+            operation="summarize",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=500,
+            cost_usd=0.05,
+            domain="research",
+        )
+    )
+    ledger.record(
+        CostEntry(
+            timestamp=datetime(2026, 4, 15, 11, 0, tzinfo=UTC),
+            operation="integrate",
+            model="claude-sonnet-4-6",
+            input_tokens=2000,
+            output_tokens=800,
+            cost_usd=0.12,
+            domain="work",
+        )
+    )
+    summary = ledger.summary(today=today, month=(2026, 4))
+    assert summary.today_usd == pytest.approx(0.17)
+    assert summary.month_usd == pytest.approx(0.17)
+    assert summary.by_domain == {
+        "research": pytest.approx(0.05),
+        "work": pytest.approx(0.12),
+    }
+
+
+def test_summary_empty_ledger(tmp_path: Path) -> None:
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    summary = ledger.summary(today=date(2026, 4, 15), month=(2026, 4))
+    assert summary.today_usd == 0.0
+    assert summary.month_usd == 0.0
+    assert summary.by_domain == {}

@@ -19,6 +19,15 @@ class CostEntry:
     domain: str
 
 
+@dataclass(frozen=True)
+class CostSummary:
+    """Typed snapshot of ledger state used by `brain_cost_report` + Plan 07 UI."""
+
+    today_usd: float
+    month_usd: float
+    by_domain: dict[str, float]
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS costs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,3 +96,12 @@ class CostLedger:
                 (f"{prefix}%",),
             ).fetchone()
         return float(row[0])
+
+    def summary(self, *, today: date, month: tuple[int, int]) -> CostSummary:
+        """Return a typed summary: today's total, this month's total, today's
+        breakdown by domain. Used by the `brain_cost_report` MCP tool."""
+        return CostSummary(
+            today_usd=self.total_for_day(today),
+            month_usd=self.total_for_month(month[0], month[1]),
+            by_domain=self.total_by_domain(today),
+        )
