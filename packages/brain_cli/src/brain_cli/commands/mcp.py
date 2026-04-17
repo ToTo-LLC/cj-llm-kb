@@ -22,6 +22,7 @@ import typer
 from brain_core.integrations.claude_desktop import (
     detect_config_path,
     install,
+    read_config,
     uninstall,
     verify,
 )
@@ -186,10 +187,13 @@ def selftest_cmd(
         raise typer.Exit(code=1)
     console.print("[green]OK[/green]")
 
-    # Check 2: subprocess round-trip.
+    # Check 2: subprocess round-trip. Pass the env dict from the Claude Desktop
+    # config so the subprocess gets the same BRAIN_VAULT_ROOT / allowed-domains
+    # the user installed — otherwise selftest silently tests against a
+    # different vault than the one Claude Desktop uses.
     console.print("[2/3] subprocess tools/list round-trip: ", end="")
     try:
-        tool_count = asyncio.run(_subprocess_tools_list())
+        tool_count = asyncio.run(_subprocess_tools_list(config_path=target))
     except Exception as exc:
         console.print(f"[red]FAIL[/red] ({exc})")
         raise typer.Exit(code=1) from exc
@@ -205,15 +209,29 @@ def selftest_cmd(
     console.print("\n[bold green]selftest passed[/bold green]")
 
 
-async def _subprocess_tools_list() -> int:
-    """Spawn brain-mcp as a subprocess, run tools/list via the MCP SDK client, return the tool count."""
+async def _subprocess_tools_list(*, config_path: Path, server_name: str = "brain") -> int:
+    """Spawn brain-mcp as a subprocess, run tools/list via the MCP SDK, return the tool count.
+
+    The env dict passed to the subprocess comes from the Claude Desktop
+    config so selftest exercises the same BRAIN_VAULT_ROOT / allowed-domains
+    the user installed. Falls back to the default vault location if the
+    config entry has no env dict (unusual but handled).
+    """
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    # Read env out of the installed config entry. verify() has already checked
+    # the entry exists, but guard defensively in case the selftest flow changes.
+    config = read_config(config_path)
+    entry = config.get("mcpServers", {}).get(server_name, {})
+    env = dict(entry.get("env") or {})
+    if "BRAIN_VAULT_ROOT" not in env:
+        env["BRAIN_VAULT_ROOT"] = str(Path.home() / "Documents" / "brain")
 
     params = StdioServerParameters(
         command=_resolve_brain_mcp_command(),
         args=_resolve_brain_mcp_args(),
-        env={"BRAIN_VAULT_ROOT": str(Path.home() / "Documents" / "brain")},
+        env=env,
     )
     async with (
         stdio_client(params) as (read_stream, write_stream),
