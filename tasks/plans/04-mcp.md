@@ -5118,3 +5118,89 @@ git add tasks/todo.md tasks/lessons.md tasks/plans/04-mcp.md && git commit -m "d
 - Confirmation that the `plan-04-mcp` tag exists locally
 
 Main loop pushes `main` + tag to `origin` after reviewing the close commit.
+
+## Review
+
+**Plan 04 — MCP: complete.**
+
+- **Tag:** `plan-04-mcp`
+- **Completed:** 2026-04-17
+- **Task count:** 25 planned / 25 actual
+- **Commits since `plan-03-chat`:** 44 (38 pre-Task-25 + 5 Task 25 sweep commits + 1 close commit)
+- **Test counts:** brain_core (368) + brain_cli (30) + brain_mcp (104) = **502 passed + 8 skipped** (up from 495+8 pre-Task-25: +5 regression tests in Batch A, +2 coverage tests for `brain_bulk_import` apply path)
+- **Coverage:** brain_core 94% · brain_cli 75% · brain_mcp 94% · total 92%
+  - Per target: `brain_mcp.tools.*` ≥ 88% (15 of 18 at 95%+, bulk_import at 89%, read_note at 89%, apply_patch at 88%); `brain_mcp.rate_limit` 100%; `brain_core.integrations.claude_desktop` 94%; `brain_mcp.server` 99%
+- **Gates:** mypy strict clean (3 packages, zero errors), ruff check + format clean (221 files), ghost-file check 0
+- **Demo receipt:**
+
+```
+[gate 1] tool + resource discovery
+  OK  exactly 18 tools registered (got 18)
+  OK  tool brain_list_domains present
+  OK  tool brain_search present
+  OK  tool brain_apply_patch present
+  OK  >=3 resources registered (got 4)
+[gate 2] brain_list_domains
+  OK  brain_list_domains isError=False
+  OK  research domain listed
+  OK  work domain listed
+[gate 3] brain_search
+  OK  brain_search isError=False
+  OK  karpathy note found in search hits
+[gate 4] brain_read_note
+  OK  brain_read_note isError=False
+  OK  note body returned with expected content
+[gate 6] brain_list_pending_patches empty baseline
+  OK  brain_list_pending_patches isError=False
+  OK  no pending patches initially (got 0)
+[gate 7] brain_propose_note → brain_apply_patch → brain_undo_last
+  OK  propose_note isError=False
+  OK  propose_note returned patch_id
+  OK  demo note NOT on disk after propose
+  OK  apply_patch isError=False
+  OK  apply_patch status=applied
+  OK  demo note ON disk after apply
+  OK  apply_patch returned undo_id
+  OK  undo_last isError=False
+  OK  undo_last status=reverted
+  OK  demo note GONE after undo
+[gate 8] brain_propose_note → brain_reject_patch
+  OK  propose_note (reject path) isError=False
+  OK  reject_patch isError=False
+  OK  reject_patch status=rejected
+  OK  rejected note NOT on disk
+[gate 9] brain_cost_report
+  OK  cost_report isError=False
+  OK  cost_report has today_usd
+[gate 10] brain_config_get
+  OK  config_get returned successfully
+[gate 11] scope guard refuses personal/
+  OK  reading personal/ from research scope returns isError=True
+  OK  scope error mentions personal/scope
+[gate 12] brain://BRAIN.md resource
+  OK  BRAIN.md resource returned content
+  OK  BRAIN.md resource content returned
+[gate 13] brain://research/index.md resource
+  OK  research index resource content returned
+[gate 5] brain_ingest (direct handle() call — see module docstring)
+  OK  brain_ingest default staged (status=pending)
+  OK  brain_ingest returned patch_id
+  OK  ingest note NOT written to vault (staged only)
+  OK  pending store has a brain_ingest envelope
+[gate 14] brain mcp selftest via subprocess
+  OK  brain mcp selftest exited 0 (got 0)
+stdout: [1/3] config verification: OK
+[2/3] subprocess tools/list round-trip: OK (18 tools)
+[3/3] tool count sanity: OK
+
+selftest passed
+
+stderr:
+  OK  selftest stdout reports passed
+
+PLAN 04 DEMO OK
+```
+
+- **Task 25 sweep:** 5 commits (Batch A VaultWriter fix `4913a5c`, Batch A selftest env fix `c07d119`, Batch A config_set + get_index + bulk_import coverage `3b107cd`, Batch B TODO comments + plan-doc correction `51332d5`, style pass `e25cabe`). +7 regression tests across brain_core, brain_cli, brain_mcp.
+
+- **Handoff to Plan 05:** Plan 05 adds a FastAPI + WebSocket layer wrapping `brain_core`. The MCP server's dispatch pattern (18 tools registered from `tools/*` modules with a uniform `NAME / DESCRIPTION / INPUT_SCHEMA / async handle(arguments, ctx)` shape) is a direct model for API endpoint registration. Reuse the rate-limiter, scope-guard, and tool-base primitives as-is — they have zero MCP dependencies once you ignore `mcp.types.TextContent`. The `brain_core.integrations.claude_desktop` module pattern (detect → backup → atomic-write → verify) is a template for future integrations (Cursor, Zed, browser extension). See Plan 04 lessons section in `tasks/lessons.md` for deferred items that Plan 05+ should pick up.
