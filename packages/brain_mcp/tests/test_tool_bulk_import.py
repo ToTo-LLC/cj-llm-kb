@@ -150,7 +150,9 @@ async def test_bulk_import_apply_runs_pipeline_per_item(
             ).model_dump_json()
         )
         ctx.llm.queue(
-            PatchSet(new_files=[], log_entry=f"## ingest | {title}", reason="test").model_dump_json()
+            PatchSet(
+                new_files=[], log_entry=f"## ingest | {title}", reason="test"
+            ).model_dump_json()
         )
 
     out = await handle(
@@ -162,9 +164,13 @@ async def test_bulk_import_apply_runs_pipeline_per_item(
     # The bucketing keys must all be present even when empty, for client
     # convenience.
     assert set(data.keys()) == {"status", "applied", "quarantined", "duplicate", "failed"}
-    assert len(data["applied"]) + len(data["quarantined"]) + len(data["duplicate"]) + len(
-        data["failed"]
-    ) == 2
+    assert (
+        len(data["applied"])
+        + len(data["quarantined"])
+        + len(data["duplicate"])
+        + len(data["failed"])
+        == 2
+    )
 
 
 async def test_bulk_import_rate_limited_when_token_budget_exceeded(

@@ -71,9 +71,7 @@ class VaultWriter:
         # accepted, in rare CWD-matches-vault cases). Absolute paths pass
         # through unchanged so existing callers that already resolve paths
         # themselves are not broken.
-        nf_abs_paths: list[Path] = [
-            self._absolutize(nf.path) for nf in patch.new_files
-        ]
+        nf_abs_paths: list[Path] = [self._absolutize(nf.path) for nf in patch.new_files]
         edit_abs_paths: list[Path] = [self._absolutize(e.path) for e in patch.edits]
 
         # Pre-validate every path before any mutation.

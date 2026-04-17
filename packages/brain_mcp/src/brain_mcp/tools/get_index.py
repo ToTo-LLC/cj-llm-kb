@@ -35,9 +35,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.Text
     if not index_path.exists():
         # Shape parity with the happy path: callers can unconditionally read
         # data["frontmatter"] without a KeyError on the miss branch.
-        return text_result(
-            "(no index yet)", data={"domain": domain, "frontmatter": {}, "body": ""}
-        )
+        return text_result("(no index yet)", data={"domain": domain, "frontmatter": {}, "body": ""})
     raw = index_path.read_text(encoding="utf-8")
     try:
         fm, body = parse_frontmatter(raw)
