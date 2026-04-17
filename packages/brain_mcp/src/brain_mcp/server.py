@@ -39,6 +39,7 @@ from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools import recent as _recent_tool
 from brain_mcp.tools import reject_patch as _reject_patch_tool
 from brain_mcp.tools import search as _search_tool
+from brain_mcp.tools import undo_last as _undo_last_tool
 from brain_mcp.tools.base import ToolContext, ToolModule
 
 # Task 10+ appends more modules here.
@@ -56,6 +57,7 @@ _TOOL_MODULES: list[ToolModule] = [
     _list_pending_patches_tool,
     _apply_patch_tool,
     _reject_patch_tool,
+    _undo_last_tool,
 ]
 
 
