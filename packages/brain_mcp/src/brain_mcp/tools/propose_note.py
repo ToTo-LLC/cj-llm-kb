@@ -8,8 +8,10 @@ mirrors the web app exactly (spec principle #3: LLM writes are always staged).
 Rate limiter consumes from the ``patches`` bucket (cost=1) BEFORE any other
 work so a refused call is cheap and deterministic. ChatMode.BRAINSTORM is the
 closest semantic match for "staged for human approval"; MCP has no chat mode,
-so we reuse it (same placeholder used by ``brain_ingest``). A dedicated
-``ChatMode.MCP`` value is deferred to the Task 25 sweep.
+so we reuse it (same placeholder used by ``brain_ingest``).
+TODO(plan-05+): consider a dedicated ``ChatMode.MCP`` value so MCP-origin
+pending patches are distinguishable from brainstorm-origin ones in the
+patch queue UI.
 """
 
 from __future__ import annotations
@@ -65,7 +67,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.Text
         patchset=patchset,
         source_thread="mcp-propose",
         # ChatMode.BRAINSTORM is the closest semantic match for "staged for
-        # human approval". Deferred to Task 25: dedicated MCP mode value.
+        # human approval". TODO(plan-05+): dedicated ``ChatMode.MCP`` value.
         mode=ChatMode.BRAINSTORM,
         tool="brain_propose_note",
         target_path=p,

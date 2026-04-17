@@ -86,6 +86,10 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.Text
     as_path = Path(source_arg)
     spec: str | Path = as_path if as_path.is_absolute() and as_path.exists() else source_arg
 
+    # TODO(plan-05 config): model strings are hardcoded here and in
+    # brain_mcp.tools.classify / brain_mcp.tools.bulk_import. Plan 05+
+    # should wire these through LLMConfig (default_model / classify_model)
+    # so changing models is a config flip, not a three-file edit.
     pipeline = IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
@@ -139,8 +143,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.Text
         patchset=patchset,
         source_thread="mcp-ingest",
         # ChatMode.BRAINSTORM is the closest semantic match for "staged for
-        # human approval". A dedicated ChatMode.INGEST value is deferred to
-        # the Task 25 sweep; accept the convenience mapping for now.
+        # human approval". TODO(plan-05+): consider a dedicated
+        # ChatMode.INGEST value so ingest-origin pending patches are
+        # distinguishable from brainstorm-origin ones in the patch queue UI.
         mode=ChatMode.BRAINSTORM,
         tool="brain_ingest",
         target_path=target_path,

@@ -45,6 +45,8 @@ INPUT_SCHEMA: dict[str, Any] = {
 # Model string MUST match brain_mcp.tools.ingest._INGEST_TOKEN_ESTIMATE's pipeline
 # classify_model so both tools route through the same Anthropic model on real
 # runs. Changes here need a matching change in ingest.py.
+# TODO(plan-05 config): wire through LLMConfig.classify_model so swapping
+# models is a config change rather than a three-file edit.
 _CLASSIFY_MODEL = "claude-haiku-4-5-20251001"
 
 # Rough token cost for one classify call (classify prompt + 256 max output).

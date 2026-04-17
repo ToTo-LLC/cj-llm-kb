@@ -3309,7 +3309,7 @@ git commit -m "feat(mcp): plan 04 task 18 — brain_undo_last tool"
 
 ### Group 6 — Maintenance tools (Task 19)
 
-**Checkpoint after Task 19:** main-loop reviews the whole tool surface — all 17 tools registered (6 read + 3 ingest + 5 write + 3 maintenance — the lint stub counts toward the 17). Last tool-level gate before the Claude Desktop integration in Tasks 20–21.
+**Checkpoint after Task 19:** main-loop reviews the whole tool surface — all 18 tools registered (6 read + 3 ingest + 5 write + 4 maintenance — the lint stub counts toward the 18; earlier plan text said "17" before `brain_bulk_import` landed as its own tool in Task 13). Last tool-level gate before the Claude Desktop integration in Tasks 20–21.
 
 ---
 
@@ -3784,7 +3784,7 @@ cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_mcp/src/brain_mc
 
 **Checkpoint 5 — pause for main-loop review.**
 
-19 tasks landed, all 17 tools registered. Full MCP tool surface live. Main loop asks:
+19 tasks landed, all 18 tools registered (the plan skeleton said "17" before `brain_bulk_import` was split into its own tool in Task 13). Full MCP tool surface live. Main loop asks:
 - Is `brain_config_set` in-memory-only acceptable, or does Plan 04 need to land real persistence? (Track in Task 24 deferrals either way.)
 - Is the secret-substring blocklist `{api_key, secret, token, password}` strong enough?
 - Are the `settable_keys` restrictive enough? `active_domain` switching via MCP might be weird — clients probably shouldn't be able to change scope mid-session. Consider dropping `active_domain` from `_SETTABLE_KEYS`.

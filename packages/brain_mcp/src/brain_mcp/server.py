@@ -78,6 +78,13 @@ def create_server(
 
     Does NOT start transport — callers run the returned Server against their
     chosen transport (stdio in __main__, in-memory in tests).
+
+    TODO(plan-05+): add an ``llm_factory`` kwarg so callers (Plan 05 demo
+    scaffolding, integration tests, CLI selftest) can inject an Anthropic or
+    fake LLM without monkey-patching FakeLLMProvider. Currently the demo
+    scripts work around this by constructing the server with FakeLLMProvider
+    and queueing responses; a factory kwarg would be the cleaner extension
+    point.
     """
     server: Server = Server("brain")
 
