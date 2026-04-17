@@ -123,6 +123,53 @@ def test_log_entry_newlines_are_sanitized(ephemeral_vault: Path) -> None:
     assert "legit summary" in log_text
 
 
+def test_apply_accepts_vault_relative_paths(ephemeral_vault: Path) -> None:
+    """Plan 04 Task 25: VaultWriter.apply must absolutize vault-relative
+    NewFile / Edit paths against vault_root before scope_guard. scope_guard
+    calls Path.resolve() which would otherwise resolve the relative path
+    against the current working directory, not the vault — silently rejecting
+    (or, in rare CWD-matches-vault cases, silently accepting) relative paths.
+
+    This is the primary path exercised by brain_mcp.tools.apply_patch and
+    brain_cli.commands.patches — the envelope stores vault-relative paths for
+    portability.
+    """
+    vw = VaultWriter(vault_root=ephemeral_vault)
+    ps = PatchSet(
+        new_files=[
+            NewFile(
+                path=Path("research/sources/rel.md"),
+                content="---\ntitle: Rel\n---\n\nbody\n",
+            )
+        ],
+        log_entry="## [2026-04-17 10:00] ingest | new | [[rel]]",
+        reason="relative-path regression test",
+    )
+    receipt = vw.apply(ps, allowed_domains=("research",))
+    # File must land under vault_root even though the caller passed a
+    # vault-relative path.
+    landed = ephemeral_vault / "research" / "sources" / "rel.md"
+    assert landed.exists()
+    assert landed.read_text(encoding="utf-8").startswith("---")
+    # The receipt records the absolute path so downstream consumers
+    # (CLI, MCP tool responses, undo log) see a single canonical shape.
+    assert receipt.applied_files == [landed]
+
+
+def test_apply_accepts_vault_relative_paths_for_edits(ephemeral_vault: Path) -> None:
+    """Companion to the new-file case: Edit.path as vault-relative must also
+    be absolutized against vault_root before scope_guard."""
+    target_abs = ephemeral_vault / "research" / "concepts" / "rel-edit.md"
+    target_abs.write_text("---\ntitle: E\n---\n\nold body\n", encoding="utf-8")
+    vw = VaultWriter(vault_root=ephemeral_vault)
+    ps = PatchSet(
+        edits=[Edit(path=Path("research/concepts/rel-edit.md"), old="old body", new="new body")],
+        log_entry="## [2026-04-17 10:01] update | [[rel-edit]]",
+    )
+    vw.apply(ps, allowed_domains=("research",))
+    assert "new body" in target_abs.read_text(encoding="utf-8")
+
+
 def test_atomic_no_partial_state_on_failure(ephemeral_vault: Path) -> None:
     """If one write in a patch fails, earlier writes are rolled back via undo log."""
     vw = VaultWriter(vault_root=ephemeral_vault)

@@ -25,7 +25,6 @@ from typing import Any
 
 import mcp.types as types
 from brain_core.vault.paths import ScopeError
-from brain_core.vault.types import Edit, NewFile, PatchSet
 
 from brain_mcp.tools.base import ToolContext, text_result
 
@@ -71,13 +70,11 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.Text
     if domain not in ctx.allowed_domains:
         raise ScopeError(f"patch targets domain {domain!r} not in allowed {ctx.allowed_domains}")
 
-    # Absolutize any vault-relative paths in the patchset against vault_root.
     # Staging tools (brain_propose_note) record vault-relative paths in the
-    # envelope for portability; VaultWriter requires paths that resolve to
-    # descendants of vault_root. Absolute paths pass through unchanged so
-    # callers who already supplied absolute paths are not broken.
-    resolved_patchset = _absolutize_patchset(envelope.patchset, ctx.vault_root)
-    receipt = ctx.writer.apply(resolved_patchset, allowed_domains=(domain,))
+    # envelope for portability. Plan 04 Task 25 fix: VaultWriter.apply now
+    # absolutizes vault-relative paths against vault_root before scope_guard,
+    # so we can pass the envelope's patchset through unchanged.
+    receipt = ctx.writer.apply(envelope.patchset, allowed_domains=(domain,))
     # Only mark applied after a successful writer.apply. If apply raised, the
     # envelope stays in pending/ — correct, because the patch did not land.
     ctx.pending_store.mark_applied(patch_id)
@@ -94,20 +91,6 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.Text
             "applied_files": applied_rel,
         },
     )
-
-
-def _absolutize_patchset(patchset: PatchSet, vault_root: Path) -> PatchSet:
-    """Return a copy of `patchset` with every NewFile/Edit path absolute under vault_root."""
-    new_files = [
-        NewFile(path=_abs(nf.path, vault_root), content=nf.content) for nf in patchset.new_files
-    ]
-    edits = [Edit(path=_abs(e.path, vault_root), old=e.old, new=e.new) for e in patchset.edits]
-    return patchset.model_copy(update={"new_files": new_files, "edits": edits})
-
-
-def _abs(p: Path, vault_root: Path) -> Path:
-    """Return p absolute; relative paths are joined onto vault_root."""
-    return p if p.is_absolute() else vault_root / p
 
 
 def _rel_to_vault(p: Path, vault_root: Path) -> Path:

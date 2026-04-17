@@ -63,11 +63,24 @@ class VaultWriter:
                 f"patch touches {patch.file_count()} files > limit {self.max_files_per_patch}"
             )
 
+        # Absolutize any vault-relative paths against vault_root BEFORE
+        # scope_guard. ``scope_guard`` calls ``path.resolve()`` which resolves
+        # relative paths against the current working directory, not against
+        # the vault — so a caller that passes ``Path("research/notes/x.md")``
+        # would have previously been rejected as "not inside vault" (or
+        # accepted, in rare CWD-matches-vault cases). Absolute paths pass
+        # through unchanged so existing callers that already resolve paths
+        # themselves are not broken.
+        nf_abs_paths: list[Path] = [
+            self._absolutize(nf.path) for nf in patch.new_files
+        ]
+        edit_abs_paths: list[Path] = [self._absolutize(e.path) for e in patch.edits]
+
         # Pre-validate every path before any mutation.
-        for nf in patch.new_files:
-            scope_guard(nf.path, vault_root=self.vault_root, allowed_domains=allowed_domains)
-        for e in patch.edits:
-            scope_guard(e.path, vault_root=self.vault_root, allowed_domains=allowed_domains)
+        for abs_path in nf_abs_paths:
+            scope_guard(abs_path, vault_root=self.vault_root, allowed_domains=allowed_domains)
+        for abs_path in edit_abs_paths:
+            scope_guard(abs_path, vault_root=self.vault_root, allowed_domains=allowed_domains)
         for ie in patch.index_entries:
             if ie.domain not in allowed_domains:
                 raise PermissionError(
@@ -82,17 +95,17 @@ class VaultWriter:
         lock = FileLock(str(self._locks_dir / "global.lock"))
         with lock.acquire(timeout=30):
             try:
-                for nf in patch.new_files:
-                    undo_records.append((nf.path, None))
-                    self._atomic_write(nf.path, nf.content)
-                    receipt.applied_files.append(nf.path)
-                for e in patch.edits:
-                    prev_text = e.path.read_text(encoding="utf-8")
+                for nf, abs_path in zip(patch.new_files, nf_abs_paths, strict=True):
+                    undo_records.append((abs_path, None))
+                    self._atomic_write(abs_path, nf.content)
+                    receipt.applied_files.append(abs_path)
+                for e, abs_path in zip(patch.edits, edit_abs_paths, strict=True):
+                    prev_text = abs_path.read_text(encoding="utf-8")
                     if e.old not in prev_text:
-                        raise ValueError(f"edit old-text not found in {e.path}")
-                    undo_records.append((e.path, prev_text))
-                    self._atomic_write(e.path, prev_text.replace(e.old, e.new, 1))
-                    receipt.applied_files.append(e.path)
+                        raise ValueError(f"edit old-text not found in {abs_path}")
+                    undo_records.append((abs_path, prev_text))
+                    self._atomic_write(abs_path, prev_text.replace(e.old, e.new, 1))
+                    receipt.applied_files.append(abs_path)
                 for ie in patch.index_entries:
                     idx_path = self.vault_root / ie.domain / "index.md"
                     idx = IndexFile.load(idx_path)
@@ -155,6 +168,17 @@ class VaultWriter:
             undo_id = self._new_undo_id()
             self._write_rename_undo_record(undo_id, src_abs, dst_abs)
         return Receipt(applied_files=[dst_rel], undo_id=undo_id)
+
+    def _absolutize(self, path: Path) -> Path:
+        """Return ``path`` absolute. Relative paths are joined onto vault_root.
+
+        ``scope_guard`` calls ``Path.resolve()`` which resolves relative paths
+        against the current working directory. Callers (MCP, CLI, tests) that
+        construct patches with vault-relative paths would otherwise be rejected
+        because CWD is almost never the vault root. Absolute paths pass through
+        unchanged.
+        """
+        return path if path.is_absolute() else self.vault_root / path
 
     def _atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
