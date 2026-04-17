@@ -37,6 +37,7 @@ from brain_mcp.tools import list_pending_patches as _list_pending_patches_tool
 from brain_mcp.tools import propose_note as _propose_note_tool
 from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools import recent as _recent_tool
+from brain_mcp.tools import reject_patch as _reject_patch_tool
 from brain_mcp.tools import search as _search_tool
 from brain_mcp.tools.base import ToolContext, ToolModule
 
@@ -54,6 +55,7 @@ _TOOL_MODULES: list[ToolModule] = [
     _propose_note_tool,
     _list_pending_patches_tool,
     _apply_patch_tool,
+    _reject_patch_tool,
 ]
 
 
