@@ -42,5 +42,12 @@ def app(seeded_vault: Path) -> FastAPI:
 
 @pytest.fixture
 def client(app: FastAPI) -> TestClient:
-    """Synchronous TestClient for quick REST assertions."""
-    return TestClient(app)
+    """Synchronous TestClient for quick REST assertions.
+
+    ``base_url`` is set to ``http://localhost`` so httpx sends ``Host: localhost``
+    by default. Without this, httpx would send ``Host: testserver`` and Task 8's
+    ``OriginHostMiddleware`` would reject every request as non-loopback. Tests
+    that need to exercise a non-loopback host pass ``headers={"Host": "..."}``
+    explicitly; that override wins.
+    """
+    return TestClient(app, base_url="http://localhost")

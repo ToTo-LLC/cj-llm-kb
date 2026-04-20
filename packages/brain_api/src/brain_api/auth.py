@@ -1,4 +1,4 @@
-"""brain_api auth primitives — token generation, filesystem IO.
+"""brain_api auth primitives — token generation, filesystem IO, middleware.
 
 Task 7 lands the token-file primitives. Task 8 adds Origin/Host middleware;
 Task 9 adds the FastAPI dependency that enforces X-Brain-Token on write routes.
@@ -10,9 +10,23 @@ import contextlib
 import os
 import secrets
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from urllib.parse import urlparse
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp
 
 _TOKEN_FILENAME = "api-secret.txt"
+
+# Methods that don't mutate state — Origin check bypassed (except on WS upgrade,
+# which uses GET at the HTTP layer but IS state-changing at the protocol level).
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Accepted hostnames for Host header (any port) and Origin parsing.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 
 def generate_token() -> str:
@@ -67,3 +81,77 @@ def read_token_file(vault_root: Path) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8").strip()
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """Return True when ``origin`` is ``http(s)://localhost`` or ``http(s)://127.0.0.1``.
+
+    Any port is accepted. Any other hostname — including public IPs that
+    happen to resolve to loopback via a rebinding DNS attack — is rejected.
+    """
+    parsed = urlparse(origin)
+    return parsed.hostname in _LOOPBACK_HOSTS
+
+
+class OriginHostMiddleware(BaseHTTPMiddleware):
+    """Reject non-loopback ``Host`` and cross-origin state-changing requests.
+
+    Defends against two distinct attacks on the local-only API:
+
+    1. **DNS rebinding.** An attacker lures the user to ``evil.example``;
+       the attacker's DNS flips ``evil.example`` to ``127.0.0.1`` after the
+       page loads. The browser keeps the original page's ``Origin`` but now
+       sends requests (with ``Host: evil.example``) to the local API. We
+       reject any non-loopback ``Host`` value to break this attack.
+
+    2. **Cross-origin CSRF.** A malicious page on ``evil.example`` POSTs to
+       ``http://localhost:4317/api/tools/...``. The browser includes the
+       attacker's cookies/credentials but also an ``Origin`` header naming
+       the attacker's site. We reject any non-loopback ``Origin`` on state-
+       changing methods (and on WebSocket upgrades, which share the CSRF
+       shape via the handshake GET).
+
+    Runs at the ASGI layer, so both HTTP and WebSocket connections go
+    through it. Safe methods (GET/HEAD/OPTIONS) bypass the Origin check
+    unless the request is a WebSocket upgrade handshake.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        super().__init__(app)
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        # --- Host header check (always) ---------------------------------
+        host = request.headers.get("host", "")
+        hostname = host.split(":", 1)[0] if host else ""
+        if hostname not in _LOOPBACK_HOSTS:
+            return JSONResponse(
+                {
+                    "error": "refused",
+                    "message": f"host {host!r} is not a loopback address",
+                },
+                status_code=403,
+            )
+
+        # --- Origin header check (state-changing methods + WS upgrades) --
+        # WebSocket handshakes are GET at the HTTP layer but carry
+        # ``Upgrade: websocket``; treat them as state-changing for CSRF
+        # purposes.
+        is_ws_upgrade = "websocket" in request.headers.get("upgrade", "").lower()
+        is_state_changing = request.method not in _SAFE_METHODS
+
+        if is_state_changing or is_ws_upgrade:
+            origin = request.headers.get("origin")
+            if origin is not None and not _is_loopback_origin(origin):
+                return JSONResponse(
+                    {
+                        "error": "refused",
+                        "message": f"origin {origin!r} is not a loopback address",
+                    },
+                    status_code=403,
+                )
+
+        return await call_next(request)

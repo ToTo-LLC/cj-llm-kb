@@ -53,7 +53,9 @@ def test_get_ctx_dependency_resolves(app: FastAPI) -> None:
     ) -> dict[str, object]:
         return {"vault_root": str(ctx.vault_root), "id": id(ctx)}
 
-    with TestClient(app) as c:
+    # base_url="http://localhost" so the default Host header passes Task 8's
+    # OriginHostMiddleware (non-loopback hosts would 403 before the route runs).
+    with TestClient(app, base_url="http://localhost") as c:
         state_id = id(app.state.ctx)
         expected_root = str(app.state.ctx.vault_root)
         response = c.get("/_ctx_echo")

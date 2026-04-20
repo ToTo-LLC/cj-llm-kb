@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from brain_api.auth import OriginHostMiddleware
 from brain_api.context import build_app_context
 from brain_api.routes import health
 from brain_api.routes import tools as tools_routes
@@ -83,6 +84,14 @@ def create_app(
     app.state.vault_root = vault_root
     app.state.allowed_domains = allowed_domains
     app.state.token_override = token_override
+
+    # Install OriginHostMiddleware FIRST so it wraps every subsequent
+    # middleware and router. Starlette applies middleware in reverse of
+    # ``add_middleware`` order, meaning the first-added runs outermost —
+    # exactly what we want for a guard that short-circuits bad requests
+    # before any downstream processing (logging, exception handlers,
+    # auth deps, route dispatch) ever sees them.
+    app.add_middleware(OriginHostMiddleware)
 
     app.include_router(health.router)
     app.include_router(tools_routes.router)
