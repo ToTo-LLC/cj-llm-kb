@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware
 from brain_api.context import build_app_context
+from brain_api.errors import register_error_handlers
 from brain_api.routes import health
 from brain_api.routes import tools as tools_routes
 from brain_api.schema import build_model_from_schema
@@ -106,5 +107,10 @@ def create_app(
 
     app.include_router(health.router)
     app.include_router(tools_routes.router)
+
+    # Task 15: project-wide exception handlers (D7a mapping). Installed AFTER
+    # router include so the handlers wrap every endpoint's exceptions — middleware
+    # (which sits outside routing) remains responsible for its own 403 envelope.
+    register_error_handlers(app)
 
     return app

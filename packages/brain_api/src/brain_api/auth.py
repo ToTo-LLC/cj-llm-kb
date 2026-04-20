@@ -14,12 +14,13 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import Depends, HTTPException, Request, WebSocket
+from fastapi import Depends, Request, WebSocket
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 from brain_api.context import AppContext, get_ctx
+from brain_api.errors import ApiError
 
 _TOKEN_FILENAME = "api-secret.txt"
 
@@ -167,29 +168,23 @@ def require_token(
 
     Compares the request's ``X-Brain-Token`` header against ``ctx.token``
     in constant time via :func:`secrets.compare_digest`. Raises
-    :class:`HTTPException` 403 on missing or mismatched token.
+    :class:`brain_api.errors.ApiError` 403 on missing or mismatched token;
+    the global handler renders it as a flat ``{"error", "message", "detail"}``
+    envelope.
 
     Attach to write endpoints with
     ``dependencies=[Depends(require_token)]``. Task 10 wires it onto
     ``POST /api/tools/{name}``; the liveness probe and the tool listing
     endpoint remain unauthenticated.
-
-    Note: the 403 body is currently ``{"detail": {"error": ..., "message": ...}}``
-    because FastAPI wraps :class:`HTTPException` ``detail`` under a top-level
-    ``detail`` key. Plan 05 Task 15 flattens this via a project-wide exception
-    handler / ``ApiError`` so the envelope matches ``{"error", "message"}``
-    everywhere.
     """
     received = request.headers.get("x-brain-token", "")
     expected = ctx.token or ""
 
     if not received or not expected or not secrets.compare_digest(received, expected):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "refused",
-                "message": "missing or invalid X-Brain-Token header",
-            },
+        raise ApiError(
+            status=403,
+            code="refused",
+            message="missing or invalid X-Brain-Token header",
         )
 
 
@@ -212,11 +207,9 @@ def enforce_json_accept(request: Request) -> None:
     Missing Accept is treated as ``*/*`` per RFC 7231 §5.3.2 and per every HTTP
     client's default behavior.
 
-    Note: the 406 body is currently ``{"detail": {"error": ..., "message": ...}}``
-    because FastAPI wraps :class:`HTTPException` ``detail`` under a top-level
-    ``detail`` key. Plan 05 Task 15 flattens this via a project-wide exception
-    handler / ``ApiError`` so the envelope matches ``{"error", "message"}``
-    everywhere.
+    Raises :class:`brain_api.errors.ApiError` 406 on a narrow non-JSON Accept;
+    the global handler renders it as a flat ``{"error", "message", "detail"}``
+    envelope.
     """
     accept = request.headers.get("accept", "")
     if not accept:
@@ -224,12 +217,10 @@ def enforce_json_accept(request: Request) -> None:
     accept_lc = accept.lower()
     if "application/json" in accept_lc or "*/*" in accept_lc or "application/*" in accept_lc:
         return
-    raise HTTPException(
-        status_code=406,
-        detail={
-            "error": "not_acceptable",
-            "message": "this API speaks only application/json",
-        },
+    raise ApiError(
+        status=406,
+        code="not_acceptable",
+        message="this API speaks only application/json",
     )
 
 

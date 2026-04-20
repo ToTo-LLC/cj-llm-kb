@@ -15,15 +15,10 @@ full vault layout (``raw/inbox/``, ``research/sources/``, etc.) we augment the
 seeded vault in-place -- the ``app`` fixture already bound ``vault_root`` to
 it at lifespan, so mutations after construction are visible to handlers.
 
-The two ``*_currently_500`` tests document today's state: unhandled
-``ScopeError`` / ``KeyError`` bubbles up through Starlette's default
-``ServerErrorMiddleware`` as 500. Task 15 installs structured handlers that
-turn those into 403/404; these tests flip sign at that point. The matching
-``*_eventually_403`` / ``*_eventually_404`` tests wear ``xfail(strict=False)``
-so they run (catching regressions on the *happy* path) but don't gate the
-suite red pre-Task-15. The ``currently_500`` tests instantiate a dedicated
-``TestClient(raise_server_exceptions=False)`` so the 500 surfaces as a
-status code rather than re-raising into pytest.
+Task 15 installed :func:`brain_api.errors.register_error_handlers`, which
+turns unhandled ``ScopeError`` into 403 ``scope`` and ``KeyError`` into 404
+``not_found``. The reject-path tests below pin that mapping; the paired
+``*_currently_500`` tests (pre-Task-15 pins) have been deleted.
 """
 
 from __future__ import annotations
@@ -331,47 +326,33 @@ def test_brain_config_set(api: ApiClient) -> None:
 # ---------------------------------------------------------------------------
 # Reject-path spot checks.
 #
-# The ``*_currently_500`` tests pin today's state (unhandled domain errors
-# propagate to Starlette's default 500 handler). Task 15 installs a
-# project-wide exception handler that turns ScopeError → 403 and KeyError →
-# 404; the matching ``*_eventually_403`` / ``*_eventually_404`` tests use
-# ``xfail(strict=False)`` so they run (catching accidental regressions on
-# the already-handled paths) without gating the suite red.
+# Task 15 wired :func:`brain_api.errors.register_error_handlers`, which turns
+# unhandled ``ScopeError`` into 403 ``scope`` and unknown-patch ``KeyError``
+# into 404 ``not_found``. The flat envelope is ``{"error", "message", "detail"}``
+# — no ``detail``-wrap anymore.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=False, reason="Task 15 will tighten unhandled ScopeError to 403")
-def test_read_note_out_of_scope_eventually_403(api: ApiClient) -> None:
-    """After Task 15: reading personal/ from a research-scoped app → 403."""
+def test_read_note_out_of_scope_is_403(api: ApiClient) -> None:
+    """Reading ``personal/`` from a research-scoped app → 403 ``scope``.
+
+    The handler raises :class:`brain_core.vault.paths.ScopeError`; the Task 15
+    handler maps it to 403 with ``error == "scope"`` at the top level of the
+    response body.
+    """
     r = api.call("brain_read_note", {"path": "personal/notes/secret.md"})
     assert r.status_code == 403
-
-
-def test_read_note_out_of_scope_currently_500(app: FastAPI) -> None:
-    """Pre-Task-15: uncaught ScopeError surfaces as 500.
-
-    Uses ``raise_server_exceptions=False`` so Starlette's default 500 path
-    returns a status code rather than re-raising into pytest. Task 15
-    DELETES this test and un-xfails ``*_eventually_403``.
-    """
-    with TestClient(app, base_url="http://localhost", raise_server_exceptions=False) as base:
-        token = app.state.ctx.token
-        response = base.post(
-            "/api/tools/brain_read_note",
-            json={"path": "personal/notes/secret.md"},
-            headers={
-                "Origin": "http://localhost:4317",
-                "X-Brain-Token": token,
-            },
-        )
-    assert response.status_code == 500
+    assert r.json()["error"] == "scope"
 
 
 def test_propose_note_missing_reason_is_400(api: ApiClient) -> None:
     """Task 11 Pydantic validation catches a missing required field → 400.
 
     ``brain_propose_note`` requires ``path``, ``content``, and ``reason``.
-    Sending only the first two must be rejected before the handler runs.
+    Sending only the first two must be rejected before the handler runs. Task
+    15 lets the :class:`pydantic.ValidationError` bubble; the global handler
+    renders the flat ``{"error": "invalid_input", ...}`` envelope with the
+    canonical ``errors()`` list under ``detail.errors``.
     """
     r = api.call(
         "brain_propose_note",
@@ -379,33 +360,19 @@ def test_propose_note_missing_reason_is_400(api: ApiClient) -> None:
     )
     assert r.status_code == 400
     body = r.json()
-    # Task 15 flattens ``{"detail": {...}}`` to ``{"error", "message"}``;
-    # until then pin the current shape so field-level errors are parseable.
-    assert body["detail"]["error"] == "invalid_input"
+    assert body["error"] == "invalid_input"
+    # Pydantic's canonical errors list lives under ``detail.errors`` — that
+    # nesting is intentional (structured payload, not a prose message).
+    assert isinstance(body["detail"]["errors"], list)
+    assert body["detail"]["errors"], "errors list should not be empty"
 
 
-@pytest.mark.xfail(strict=False, reason="Task 15 will tighten unhandled KeyError to 404")
-def test_apply_unknown_patch_eventually_404(api: ApiClient) -> None:
-    """After Task 15: unknown patch_id → 404."""
+def test_apply_unknown_patch_is_404(api: ApiClient) -> None:
+    """Unknown patch_id → 404 ``not_found``.
+
+    The handler raises ``KeyError(...)`` from the pending-patch store; Task 15
+    maps it to 404 with the flat ``{"error": "not_found", ...}`` envelope.
+    """
     r = api.call("brain_apply_patch", {"patch_id": "does-not-exist"})
     assert r.status_code == 404
-
-
-def test_apply_unknown_patch_currently_500(app: FastAPI) -> None:
-    """Pre-Task-15: uncaught KeyError surfaces as 500.
-
-    Uses ``raise_server_exceptions=False`` for the same reason as the scope
-    reject test. Task 15 DELETES this test and un-xfails
-    ``*_eventually_404``.
-    """
-    with TestClient(app, base_url="http://localhost", raise_server_exceptions=False) as base:
-        token = app.state.ctx.token
-        response = base.post(
-            "/api/tools/brain_apply_patch",
-            json={"patch_id": "does-not-exist"},
-            headers={
-                "Origin": "http://localhost:4317",
-                "X-Brain-Token": token,
-            },
-        )
-    assert response.status_code == 500
+    assert r.json()["error"] == "not_found"

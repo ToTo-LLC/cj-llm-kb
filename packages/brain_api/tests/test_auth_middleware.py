@@ -66,10 +66,12 @@ class TestOriginValidation:
     def test_post_with_localhost_origin_allowed_through_middleware(self, app: FastAPI) -> None:
         """Localhost Origin passes the middleware; downstream handlers take over.
 
-        Post-Task-10 the POST /api/tools/{name} dispatcher exists, so this hits
-        ``require_token`` which returns 403 with ``{"detail": {"error": "refused"}}``
-        (double-wrapped; Task 15 flattens). The middleware 403 envelope is
-        ``{"error": "refused"}`` at the top level — distinguishable. Requires
+        The POST /api/tools/{name} dispatcher exists, so this hits
+        ``enforce_json_accept`` (ok, no Accept) then ``require_token`` (403:
+        missing token). Post-Task-15 both middleware and require_token use the
+        same flat envelope, so we distinguish by message content: the
+        middleware refers to ``host``/``origin`` values, while ``require_token``
+        names the missing ``X-Brain-Token`` header. Requires
         ``with TestClient(app)`` so the lifespan populates ``app.state.ctx``.
         """
         with TestClient(app, base_url="http://localhost") as fresh:
@@ -78,17 +80,23 @@ class TestOriginValidation:
                 json={},
                 headers={"Origin": "http://localhost:4317"},
             )
-        # Middleware accepts; any 403 here comes from require_token (wrapped in
-        # "detail"), not from the middleware (top-level "error": "refused").
-        assert "error" not in response.json() or response.json().get("error") != "refused"
+        # Middleware accepts; any 403 here is from require_token downstream,
+        # which names the missing header, not an origin/host value.
+        body = response.json()
+        message = body.get("message", "").lower()
+        assert "origin" not in message
+        assert "host" not in message
 
     def test_post_with_null_origin_allowed(self, app: FastAPI) -> None:
         """Native clients (curl, CLI) send no Origin header — allowed by middleware."""
         with TestClient(app, base_url="http://localhost") as fresh:
             response = fresh.post("/api/tools/_synthetic_write", json={})
-        # Middleware accepts; any 403 here comes from require_token (wrapped in
-        # "detail"), not from the middleware (top-level "error": "refused").
-        assert "error" not in response.json() or response.json().get("error") != "refused"
+        # Middleware accepts; see the comment on the previous test for why we
+        # check the message content rather than the error code.
+        body = response.json()
+        message = body.get("message", "").lower()
+        assert "origin" not in message
+        assert "host" not in message
 
     def test_post_with_127_origin_allowed(self, app: FastAPI) -> None:
         """Bonus: 127.0.0.1 origin also passes the middleware."""
@@ -98,6 +106,9 @@ class TestOriginValidation:
                 json={},
                 headers={"Origin": "http://127.0.0.1:4317"},
             )
-        # Middleware accepts; any 403 here comes from require_token (wrapped in
-        # "detail"), not from the middleware (top-level "error": "refused").
-        assert "error" not in response.json() or response.json().get("error") != "refused"
+        # Middleware accepts; see the comment on the first test in this block
+        # for why we check the message content rather than the error code.
+        body = response.json()
+        message = body.get("message", "").lower()
+        assert "origin" not in message
+        assert "host" not in message

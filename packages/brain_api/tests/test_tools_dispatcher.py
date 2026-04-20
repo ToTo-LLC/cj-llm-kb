@@ -1,10 +1,12 @@
-"""Tests for POST /api/tools/<name> dispatcher — Task 10 (validation follows in Task 11).
+"""Tests for POST /api/tools/<name> dispatcher.
 
-The Task 10 dispatcher is deliberately a bare passthrough: request body is a
-``dict[str, Any]`` handed straight to ``module.handle(body, ctx.tool_ctx)``.
-Task 11 wraps this with Pydantic validation against each tool's INPUT_SCHEMA;
-these tests pin the current shape (200 on happy path, 404 on unknown tool, 403
-on missing token or wrong Origin).
+Task 10 landed the dispatcher; Task 11 added Pydantic validation against each
+tool's INPUT_SCHEMA; Task 12 pinned the response envelope; Task 15 wired the
+project-wide exception handlers that turn every 4xx into the flat
+``{"error", "message", "detail"}`` shape (no double-nested ``detail`` wrap).
+These tests pin all four contracts: 200 on happy path, 400 on validation
+failure, 403 on missing token / wrong Origin, 404 on unknown tool, 406 on
+narrow Accept header.
 
 The TestClient re-entry pattern (``with TestClient(app) as fresh``) is needed
 wherever the test reads ``app.state.ctx.token`` — the token is populated by
@@ -50,10 +52,10 @@ def test_unknown_tool_returns_404(app: FastAPI) -> None:
         )
     assert response.status_code == 404
     body = response.json()
-    # Task 15 flattens the double-wrapped detail envelope; until then the shape
-    # is {"detail": {"error": "not_found", "message": ...}}.
-    assert body["detail"]["error"] == "not_found"
-    assert "nonexistent_tool" in body["detail"]["message"]
+    # Task 15 flattened the envelope: top-level "error" / "message"; no
+    # ``detail`` wrap. Shape is {"error": "not_found", "message": ..., "detail": None}.
+    assert body["error"] == "not_found"
+    assert "nonexistent_tool" in body["message"]
 
 
 def test_missing_token_rejected_before_dispatch(app: FastAPI) -> None:
@@ -106,9 +108,10 @@ def test_missing_required_field_returns_400(app: FastAPI) -> None:
         )
     assert response.status_code == 400
     body = response.json()
-    # Task 15 will flatten the ``{"detail": {...}}`` wrap; until then pin
-    # the current shape so callers can parse field-level errors.
-    assert body["detail"]["error"] == "invalid_input"
+    # Task 15 flattened the envelope: top-level "error" / "message"; the
+    # Pydantic errors() list stays nested under "detail.errors" (structured
+    # payload, not a prose message).
+    assert body["error"] == "invalid_input"
     assert isinstance(body["detail"]["errors"], list)
     assert body["detail"]["errors"], "errors list should not be empty"
 
@@ -132,7 +135,7 @@ def test_wrong_type_returns_400(app: FastAPI) -> None:
         )
     assert response.status_code == 400
     body = response.json()
-    assert body["detail"]["error"] == "invalid_input"
+    assert body["error"] == "invalid_input"
 
 
 def test_response_shape_is_envelope(app: FastAPI) -> None:

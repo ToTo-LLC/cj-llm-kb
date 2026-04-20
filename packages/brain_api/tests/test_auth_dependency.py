@@ -33,8 +33,10 @@ def test_missing_token_rejected(app: FastAPI) -> None:
         )
     assert response.status_code == 403
     body = response.json()
-    assert body["detail"]["error"] == "refused"
-    assert "X-Brain-Token" in body["detail"]["message"]
+    # Task 15 flattened the envelope — top-level "error" / "message", no
+    # "detail" wrap. Matches the shape every other brain_api 4xx emits.
+    assert body["error"] == "refused"
+    assert "X-Brain-Token" in body["message"]
 
 
 def test_wrong_token_rejected(app: FastAPI) -> None:
@@ -50,7 +52,7 @@ def test_wrong_token_rejected(app: FastAPI) -> None:
         )
     assert response.status_code == 403
     body = response.json()
-    assert body["detail"]["error"] == "refused"
+    assert body["error"] == "refused"
 
 
 def test_correct_token_accepted(app: FastAPI) -> None:

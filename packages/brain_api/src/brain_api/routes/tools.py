@@ -10,12 +10,12 @@ from typing import Any
 
 from brain_core import tools as tools_registry
 from brain_core.tools.base import ToolResult
-from fastapi import APIRouter, Body, Depends, HTTPException
-from pydantic import ValidationError
+from fastapi import APIRouter, Body, Depends
 from starlette.requests import Request
 
 from brain_api.auth import enforce_json_accept, require_token
 from brain_api.context import AppContext, get_ctx
+from brain_api.errors import ApiError
 from brain_api.responses import ErrorResponse, ToolResponse
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -83,37 +83,32 @@ async def call_tool(
     The handler receives ``ctx.tool_ctx`` (the embedded ``ToolContext``), not
     the full ``AppContext`` — tool handlers know nothing about HTTP / FastAPI.
 
-    Note: both the 400 and 404 bodies are currently ``{"detail": {...}}``
-    because FastAPI wraps :class:`HTTPException` detail under a top-level
-    ``detail`` key. Plan 05 Task 15 flattens this via a project-wide exception
-    handler so the envelope matches ``{"error", "message"}`` everywhere.
+    Task 15 wires the project-wide exception handlers. Both the 404 (unknown
+    tool) and the 400 (INPUT_SCHEMA validation) now render as the flat
+    ``{"error", "message", "detail"}`` envelope: the 404 via :class:`ApiError`
+    raised here, the 400 via a bare :class:`pydantic.ValidationError` that
+    bubbles out of ``model_validate`` and is mapped by
+    :func:`brain_api.errors.register_error_handlers`.
     """
     module = ctx.tool_by_name.get(name)
     if module is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "not_found",
-                "message": f"tool {name!r} is not registered",
-            },
+        raise ApiError(
+            status=404,
+            code="not_found",
+            message=f"tool {name!r} is not registered",
         )
 
     # Validate the body against the tool's INPUT_SCHEMA. Models are built
     # once at lifespan startup (app.state.tool_models); a KeyError here would
     # indicate a registration mismatch between ctx.tool_by_name and the
     # startup builder — fail loud (500) rather than mask as 404.
+    #
+    # ``ValidationError`` bubbles out by design: the global handler in
+    # ``brain_api.errors`` maps it to a 400 with ``detail.errors`` carrying
+    # Pydantic's canonical ``errors()`` list, so the flat envelope is
+    # consistent with every other 400 the API emits.
     model_cls = request.app.state.tool_models[name]
-    try:
-        validated = model_cls.model_validate(body)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_input",
-                "message": f"request body does not match {name!r} INPUT_SCHEMA",
-                "errors": exc.errors(),
-            },
-        ) from exc
+    validated = model_cls.model_validate(body)
 
     # ``exclude_none=True`` strips optional fields that defaulted to None so
     # handlers see the same dict shape they did under Task 10's passthrough.
