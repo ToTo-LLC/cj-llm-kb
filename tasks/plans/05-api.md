@@ -3366,3 +3366,906 @@ Main loop reviews:
 Before Task 14, main loop confirms the dispatcher contract is locked — Task 15's error tightening will touch every tool test, but the dispatcher body itself shouldn't change.
 
 ---
+
+### Group 5 — Error surface + `RateLimitError` promotion (Tasks 14–16)
+
+**Checkpoint after Task 16:** main-loop reviews the end-to-end error contract — every raising path across `brain_core.tools.*` has a deterministic HTTP mapping, `/docs` shows error shapes for every operation, no `{"detail": {...}}` double-wrap bleeds into responses. Plan 04's rate-limiting inline-JSON pattern (`return text_result("rate limited", ...)`) is replaced by a raised `RateLimitError` exception — strictly additive to `brain_mcp` (the shims catch + convert to preserve Plan 04 behavior).
+
+**Cross-plan change (Task 14):** `brain_mcp.rate_limit` module moves to `brain_core.rate_limit`. Rationale: `brain_api` and `brain_mcp` both need the `RateLimiter` + `RateLimitError`; both can't depend on each other. Move the contract home to `brain_core`; `brain_mcp.rate_limit` becomes a 3-line re-export for any external consumer. Tests relocate with the code — the 9 Plan 04 `brain_mcp/tests/test_rate_limit.py` tests move to `brain_core/tests/test_rate_limit.py` and the two that assert `check() returns False` are flipped to `pytest.raises(RateLimitError)`.
+
+---
+
+### Task 14 — Promote `RateLimitError` to `brain_core.rate_limit`
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/rate_limit.py` — `RateLimitConfig`, `RateLimitError`, `RateLimiter`
+- Delete content / convert to re-export: `packages/brain_mcp/src/brain_mcp/rate_limit.py` — 3-line shim
+- Move: `packages/brain_mcp/tests/test_rate_limit.py` → `packages/brain_core/tests/test_rate_limit.py` (update assertions to new raising behavior)
+- Modify: all `brain_core/tools/*.py` that call `ctx.rate_limiter.check(...)` — remove the inline-JSON rate-limited return; let the exception propagate
+- Modify: all `brain_mcp/tools/*.py` shim templates — wrap the `_core_handle` call with `try/except RateLimitError` → inline-JSON (preserves Plan 04 brain_mcp tests)
+- Modify: `packages/brain_api/src/brain_api/context.py` — import `RateLimiter` from `brain_core.rate_limit` instead of `brain_mcp.rate_limit`
+- Modify: `packages/brain_api/pyproject.toml` — drop `brain_mcp` from `[project].dependencies` (it's no longer needed; Task 1's temporary dep can retire)
+
+**Context for the implementer:**
+
+The current `RateLimiter.check(bucket, cost) -> bool` signature is awkward: every tool handler contains the same 5-line "if not check: return inline-JSON" pattern. Replacing the bool return with an exception raise collapses that into a single `ctx.rate_limiter.check("patches", cost=1)` line (no return-early, no if-guard). Exceptional conditions use exceptions.
+
+The migration is strictly additive for Plan 04 behavior via the MCP shim conversion pattern:
+
+```python
+# brain_core/tools/propose_note.py — simplified (no more if-guard):
+async def handle(arguments, ctx):
+    ctx.rate_limiter.check("patches", cost=1)  # raises RateLimitError
+    # ... rest of handler unchanged ...
+    return ToolResult(text=..., data=...)
+
+# brain_mcp/tools/propose_note.py shim — catch + convert:
+async def handle(arguments, ctx):
+    try:
+        result = await _core_handle(arguments, ctx)
+    except RateLimitError as exc:
+        return text_result(
+            f"rate limited ({exc.bucket}/min)",
+            data={"status": "rate_limited", "bucket": exc.bucket, "retry_after_seconds": exc.retry_after_seconds},
+        )
+    return text_result(result)
+```
+
+Every existing Plan 04 brain_mcp rate-limit test (`test_ingest_rate_limited_patches`, `test_apply_rate_limited`, `test_classify_rate_limited`, `test_rate_limit_patches_bucket` in propose_note) continues to pass — they call `await handle(args, ctx)` with a drained limiter and assert `data["status"] == "rate_limited"`. The shim's try/except produces that exact envelope.
+
+`brain_api`'s dispatcher does NOT catch — the exception propagates to Task 15's global handler, which maps to HTTP 429.
+
+### Step 1 — Failing tests
+
+`packages/brain_core/tests/test_rate_limit.py` (move + update from brain_mcp):
+
+```python
+"""Tests for brain_core.rate_limit — moved from brain_mcp Plan 04 Task 2.
+
+Update: check() now raises RateLimitError instead of returning False.
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+from brain_core.rate_limit import RateLimitConfig, RateLimitError, RateLimiter
+
+
+def test_check_within_budget_does_not_raise() -> None:
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=10))
+    # Returns None on success (no value); absence of raise is the contract.
+    limiter.check("patches", cost=1)
+    limiter.check("patches", cost=1)
+
+
+def test_check_over_budget_raises_with_bucket_name() -> None:
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=1))
+    limiter.check("patches", cost=1)  # drain
+    with pytest.raises(RateLimitError) as exc_info:
+        limiter.check("patches", cost=1)
+    assert exc_info.value.bucket == "patches"
+    assert exc_info.value.retry_after_seconds >= 0
+
+
+def test_rate_limit_error_exposes_retry_after() -> None:
+    err = RateLimitError(bucket="patches", retry_after_seconds=42)
+    assert err.bucket == "patches"
+    assert err.retry_after_seconds == 42
+    assert "patches" in str(err)
+
+
+def test_separate_buckets_independent() -> None:
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=1, tokens_per_minute=1000))
+    limiter.check("patches", cost=1)  # drain patches
+    # tokens unaffected.
+    limiter.check("tokens", cost=500)
+
+
+def test_tokens_bucket_drains_by_cost() -> None:
+    limiter = RateLimiter(RateLimitConfig(tokens_per_minute=1000))
+    limiter.check("tokens", cost=700)
+    limiter.check("tokens", cost=200)  # total 900 — still OK
+    with pytest.raises(RateLimitError):
+        limiter.check("tokens", cost=200)  # total 1100 — over
+
+
+def test_refill_over_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tokens refill at config.<bucket>_per_minute / 60 per second."""
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=60))  # 1 patch/sec
+    limiter.check("patches", cost=1)  # drain
+    # Fast-forward 30 seconds — should have 30 patches back.
+    for _ in range(29):  # 30 total (incl. first post-refill call)
+        pass
+    # Simplest: monkeypatch time.monotonic.
+    start = time.monotonic()
+    monkeypatch.setattr(
+        "brain_core.rate_limit.time.monotonic",
+        lambda: start + 30.0,
+    )
+    for _ in range(30):
+        limiter.check("patches", cost=1)
+    # 31st should fail.
+    with pytest.raises(RateLimitError):
+        limiter.check("patches", cost=1)
+
+
+def test_unknown_bucket_raises_value_error() -> None:
+    limiter = RateLimiter(RateLimitConfig())
+    with pytest.raises(ValueError):
+        limiter.check("unknown_bucket", cost=1)
+
+
+def test_config_defaults_sane() -> None:
+    cfg = RateLimitConfig()
+    assert cfg.patches_per_minute > 0
+    assert cfg.tokens_per_minute > 0
+```
+
+### Step 2 — Implement `brain_core/rate_limit.py`
+
+Move `packages/brain_mcp/src/brain_mcp/rate_limit.py` → `packages/brain_core/src/brain_core/rate_limit.py`. Then rewrite `check`:
+
+```python
+"""Token-bucket rate limiter for per-app / per-session limits.
+
+Plan 05 Task 14: moved from brain_mcp.rate_limit (was Plan 04 Task 2). The
+signature change is strictly additive — check() now raises RateLimitError
+instead of returning False. brain_mcp shims catch + convert to preserve
+Plan 04's inline-JSON behavior.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RateLimitConfig:
+    patches_per_minute: int = 20
+    tokens_per_minute: int = 100_000
+
+
+class RateLimitError(Exception):
+    """Raised by RateLimiter.check when the bucket lacks sufficient capacity.
+
+    Attributes:
+        bucket: Which bucket ran out (e.g. "patches", "tokens").
+        retry_after_seconds: Approximate seconds until enough capacity refills.
+            Always non-negative; 0 means "barely over — retry immediately".
+    """
+
+    def __init__(self, bucket: str, retry_after_seconds: int) -> None:
+        self.bucket = bucket
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"rate limited on {bucket!r} bucket, retry after ~{retry_after_seconds}s")
+
+
+class RateLimiter:
+    """Token-bucket over (patches_per_minute, tokens_per_minute).
+
+    State is in-memory per-instance. Lost on process restart (acceptable for
+    a single-user local tool; documented in CLAUDE.md principle #5).
+    """
+
+    def __init__(self, config: RateLimitConfig) -> None:
+        self._config = config
+        self._caps = {
+            "patches": float(config.patches_per_minute),
+            "tokens": float(config.tokens_per_minute),
+        }
+        self._remaining: dict[str, float] = dict(self._caps)
+        self._last_refill = time.monotonic()
+
+    def check(self, bucket: str, *, cost: int | float = 1) -> None:
+        """Consume `cost` from `bucket`. Raises RateLimitError if insufficient.
+
+        Refills buckets at `cap / 60` per second since the last call.
+        """
+        if bucket not in self._caps:
+            raise ValueError(f"unknown rate-limit bucket: {bucket!r}")
+
+        self._refill()
+
+        remaining = self._remaining[bucket]
+        if remaining < cost:
+            cap = self._caps[bucket]
+            # Time until `cost` is available: (cost - remaining) / (cap / 60) seconds.
+            refill_rate = cap / 60.0 if cap > 0 else 1.0
+            retry = max(0, int((cost - remaining) / refill_rate) + 1)
+            raise RateLimitError(bucket=bucket, retry_after_seconds=retry)
+
+        self._remaining[bucket] = remaining - cost
+
+    def _refill(self) -> None:
+        now = time.monotonic()
+        elapsed = max(0.0, now - self._last_refill)
+        self._last_refill = now
+        for bucket, cap in self._caps.items():
+            refill = (cap / 60.0) * elapsed
+            self._remaining[bucket] = min(cap, self._remaining[bucket] + refill)
+```
+
+Previous concerns tracked from Plan 04 Task 25 (still deferred):
+- `_Bucket` dataclass refactor — defer
+- Unused `_config` field — keep as `self._config = config` for Plan 07's Settings page readback
+
+### Step 3 — Rewrite `brain_mcp/rate_limit.py` as re-export
+
+```python
+"""brain_mcp.rate_limit — re-export from brain_core.rate_limit.
+
+Plan 05 Task 14 moved the real implementation to brain_core. This module
+exists for backwards compatibility with any brain_mcp consumer that
+imports from the Plan 04 location.
+"""
+
+from brain_core.rate_limit import RateLimitConfig, RateLimitError, RateLimiter
+
+__all__ = ["RateLimitConfig", "RateLimitError", "RateLimiter"]
+```
+
+### Step 4 — Update `brain_core.tools.*` rate-limit call sites
+
+In every `brain_core/tools/<name>.py` that currently has:
+
+```python
+if not ctx.rate_limiter.check("patches", cost=1):
+    return ToolResult(text="rate limited (patches/min)", data={"status": "rate_limited", "bucket": "patches"})
+```
+
+Replace with a single line:
+
+```python
+ctx.rate_limiter.check("patches", cost=1)  # raises RateLimitError on drain
+```
+
+Affected tools (grep for `rate_limiter.check` in `brain_core/tools/`): `ingest`, `classify`, `propose_note`, `apply_patch`, possibly `bulk_import`. Preserve comment hygiene — a single inline comment `# raises RateLimitError on drain` is enough.
+
+### Step 5 — Update `brain_mcp/tools/*.py` shim template
+
+The 7-line shim from the Group 2 shared pattern becomes ~15 lines with the try/except:
+
+```python
+"""MCP transport shim for brain_<name>. Real handler in brain_core.tools.<name>."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.rate_limit import RateLimitError
+from brain_core.tools.<name> import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.<name> import handle as _core_handle
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
+
+
+async def handle(
+    arguments: dict[str, Any], ctx: ToolContext
+) -> list[types.TextContent]:
+    """Delegate to brain_core; convert RateLimitError to Plan 04 inline-JSON shape."""
+    try:
+        result = await _core_handle(arguments, ctx)
+    except RateLimitError as exc:
+        return text_result(
+            f"rate limited ({exc.bucket}/min)",
+            data={
+                "status": "rate_limited",
+                "bucket": exc.bucket,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+        )
+    return text_result(result)
+```
+
+Apply to all 18 shims — only the 5-6 that actually raise need the catch, but applying uniformly keeps the shim pattern single-shape (readers don't have to know which tools rate-limit).
+
+### Step 6 — Drop `brain_api → brain_mcp` dep
+
+Modify `packages/brain_api/pyproject.toml`:
+
+```toml
+dependencies = [
+    "brain_core",
+    # "brain_mcp",  # REMOVED — Task 14 moved RateLimiter to brain_core
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+]
+```
+
+Modify `packages/brain_api/src/brain_api/context.py` imports:
+
+```python
+# Was:
+# from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+# from brain_mcp.tools.base import ToolContext
+
+# Now:
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
+from brain_core.tools.base import ToolContext
+```
+
+### Step 7 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_core --reinstall-package brain_mcp --reinstall-package brain_api
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_mcp packages/brain_api -v
+```
+
+Expect:
+- brain_core: **~390 passed + 5 skipped** (382 prior + 8 rate_limit tests relocated from brain_mcp)
+- brain_mcp: **~94 passed** (102 prior – 8 relocated rate_limit tests = 94; every tool test still passes via shim conversion)
+- brain_api: **~85 passed** (unchanged — `RateLimiter` import path is the only touch)
+- Combined: **~569 passed + 8 skipped** (slight decrease from the relocation; no net new tests beyond the 8 relocated)
+
+All gates clean. Commit:
+
+```bash
+git commit -m "refactor(core): plan 05 task 14 — promote RateLimitError to brain_core; check() raises"
+```
+
+---
+
+### Task 15 — Global exception handlers in `brain_api.errors`
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/errors.py` — 8 exception handlers + `register_error_handlers(app)`
+- Modify: `packages/brain_api/src/brain_api/app.py` — call `register_error_handlers(app)` after middleware install
+- Modify: `packages/brain_api/src/brain_api/auth.py` — replace `HTTPException(detail={"error": ..., "message": ...})` sites with a new `ApiError(code, message, status)` that Task 15's HTTPException handler unwraps cleanly
+- Modify: `packages/brain_api/src/brain_api/routes/tools.py` — use `ApiError` for 404 not-found + 400 validation
+- Create: `packages/brain_api/tests/test_errors.py`
+- Modify: `packages/brain_api/tests/test_tool_endpoints.py` — flip `xfail` → `pass` for out-of-scope + unknown-patch cases
+
+**Context for the implementer:**
+
+Task 15 rationalizes three things:
+
+1. **Every brain_core exception has a deterministic HTTP mapping** per D7a table:
+   | Exception | HTTP | Error code |
+   |---|---|---|
+   | `ScopeError` (`brain_core.vault.paths`) | 403 | `scope` |
+   | `FileNotFoundError` | 404 | `not_found` |
+   | `KeyError` | 404 | `not_found` |
+   | `ValueError` | 400 | `invalid_input` |
+   | `PermissionError` | 403 | `refused` |
+   | `RateLimitError` (`brain_core.rate_limit`) | 429 | `rate_limited` (body includes `retry_after_seconds`) |
+   | `pydantic.ValidationError` | 400 | `invalid_input` (body includes `errors: [...]`) |
+   | Uncaught `Exception` | 500 | `internal` |
+
+2. **Response envelope is flat** (`ErrorResponse` from Task 12): `{"error": "<code>", "message": "<plain>", "detail": <optional>}`. Replace the `HTTPException(detail={"error": ..., "message": ...})` pattern from Tasks 9/10 (which produces `{"detail": {...}}`) with a custom `ApiError` that renders flat.
+
+3. **No traceback in response bodies.** 500 always returns `{"error": "internal", "message": "unexpected error"}`. The real traceback goes to the logger.
+
+**`ApiError` custom exception:**
+
+```python
+class ApiError(Exception):
+    """Application-level error that maps to a specific HTTP status + error code."""
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        code: str,
+        message: str,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        self.status = status
+        self.code = code
+        self.message = message
+        self.detail = detail
+        super().__init__(f"{code}: {message}")
+```
+
+Task 9's `require_token` + Task 10's 404 + Task 11's validation switch from `HTTPException` to `ApiError`. The handler for `ApiError` returns `JSONResponse({"error": code, "message": message, "detail": detail}, status_code=status)` — flat envelope.
+
+**Retry-After header for 429:** convention. `RateLimitError(retry_after_seconds=60)` sets both the response body field AND the `Retry-After: 60` response header. Browsers / curl / the frontend all respect the header natively.
+
+### Step 1 — Failing tests
+
+`packages/brain_api/tests/test_errors.py`:
+
+```python
+"""Tests for global exception handlers in brain_api.errors."""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from brain_api.errors import ApiError
+
+
+def _attach_failing_route(app: FastAPI, exc_factory) -> None:
+    """Mount a synthetic route that raises the given exception on GET."""
+
+    @app.get("/_boom")
+    async def boom():
+        raise exc_factory()
+
+
+def test_scope_error_maps_to_403(app: FastAPI) -> None:
+    from brain_core.vault.paths import ScopeError
+
+    _attach_failing_route(app, lambda: ScopeError("domain 'personal' is out of scope"))
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"] == "scope"
+    assert "personal" in body["message"]
+
+
+def test_file_not_found_maps_to_404(app: FastAPI) -> None:
+    _attach_failing_route(app, lambda: FileNotFoundError("note 'x' not found"))
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"
+
+
+def test_key_error_maps_to_404(app: FastAPI) -> None:
+    _attach_failing_route(app, lambda: KeyError("patch_id 'abc' not in store"))
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"
+
+
+def test_value_error_maps_to_400(app: FastAPI) -> None:
+    _attach_failing_route(app, lambda: ValueError("path must be vault-relative"))
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_input"
+
+
+def test_permission_error_maps_to_403(app: FastAPI) -> None:
+    _attach_failing_route(app, lambda: PermissionError("refusing to expose secret key"))
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 403
+    assert response.json()["error"] == "refused"
+
+
+def test_rate_limit_error_maps_to_429_with_header(app: FastAPI) -> None:
+    from brain_core.rate_limit import RateLimitError
+
+    _attach_failing_route(
+        app, lambda: RateLimitError(bucket="patches", retry_after_seconds=42)
+    )
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "42"
+    body = response.json()
+    assert body["error"] == "rate_limited"
+    assert body["detail"]["bucket"] == "patches"
+    assert body["detail"]["retry_after_seconds"] == 42
+
+
+def test_uncaught_exception_maps_to_500_no_traceback(app: FastAPI) -> None:
+    _attach_failing_route(app, lambda: RuntimeError("internal wiring blew up"))
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == "internal"
+    # No traceback leakage.
+    assert "RuntimeError" not in body["message"]
+    assert "internal wiring" not in body["message"]
+
+
+def test_api_error_renders_flat(app: FastAPI) -> None:
+    """ApiError does not get double-wrapped in {'detail': {...}}."""
+    _attach_failing_route(
+        app, lambda: ApiError(status=418, code="teapot", message="I'm a teapot"),
+    )
+    with TestClient(app) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 418
+    body = response.json()
+    # Flat envelope — NOT {"detail": {...}}.
+    assert body == {"error": "teapot", "message": "I'm a teapot", "detail": None}
+```
+
+### Step 2 — Implement `errors.py`
+
+```python
+"""Global exception handlers for brain_api — D7a mapping.
+
+Call `register_error_handlers(app)` after middleware install in the app factory.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import FastAPI, Request
+from pydantic import ValidationError
+from starlette.responses import JSONResponse
+
+from brain_core.rate_limit import RateLimitError
+from brain_core.vault.paths import ScopeError
+
+logger = logging.getLogger("brain_api.errors")
+
+
+class ApiError(Exception):
+    """Application-level error with a flat HTTP envelope."""
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        code: str,
+        message: str,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        self.status = status
+        self.code = code
+        self.message = message
+        self.detail = detail
+        super().__init__(f"{code}: {message}")
+
+
+def _envelope(
+    *,
+    code: str,
+    message: str,
+    detail: dict[str, Any] | None = None,
+    status: int,
+    extra_headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        {"error": code, "message": message, "detail": detail},
+        status_code=status,
+        headers=extra_headers or {},
+    )
+
+
+def register_error_handlers(app: FastAPI) -> None:
+    """Register every brain_api exception handler on `app`."""
+
+    @app.exception_handler(ApiError)
+    async def _api_error(request: Request, exc: ApiError) -> JSONResponse:
+        return _envelope(
+            code=exc.code, message=exc.message, detail=exc.detail, status=exc.status
+        )
+
+    @app.exception_handler(ScopeError)
+    async def _scope_error(request: Request, exc: ScopeError) -> JSONResponse:
+        return _envelope(code="scope", message=str(exc), status=403)
+
+    @app.exception_handler(FileNotFoundError)
+    async def _not_found(request: Request, exc: FileNotFoundError) -> JSONResponse:
+        return _envelope(code="not_found", message=str(exc), status=404)
+
+    @app.exception_handler(KeyError)
+    async def _key_error(request: Request, exc: KeyError) -> JSONResponse:
+        # KeyError(str(arg)) — surfaced message is the arg value itself.
+        msg = exc.args[0] if exc.args else "key not found"
+        return _envelope(code="not_found", message=str(msg), status=404)
+
+    @app.exception_handler(ValueError)
+    async def _value_error(request: Request, exc: ValueError) -> JSONResponse:
+        return _envelope(code="invalid_input", message=str(exc), status=400)
+
+    @app.exception_handler(PermissionError)
+    async def _permission_error(request: Request, exc: PermissionError) -> JSONResponse:
+        return _envelope(code="refused", message=str(exc), status=403)
+
+    @app.exception_handler(RateLimitError)
+    async def _rate_limit(request: Request, exc: RateLimitError) -> JSONResponse:
+        return _envelope(
+            code="rate_limited",
+            message=str(exc),
+            detail={"bucket": exc.bucket, "retry_after_seconds": exc.retry_after_seconds},
+            status=429,
+            extra_headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    @app.exception_handler(ValidationError)
+    async def _pydantic_validation(request: Request, exc: ValidationError) -> JSONResponse:
+        return _envelope(
+            code="invalid_input",
+            message="request body failed schema validation",
+            detail={"errors": exc.errors()},
+            status=400,
+        )
+
+    @app.exception_handler(Exception)
+    async def _catch_all(request: Request, exc: Exception) -> JSONResponse:
+        # Log the traceback; return a generic body (no leakage).
+        logger.exception("Unhandled exception in %s %s", request.method, request.url.path)
+        return _envelope(code="internal", message="unexpected error", status=500)
+```
+
+### Step 3 — Wire in `app.py`
+
+```python
+from brain_api.errors import register_error_handlers
+
+# After app.add_middleware(...) and router includes:
+register_error_handlers(app)
+```
+
+### Step 4 — Switch `require_token` + dispatcher to `ApiError`
+
+Modify `auth.py`:
+
+```python
+# Replace HTTPException with ApiError for flat envelope.
+from brain_api.errors import ApiError
+
+def require_token(request: Request, ctx: AppContext = Depends(get_ctx)) -> None:
+    received = request.headers.get("x-brain-token", "")
+    expected = ctx.token or ""
+    if not received or not expected or not _secrets_module.compare_digest(received, expected):
+        raise ApiError(
+            status=403,
+            code="refused",
+            message="missing or invalid X-Brain-Token header",
+        )
+
+def enforce_json_accept(request: Request) -> None:
+    accept = request.headers.get("accept", "")
+    if not accept:
+        return
+    accept_lc = accept.lower()
+    if "application/json" in accept_lc or "*/*" in accept_lc or "application/*" in accept_lc:
+        return
+    raise ApiError(
+        status=406,
+        code="not_acceptable",
+        message="this API speaks only application/json",
+    )
+```
+
+Modify `routes/tools.py` dispatcher — replace `HTTPException`:
+
+```python
+from brain_api.errors import ApiError
+
+if module is None:
+    raise ApiError(
+        status=404,
+        code="not_found",
+        message=f"tool {name!r} is not registered",
+    )
+
+# Validation error path — let Pydantic ValidationError bubble; the global
+# handler catches it. Remove the Task 11 try/except block.
+validated = Model.model_validate(body)  # raises ValidationError → Task 15 handles
+```
+
+### Step 5 — Flip xfail tests in `test_tool_endpoints.py`
+
+`test_read_note_out_of_scope_eventually_403` → drop the `@pytest.mark.xfail(...)` decorator; it now passes.
+
+`test_read_note_out_of_scope_currently_500` → DELETE. Replaced by the flipped 403 test.
+
+`test_apply_unknown_patch_currently_500` → rewrite as `test_apply_unknown_patch_is_404`:
+
+```python
+def test_apply_unknown_patch_is_404(api: ApiClient) -> None:
+    r = api.call("brain_apply_patch", {"patch_id": "does-not-exist"})
+    assert r.status_code == 404
+    assert r.json()["error"] == "not_found"
+```
+
+### Step 6 — Run + commit
+
+Expect: **~97 passed** (85 prior + 8 new error handler tests + 4 flipped tests from xfail). Exact count varies — verify.
+
+Gates, then:
+
+```bash
+git commit -m "feat(api): plan 05 task 15 — global exception handlers (D7a mapping, flat envelope)"
+```
+
+---
+
+### Task 16 — Error surface tests + OpenAPI response docs
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/routes/tools.py` — expand `responses` kwarg with 429 + 500
+- Modify: `packages/brain_api/src/brain_api/routes/health.py` — add `responses={500: ...}` for completeness
+- Modify: `packages/brain_api/src/brain_api/responses.py` — add typed `RateLimitDetail`, `ValidationDetail` Pydantic models for OpenAPI
+- Create: `packages/brain_api/tests/test_errors_integration.py` — real tool endpoints tested end-to-end for each status code
+- Modify: `packages/brain_api/tests/test_errors.py` — verify OpenAPI `/openapi.json` has correct response schemas per endpoint
+
+**Context for the implementer:**
+
+Task 15 landed the handlers; Task 16 locks the contract at two levels:
+
+1. **Integration tests** — for every one of the 8 mapped exceptions, drive a real `brain_core.tools.*` endpoint to trigger it and assert the HTTP response matches D7a. No more synthetic `/_boom` routes.
+2. **OpenAPI completeness** — every route's `responses` kwarg declares 400/403/404/406/429/500 so `/docs` shows error shapes. Tools that can rate-limit (`brain_ingest`, `brain_classify`, `brain_propose_note`, `brain_apply_patch`, `brain_bulk_import`) explicitly document 429; tools that never rate-limit omit it.
+
+For OpenAPI shape consistency, add two refined typed detail models in `responses.py`:
+
+```python
+class RateLimitDetail(BaseModel):
+    bucket: str
+    retry_after_seconds: int
+
+
+class ValidationDetail(BaseModel):
+    errors: list[dict[str, Any]]
+```
+
+The `ErrorResponse.detail` stays `dict[str, Any] | None` (heterogeneous across errors); the typed detail models are annotation hints for `/docs` readers.
+
+### Step 1 — Integration tests for each exception
+
+`packages/brain_api/tests/test_errors_integration.py`:
+
+```python
+"""End-to-end error surface tests — real tools, real exceptions, real responses."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+
+def test_scope_error_403(api) -> None:  # noqa: ANN001
+    r = api.call("brain_read_note", {"path": "personal/notes/secret.md"})
+    assert r.status_code == 403
+    assert r.json()["error"] == "scope"
+
+
+def test_file_not_found_404(api) -> None:  # noqa: ANN001
+    r = api.call("brain_read_note", {"path": "research/notes/does-not-exist.md"})
+    assert r.status_code == 404
+    assert r.json()["error"] == "not_found"
+
+
+def test_missing_key_404(api) -> None:  # noqa: ANN001
+    r = api.call("brain_apply_patch", {"patch_id": "not-a-real-patch"})
+    assert r.status_code == 404
+    assert r.json()["error"] == "not_found"
+
+
+def test_invalid_input_400(api) -> None:  # noqa: ANN001
+    # brain_propose_note requires path/content/reason.
+    r = api.call("brain_propose_note", {"path": "research/notes/x.md"})
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_input"
+    assert "errors" in r.json()["detail"]
+
+
+def test_permission_error_403(api) -> None:  # noqa: ANN001
+    # brain_config_get refuses secret-shaped keys.
+    r = api.call("brain_config_get", {"key": "llm.api_key"})
+    assert r.status_code == 403
+    assert r.json()["error"] == "refused"
+
+
+def test_rate_limit_429(api, app) -> None:  # noqa: ANN001
+    # Drain the patches bucket.
+    limiter = app.state.ctx.tool_ctx.rate_limiter
+    from brain_core.rate_limit import RateLimitConfig, RateLimiter
+
+    # Replace the limiter with a drained one.
+    drained = RateLimiter(RateLimitConfig(patches_per_minute=1))
+    drained.check("patches", cost=1)
+    object.__setattr__(app.state.ctx.tool_ctx, "rate_limiter", drained)  # frozen dataclass
+
+    r = api.call(
+        "brain_propose_note",
+        {"path": "research/notes/x.md", "content": "x", "reason": "x"},
+    )
+    assert r.status_code == 429
+    body = r.json()
+    assert body["error"] == "rate_limited"
+    assert body["detail"]["bucket"] == "patches"
+    assert r.headers["retry-after"].isdigit()
+
+
+def test_validation_error_has_field_paths(api) -> None:  # noqa: ANN001
+    r = api.call("brain_search", {"query": "x", "top_k": "not-an-int"})
+    body = r.json()
+    assert body["error"] == "invalid_input"
+    # Pydantic's errors() contract: list of {loc, msg, type, ...}.
+    errors = body["detail"]["errors"]
+    assert any("top_k" in e.get("loc", []) for e in errors)
+
+
+def test_unhandled_exception_500(api, monkeypatch) -> None:  # noqa: ANN001
+    """Force a handler to raise an unmapped exception; verify 500 + no leakage."""
+    from brain_core.tools import list_domains as ld_mod
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("secret-looking internal detail XYZ")
+
+    monkeypatch.setattr(ld_mod, "handle", boom)
+    r = api.call("brain_list_domains", {})
+    assert r.status_code == 500
+    body = r.json()
+    assert body["error"] == "internal"
+    assert "XYZ" not in body["message"]
+    assert "RuntimeError" not in body["message"]
+```
+
+### Step 2 — Wire `responses` on the dispatcher
+
+Modify `routes/tools.py`:
+
+```python
+from brain_api.responses import ErrorResponse, ToolResponse
+
+@router.post(
+    "/{name}",
+    response_model=ToolResponse,
+    dependencies=[Depends(enforce_json_accept), Depends(require_token)],
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid input (schema validation)"},
+        403: {"model": ErrorResponse, "description": "Scope / permission / token failure"},
+        404: {"model": ErrorResponse, "description": "Unknown tool or resource"},
+        406: {"model": ErrorResponse, "description": "Non-JSON Accept"},
+        429: {"model": ErrorResponse, "description": "Rate limited (see Retry-After)"},
+        500: {"model": ErrorResponse, "description": "Internal error"},
+    },
+)
+async def call_tool(...): ...
+```
+
+Similar for `/healthz` and `/api/tools` (read-only endpoints — 500 only).
+
+### Step 3 — OpenAPI schema test
+
+```python
+def test_openapi_dispatcher_advertises_all_error_codes(client: TestClient) -> None:
+    response = client.get("/openapi.json")
+    schema = response.json()
+    # Look at the POST /api/tools/{name} operation.
+    op = schema["paths"]["/api/tools/{name}"]["post"]
+    declared = set(op["responses"].keys())
+    assert {"400", "403", "404", "406", "429", "500"}.issubset(declared)
+```
+
+### Step 4 — Run + commit
+
+Expect: **~108 passed** (97 prior + 8 integration + 1 OpenAPI + ~2 fixture shuffle). Verify.
+
+```bash
+git commit -m "feat(api): plan 05 task 16 — error surface integration tests + OpenAPI response docs"
+```
+
+---
+
+**Checkpoint 5 — pause for main-loop review.**
+
+16 tasks landed. Error contract complete:
+- D7a mapping live across 8 exception types → flat `{error, message, detail}` envelope
+- `RateLimitError` promoted to `brain_core.rate_limit`; brain_mcp shims preserve Plan 04's inline-JSON behavior
+- `ApiError` custom exception replaces `HTTPException(detail=...)` (flat envelope, no double-wrap)
+- `Retry-After` header on 429
+- `/docs` shows every error shape per endpoint
+
+Main loop reviews:
+
+- **brain_mcp test count:** relocated 8 rate-limit tests to brain_core. Net suite size unchanged. Any consumer-visible regression? No — brain_mcp shim catches `RateLimitError` and emits the Plan 04 inline-JSON envelope, so every Plan 04 tool rate-limit test passes unchanged.
+- **`ApiError` vs `HTTPException`:** the entire codebase now uses `ApiError` for application errors; `HTTPException` is only raised by FastAPI's internal machinery (e.g., 405 method-not-allowed). The boundary is clear, and /docs correctly advertises both 4xx and 5xx shapes.
+- **500 body genericity.** Unhandled exceptions always return `{"error": "internal", "message": "unexpected error"}`. Is that too terse for debugging? The log has the real traceback; the response body is deliberately minimal to avoid leaking internals. **Recommendation:** keep as-is; Plan 07 frontend can show a "request-id" that correlates logs (Task 25 sweep item).
+- **KeyError → 404 mapping corner case.** Any `dict.pop(...)` or `dict[key]` inside a handler that raises KeyError for an unexpected reason (not a "patch not found" case) would get misclassified as 404. Risk is low — handlers use explicit checks — but Plan 07's richer tooling might want a narrower mapping. Track for Task 25 sweep.
+
+Before Task 17, main loop confirms the error contract is locked — Group 6's WebSocket work inherits the handlers but emits errors via the WS `{"type": "error", ...}` event, not JSON responses.
+
+---
