@@ -4269,3 +4269,1347 @@ Main loop reviews:
 Before Task 17, main loop confirms the error contract is locked — Group 6's WebSocket work inherits the handlers but emits errors via the WS `{"type": "error", ...}` event, not JSON responses.
 
 ---
+
+### Group 6 — WebSocket chat (Tasks 17–21)
+
+**Checkpoint after Task 21:** main-loop reviews the whole WebSocket surface — handshake auth, typed event wire format, `ChatSession` bridging, mid-turn cancel, disconnect-flush + reconnect-rebuild. This is Plan 05's most complex group; the other groups are incremental REST polish, but WS introduces async tasking + bidirectional streaming.
+
+**Pre-flight verification** (before dispatching Task 17): read `packages/brain_core/src/brain_core/chat/session.py` to confirm the real `ChatSession` API:
+- Constructor signature (`ChatSession(thread_id, vault_root, allowed_domains, mode, llm, ...)`)
+- Turn-running method (`run_turn(user_message) -> AsyncIterator[ChatEvent]` OR callback-based?)
+- Persistence (`persist()` vs automatic-on-end?)
+- Load/resume (`ChatSession.load(thread_id, ...)` classmethod OR same constructor with `load_existing=True`?)
+
+Plan 05 plan text assumes an `AsyncIterator[ChatEvent]`-style API since it bridges cleanly to WS event emission. If Plan 03 shipped a callback-based API, Task 19 adds an `AsyncIterator` adapter. Either way, no Plan 03 code changes — all adaptation happens in `brain_api.chat.session_runner`.
+
+**WebSocket transport notes:**
+- Starlette's `WebSocket` object supports `accept()`, `send_json()`, `receive_json()`, `receive_text()`, `close(code, reason)`. Used by FastAPI's `@router.websocket(...)` decorator.
+- WebSocket handshake runs through middleware (Task 8's OriginHostMiddleware fires on the HTTP upgrade); **query-param token** auth happens inside the endpoint (Task 9's `check_ws_token`) before `accept()`.
+- Close codes used: 1000 (normal), 1008 (policy violation — bad auth / bad thread_id), 1011 (server error — uncaught).
+
+**Async-task orchestration:** turn-running is a background asyncio task so the endpoint can:
+1. Stream events from the session to the client
+2. Concurrently `receive` client messages (cancel, switch_mode)
+
+Shape: wrap `ChatSession.run_turn` in an `asyncio.Task`; await it alongside `ws.receive_json()` via `asyncio.wait(..., return_when=FIRST_COMPLETED)`. Events flow through an `asyncio.Queue` that the session writes to and the endpoint drains.
+
+---
+
+### Task 17 — `WS /ws/chat/<thread_id>` endpoint + handshake
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/routes/chat.py` — WebSocket endpoint + handshake
+- Modify: `packages/brain_api/src/brain_api/app.py` — register chat router
+- Create: `packages/brain_api/tests/test_ws_chat_handshake.py`
+
+**Context for the implementer:**
+
+Task 17 lands the WebSocket endpoint with auth + handshake + a send/receive loop that doesn't yet do anything useful (Task 19 wires `ChatSession`). The server-side lifecycle:
+
+```
+1. Client opens ws://localhost:<port>/ws/chat/<thread_id>?token=<secret>
+2. Server middleware (Task 8) validates Origin + Host
+3. Endpoint checks query-param token via check_ws_token
+4. On bad token: close(1008, "invalid token"). Return.
+5. On good token: await ws.accept()
+6. Send `{type: "schema_version", version: "1"}` as first event
+7. Send `{type: "thread_loaded", thread_id: "...", mode: "ask", turn_count: N}`
+8. Enter receive loop: await ws.receive_json() until disconnect
+9. On disconnect / exception: log + close + (Task 21 will add: persist the thread)
+```
+
+**`thread_id` validation:** accepts any non-empty ASCII-safe string (regex: `^[a-z0-9-]{1,64}$`). Rejected ids close with 1008. No slashes, no path traversal risk.
+
+**New-thread vs existing-thread semantics:**
+- Plan 05 Task 17: any `thread_id` is valid; if the thread file doesn't exist in the vault, it'll be created on first turn (Task 19). If it exists, Plan 21 loads it.
+- Thread file path: `<vault>/<default_domain>/chats/<thread_id>.md` (matches Plan 03).
+
+### Step 1 — Failing tests
+
+`packages/brain_api/tests/test_ws_chat_handshake.py`:
+
+```python
+"""Tests for the WS /ws/chat/<thread_id> handshake — Task 17 (pre-session-wiring)."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def test_handshake_missing_token_rejected(client: TestClient) -> None:
+    with pytest.raises(Exception):  # WebSocketDisconnect with code 1008
+        with client.websocket_connect("/ws/chat/test-thread"):
+            pass
+
+
+def test_handshake_wrong_token_rejected(client: TestClient) -> None:
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/chat/test-thread?token=badtoken"):
+            pass
+
+
+def test_handshake_valid_token_accepted(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/test-thread?token={token}") as ws:
+            # First frame: schema_version.
+            first = ws.receive_json()
+            assert first["type"] == "schema_version"
+            assert first["version"] == "1"
+
+            # Second frame: thread_loaded.
+            second = ws.receive_json()
+            assert second["type"] == "thread_loaded"
+            assert second["thread_id"] == "test-thread"
+            assert second["turn_count"] == 0  # fresh thread
+
+
+def test_handshake_rejects_bad_thread_id(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with pytest.raises(Exception):
+            with fresh.websocket_connect(f"/ws/chat/bad/slash?token={token}"):
+                pass
+
+
+def test_handshake_rejects_evil_origin(client: TestClient, app) -> None:  # noqa: ANN001
+    """Middleware blocks WS upgrade from non-loopback Origin."""
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with pytest.raises(Exception):
+            with fresh.websocket_connect(
+                f"/ws/chat/test-thread?token={token}",
+                headers={"Origin": "https://evil.example"},
+            ):
+                pass
+```
+
+### Step 2 — Implement `routes/chat.py`
+
+```python
+"""WS /ws/chat/<thread_id> — chat endpoint.
+
+Task 17 lands handshake + receive loop. Task 19 wires ChatSession into
+the loop and emits real turn events.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from brain_api.auth import check_ws_token
+from brain_api.context import AppContext, get_ctx
+
+router = APIRouter(tags=["chat"])
+logger = logging.getLogger("brain_api.chat")
+
+_THREAD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_SCHEMA_VERSION = "1"
+
+
+@router.websocket("/ws/chat/{thread_id}")
+async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
+    """WebSocket endpoint for chat streaming.
+
+    Task 17: handshake (auth + validation + schema announcement); empty
+    receive loop. Task 19 fills in turn-running.
+    """
+    # 1. Validate thread_id shape BEFORE accept — closes cleanly without leaking state.
+    if not _THREAD_ID_RE.match(thread_id):
+        await websocket.close(code=1008, reason=f"invalid thread_id {thread_id!r}")
+        return
+
+    # 2. Resolve AppContext from the mounted app.
+    ctx: AppContext = websocket.app.state.ctx
+
+    # 3. Token check via query param.
+    ok = await check_ws_token(websocket, ctx)
+    if not ok:
+        return  # check_ws_token already called close().
+
+    # 4. Accept the upgrade.
+    await websocket.accept()
+
+    # 5. Send handshake events.
+    await websocket.send_json({"type": "schema_version", "version": _SCHEMA_VERSION})
+
+    # Thread metadata — Task 21 will do a real load; Task 17 emits defaults.
+    turn_count = 0  # TODO(Task 21): load from vault + state.sqlite
+    mode = "ask"
+    await websocket.send_json(
+        {
+            "type": "thread_loaded",
+            "thread_id": thread_id,
+            "mode": mode,
+            "turn_count": turn_count,
+        }
+    )
+
+    # 6. Receive loop — empty until Task 19.
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            logger.debug("chat WS received: %s", msg)
+            # Task 19/20: dispatch turn_start / cancel_turn / switch_mode.
+            # Task 17 no-op acknowledgment so tests can verify the loop is live.
+            await websocket.send_json({"type": "ack", "received": msg.get("type", "unknown")})
+    except WebSocketDisconnect:
+        logger.info("chat WS disconnected: thread_id=%s", thread_id)
+        # Task 21: call session_runner.persist() here.
+```
+
+### Step 3 — Register router
+
+Modify `packages/brain_api/src/brain_api/app.py`:
+
+```python
+from brain_api.routes import chat as chat_routes
+
+app.include_router(chat_routes.router)
+```
+
+### Step 4 — Run + commit
+
+Expect: **~113 passed** (108 prior + 5 handshake tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 17 — WS /ws/chat/<thread_id> handshake (auth + schema announcement)"
+```
+
+---
+
+### Task 18 — Typed event + message models
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/chat/__init__.py` (empty)
+- Create: `packages/brain_api/src/brain_api/chat/events.py` — Pydantic models for every WS event + client message
+- Modify: `packages/brain_api/src/brain_api/routes/chat.py` — use typed models for `send_json(...)` wrappers
+- Create: `packages/brain_api/tests/test_chat_events.py`
+
+**Context for the implementer:**
+
+D5a: every WS event is typed. Shape: `{"type": "<name>", ...fields}` with `type` as the discriminator. Pydantic v2 supports this via `Field(discriminator="type")` on a union model.
+
+Server-emitted events:
+| Name | Fields | Notes |
+|---|---|---|
+| `schema_version` | `version: "1"` | First frame post-accept |
+| `thread_loaded` | `thread_id, mode, turn_count` | Second frame post-accept |
+| `turn_start` | `turn_number: int` | Marks start of assistant turn |
+| `delta` | `text: str` | Streaming token chunk |
+| `tool_call` | `tool: str, arguments: dict, id: str` | LLM invoked a tool |
+| `tool_result` | `id: str, data: dict` | Tool returned |
+| `cost_update` | `tokens_in: int, tokens_out: int, cost_usd: float, cumulative_usd: float` | Per-turn cost tick |
+| `patch_proposed` | `patch_id: str, target_path: str, reason: str` | Staged patch |
+| `turn_end` | `turn_number: int, title: str?` | End of assistant turn (title present on turn 2 auto-rename) |
+| `cancelled` | `turn_number: int` | Client cancelled mid-turn |
+| `error` | `code: str, message: str, recoverable: bool` | Handler raised |
+| `ack` | `received: str` | Debug acknowledgment (drop in Task 19) |
+
+Client-sent messages:
+| Name | Fields | Notes |
+|---|---|---|
+| `turn_start` | `content: str, mode: str?` | Begin a new turn |
+| `cancel_turn` | — | Cancel the in-flight turn |
+| `switch_mode` | `mode: "ask"|"brainstorm"|"draft"` | Between turns only |
+| `set_open_doc` | `path: str | null` | Draft-mode open-doc target |
+
+**Why schema_version: "1"?** Plan 07 frontend pins a major-version contract. When a breaking change lands (reshape an event), bump to "2" and frontends opt in. Plan 05 ships "1" as the baseline.
+
+### Step 1 — Failing tests
+
+`packages/brain_api/tests/test_chat_events.py`:
+
+```python
+"""Tests for WS event and message Pydantic models."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from brain_api.chat.events import (
+    ClientMessage,
+    ServerEvent,
+    parse_client_message,
+    serialize_server_event,
+    DeltaEvent,
+    TurnStartMessage,
+    CancelTurnMessage,
+    SwitchModeMessage,
+)
+
+
+def test_delta_event_serializes_with_type_discriminator() -> None:
+    ev = DeltaEvent(text="hello ")
+    out = serialize_server_event(ev)
+    assert out == {"type": "delta", "text": "hello "}
+
+
+def test_parse_turn_start_message() -> None:
+    raw = {"type": "turn_start", "content": "Hi!", "mode": "ask"}
+    msg = parse_client_message(raw)
+    assert isinstance(msg, TurnStartMessage)
+    assert msg.content == "Hi!"
+    assert msg.mode == "ask"
+
+
+def test_parse_cancel_turn_message() -> None:
+    raw = {"type": "cancel_turn"}
+    msg = parse_client_message(raw)
+    assert isinstance(msg, CancelTurnMessage)
+
+
+def test_parse_switch_mode_message() -> None:
+    raw = {"type": "switch_mode", "mode": "brainstorm"}
+    msg = parse_client_message(raw)
+    assert isinstance(msg, SwitchModeMessage)
+    assert msg.mode == "brainstorm"
+
+
+def test_parse_unknown_type_raises() -> None:
+    with pytest.raises(ValidationError):
+        parse_client_message({"type": "bogus"})
+
+
+def test_switch_mode_rejects_invalid_mode() -> None:
+    with pytest.raises(ValidationError):
+        parse_client_message({"type": "switch_mode", "mode": "telepathy"})
+```
+
+### Step 2 — Implement `events.py`
+
+```python
+"""Typed WS event and message Pydantic models (D5a).
+
+Server sends: schema_version, thread_loaded, turn_start, delta, tool_call,
+tool_result, cost_update, patch_proposed, turn_end, cancelled, error.
+
+Client sends: turn_start, cancel_turn, switch_mode, set_open_doc.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal, Union
+
+from pydantic import BaseModel, Field, TypeAdapter
+
+
+# ---------- Server → client ----------
+
+class SchemaVersionEvent(BaseModel):
+    type: Literal["schema_version"] = "schema_version"
+    version: str
+
+
+class ThreadLoadedEvent(BaseModel):
+    type: Literal["thread_loaded"] = "thread_loaded"
+    thread_id: str
+    mode: str
+    turn_count: int
+
+
+class TurnStartEvent(BaseModel):
+    type: Literal["turn_start"] = "turn_start"
+    turn_number: int
+
+
+class DeltaEvent(BaseModel):
+    type: Literal["delta"] = "delta"
+    text: str
+
+
+class ToolCallEvent(BaseModel):
+    type: Literal["tool_call"] = "tool_call"
+    id: str
+    tool: str
+    arguments: dict[str, Any]
+
+
+class ToolResultEvent(BaseModel):
+    type: Literal["tool_result"] = "tool_result"
+    id: str
+    data: dict[str, Any]
+
+
+class CostUpdateEvent(BaseModel):
+    type: Literal["cost_update"] = "cost_update"
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float
+    cumulative_usd: float
+
+
+class PatchProposedEvent(BaseModel):
+    type: Literal["patch_proposed"] = "patch_proposed"
+    patch_id: str
+    target_path: str
+    reason: str
+
+
+class TurnEndEvent(BaseModel):
+    type: Literal["turn_end"] = "turn_end"
+    turn_number: int
+    title: str | None = None
+
+
+class CancelledEvent(BaseModel):
+    type: Literal["cancelled"] = "cancelled"
+    turn_number: int
+
+
+class ErrorEvent(BaseModel):
+    type: Literal["error"] = "error"
+    code: str
+    message: str
+    recoverable: bool = True
+
+
+ServerEvent = Union[
+    SchemaVersionEvent,
+    ThreadLoadedEvent,
+    TurnStartEvent,
+    DeltaEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    CostUpdateEvent,
+    PatchProposedEvent,
+    TurnEndEvent,
+    CancelledEvent,
+    ErrorEvent,
+]
+
+
+def serialize_server_event(event: ServerEvent) -> dict[str, Any]:
+    """Dump a server event to a JSON-safe dict."""
+    return event.model_dump(mode="json")
+
+
+# ---------- Client → server ----------
+
+class TurnStartMessage(BaseModel):
+    type: Literal["turn_start"] = "turn_start"
+    content: str
+    mode: Literal["ask", "brainstorm", "draft"] | None = None
+
+
+class CancelTurnMessage(BaseModel):
+    type: Literal["cancel_turn"] = "cancel_turn"
+
+
+class SwitchModeMessage(BaseModel):
+    type: Literal["switch_mode"] = "switch_mode"
+    mode: Literal["ask", "brainstorm", "draft"]
+
+
+class SetOpenDocMessage(BaseModel):
+    type: Literal["set_open_doc"] = "set_open_doc"
+    path: str | None = None
+
+
+ClientMessage = Union[
+    TurnStartMessage,
+    CancelTurnMessage,
+    SwitchModeMessage,
+    SetOpenDocMessage,
+]
+
+
+_CLIENT_ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(
+    ClientMessage, config={"discriminator": "type"}
+)
+
+
+def parse_client_message(raw: dict[str, Any]) -> ClientMessage:
+    """Parse a JSON dict into the correct ClientMessage variant by `type`."""
+    return _CLIENT_ADAPTER.validate_python(raw)
+```
+
+**Note on `TypeAdapter` + discriminator:** Pydantic v2's discriminated union works via the `type` literal on each variant. `TypeAdapter(ClientMessage, config={"discriminator": "type"})` gives a single `validate_python` that dispatches by `type` string. If the discriminator is missing or unknown, it raises `ValidationError`.
+
+### Step 3 — Use models in `routes/chat.py`
+
+Replace the literal `send_json` calls in Task 17:
+
+```python
+from brain_api.chat.events import (
+    SchemaVersionEvent,
+    ThreadLoadedEvent,
+    serialize_server_event,
+    parse_client_message,
+)
+
+# In chat_ws:
+await websocket.send_json(serialize_server_event(SchemaVersionEvent(version=_SCHEMA_VERSION)))
+await websocket.send_json(
+    serialize_server_event(
+        ThreadLoadedEvent(thread_id=thread_id, mode=mode, turn_count=turn_count)
+    )
+)
+
+# In receive loop:
+raw = await websocket.receive_json()
+try:
+    msg = parse_client_message(raw)
+except Exception as exc:  # noqa: BLE001
+    await websocket.send_json(
+        serialize_server_event(
+            ErrorEvent(code="invalid_message", message=str(exc), recoverable=True)
+        )
+    )
+    continue
+
+# Task 19: dispatch by msg type.
+```
+
+Drop the `{"type": "ack", ...}` echo from Task 17 — the typed events replace it.
+
+### Step 4 — Run + commit
+
+Expect: **~119 passed** (113 prior + 6 event tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 18 — typed WS event + client-message Pydantic models (schema_version=1)"
+```
+
+---
+
+### Task 19 — `ChatSession` integration
+
+**Owning subagent:** brain-api-engineer (+ brain-core-engineer for any `ChatSession` adapter work)
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/chat/session_runner.py` — bridges `ChatSession` to WS events
+- Modify: `packages/brain_api/src/brain_api/routes/chat.py` — dispatch `turn_start` messages into `session_runner`
+- Create: `packages/brain_api/tests/test_ws_chat_turn.py`
+
+**Context for the implementer:**
+
+`SessionRunner` orchestrates a single turn:
+
+1. Client sends `{type: "turn_start", content: "Hi!", mode: "ask"}`
+2. Server emits `turn_start{turn_number: N}`
+3. `ChatSession.run_turn(content)` runs in a background task; yields events (delta / tool_call / tool_result / cost_update / patch_proposed)
+4. `SessionRunner` converts each to the corresponding typed event and `ws.send_json`s
+5. On completion: `ChatSession` returns; emit `turn_end{turn_number: N, title: "..."}`
+6. Any exception during the turn: emit `error{code, message, recoverable: true}`; DO NOT close the WS
+
+**Adapter shape** — depends on the real `ChatSession.run_turn` API. Two cases:
+
+**Case A: `ChatSession.run_turn(msg) -> AsyncIterator[ChatEvent]`** (preferred). Then:
+```python
+async for chat_event in session.run_turn(user_message):
+    ws_event = _convert_chat_event(chat_event)
+    await ws.send_json(serialize_server_event(ws_event))
+```
+
+**Case B: `ChatSession.run_turn(msg, on_event: Callable[[ChatEvent], None])`** (callback). Adapter wraps with an `asyncio.Queue`:
+```python
+queue = asyncio.Queue()
+async def cb(chat_event): await queue.put(chat_event)
+task = asyncio.create_task(session.run_turn(user_message, on_event=cb))
+
+while True:
+    done, _ = await asyncio.wait({task, asyncio.create_task(queue.get())}, return_when=FIRST_COMPLETED)
+    # ... handle events, check task completion ...
+```
+
+The implementer verifies which shape is real and picks the simpler adapter. The plan assumes Case A; if reality is Case B, adapt in `session_runner.py` only.
+
+**`ChatEvent → ServerEvent` mapping** (the real conversion function):
+
+```python
+from brain_core.chat.events import (  # real Plan 03 types — verify names
+    DeltaChatEvent, ToolCallChatEvent, ToolResultChatEvent,
+    CostUpdateChatEvent, PatchProposedChatEvent,
+)
+
+def _convert_chat_event(e) -> ServerEvent | None:
+    """Convert a brain_core ChatEvent to a brain_api WS ServerEvent.
+
+    Returns None if the event has no WS counterpart (e.g., internal
+    session-state ticks that don't need client rendering).
+    """
+    if isinstance(e, DeltaChatEvent):
+        return DeltaEvent(text=e.text)
+    if isinstance(e, ToolCallChatEvent):
+        return ToolCallEvent(id=e.id, tool=e.tool, arguments=e.arguments)
+    if isinstance(e, ToolResultChatEvent):
+        return ToolResultEvent(id=e.id, data=e.data)
+    if isinstance(e, CostUpdateChatEvent):
+        return CostUpdateEvent(
+            tokens_in=e.tokens_in,
+            tokens_out=e.tokens_out,
+            cost_usd=e.cost_usd,
+            cumulative_usd=e.cumulative_usd,
+        )
+    if isinstance(e, PatchProposedChatEvent):
+        return PatchProposedEvent(
+            patch_id=e.patch_id,
+            target_path=str(e.target_path),
+            reason=e.reason,
+        )
+    return None  # no WS counterpart
+```
+
+Verify event class names and field names against `brain_core/chat/events.py` (or wherever Plan 03 put them). Adjust imports. If Plan 03 doesn't have a typed event system and uses raw dicts, use string-type matching instead of isinstance.
+
+### Step 1 — Failing tests
+
+`packages/brain_api/tests/test_ws_chat_turn.py`:
+
+```python
+"""Tests for end-to-end chat turn streaming over WS."""
+
+from __future__ import annotations
+
+import json
+
+from fastapi.testclient import TestClient
+
+
+def test_turn_emits_ordered_events(client: TestClient, app) -> None:  # noqa: ANN001
+    # Queue FakeLLM responses for a simple Ask-mode turn.
+    ctx = app.state.ctx
+    ctx.tool_ctx.llm.queue("Hello ")  # streaming chunks (implementation may stream differently)
+    ctx.tool_ctx.llm.queue("there!")
+
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/t1?token={token}") as ws:
+            # Consume handshake frames.
+            assert ws.receive_json()["type"] == "schema_version"
+            assert ws.receive_json()["type"] == "thread_loaded"
+
+            ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
+
+            events = []
+            while True:
+                frame = ws.receive_json()
+                events.append(frame)
+                if frame["type"] == "turn_end":
+                    break
+
+    types_seen = [e["type"] for e in events]
+    assert types_seen[0] == "turn_start"
+    assert "delta" in types_seen  # at least one streaming chunk
+    assert types_seen[-1] == "turn_end"
+
+
+def test_turn_error_emits_error_event_keeps_connection_open(
+    client: TestClient, app, monkeypatch  # noqa: ANN001
+) -> None:
+    """A ChatSession failure emits `error` but doesn't close the WS."""
+    # Monkeypatch ChatSession.run_turn to raise.
+    from brain_core.chat import session as session_mod
+
+    async def boom(self, *args, **kwargs):  # noqa: ANN001
+        raise RuntimeError("simulated session failure")
+
+    monkeypatch.setattr(session_mod.ChatSession, "run_turn", boom)
+
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/t2?token={token}") as ws:
+            ws.receive_json()
+            ws.receive_json()
+
+            ws.send_json({"type": "turn_start", "content": "anything", "mode": "ask"})
+
+            frame = ws.receive_json()
+            # Skip any turn_start server event if emitted.
+            while frame["type"] != "error":
+                frame = ws.receive_json()
+            assert frame["code"] == "internal"
+            assert frame["recoverable"] is True
+
+            # Connection still alive — send another turn.
+            ws.send_json({"type": "turn_start", "content": "again", "mode": "ask"})
+            # Another error — connection didn't close.
+            next_frame = ws.receive_json()
+            assert next_frame["type"] in {"turn_start", "error"}
+```
+
+### Step 2 — Implement `session_runner.py`
+
+```python
+"""Bridge a brain_core.chat.ChatSession to brain_api WS events."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, TYPE_CHECKING
+
+from brain_api.chat.events import (
+    CostUpdateEvent,
+    DeltaEvent,
+    ErrorEvent,
+    PatchProposedEvent,
+    ServerEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    TurnEndEvent,
+    TurnStartEvent,
+    serialize_server_event,
+)
+
+if TYPE_CHECKING:
+    from fastapi import WebSocket
+
+    from brain_api.context import AppContext
+
+logger = logging.getLogger("brain_api.chat.session_runner")
+
+
+class SessionRunner:
+    """One ChatSession bound to one WS connection.
+
+    Not reused across connections — each WS open constructs a fresh runner.
+    """
+
+    def __init__(self, ctx: AppContext, thread_id: str, mode: str = "ask") -> None:
+        self.ctx = ctx
+        self.thread_id = thread_id
+        self.mode = mode
+        self._turn_number = 0
+        self._session = None  # Lazy-load on first turn (Task 21 loads from vault)
+
+    async def _ensure_session(self) -> Any:
+        """Build or load the ChatSession. Task 21 swaps build → load from vault."""
+        if self._session is None:
+            # Verify actual ChatSession constructor signature before wiring.
+            from brain_core.chat.session import ChatSession
+
+            self._session = ChatSession(
+                thread_id=self.thread_id,
+                vault_root=self.ctx.vault_root,
+                allowed_domains=self.ctx.allowed_domains,
+                mode=self.mode,
+                llm=self.ctx.tool_ctx.llm,
+                writer=self.ctx.tool_ctx.writer,
+                pending_store=self.ctx.tool_ctx.pending_store,
+                retrieval=self.ctx.tool_ctx.retrieval,
+                cost_ledger=self.ctx.tool_ctx.cost_ledger,
+                state_db=self.ctx.tool_ctx.state_db,
+            )
+        return self._session
+
+    async def run_turn(self, content: str, websocket: WebSocket) -> None:
+        """Run one turn; stream events to the websocket.
+
+        Emits: turn_start, delta*, tool_call?, tool_result?, cost_update,
+        patch_proposed?, turn_end (on success) OR error (on failure).
+        """
+        self._turn_number += 1
+        await websocket.send_json(
+            serialize_server_event(TurnStartEvent(turn_number=self._turn_number))
+        )
+
+        try:
+            session = await self._ensure_session()
+            async for chat_event in session.run_turn(content):
+                ws_event = _convert_chat_event(chat_event)
+                if ws_event is not None:
+                    await websocket.send_json(serialize_server_event(ws_event))
+
+            title = getattr(session, "title", None)
+            await websocket.send_json(
+                serialize_server_event(
+                    TurnEndEvent(turn_number=self._turn_number, title=title)
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Chat turn failed: thread=%s turn=%d", self.thread_id, self._turn_number)
+            await websocket.send_json(
+                serialize_server_event(
+                    ErrorEvent(code="internal", message=str(exc), recoverable=True)
+                )
+            )
+
+
+def _convert_chat_event(e: Any) -> ServerEvent | None:
+    """Map brain_core ChatEvent → brain_api ServerEvent.
+
+    VERIFY event class names against brain_core/chat/events.py before
+    wiring — Plan 03's names may differ.
+    """
+    from brain_core.chat.events import (
+        CostUpdateChatEvent,
+        DeltaChatEvent,
+        PatchProposedChatEvent,
+        ToolCallChatEvent,
+        ToolResultChatEvent,
+    )
+
+    if isinstance(e, DeltaChatEvent):
+        return DeltaEvent(text=e.text)
+    if isinstance(e, ToolCallChatEvent):
+        return ToolCallEvent(id=e.id, tool=e.tool, arguments=e.arguments)
+    if isinstance(e, ToolResultChatEvent):
+        return ToolResultEvent(id=e.id, data=e.data)
+    if isinstance(e, CostUpdateChatEvent):
+        return CostUpdateEvent(
+            tokens_in=e.tokens_in,
+            tokens_out=e.tokens_out,
+            cost_usd=e.cost_usd,
+            cumulative_usd=e.cumulative_usd,
+        )
+    if isinstance(e, PatchProposedChatEvent):
+        return PatchProposedEvent(
+            patch_id=e.patch_id,
+            target_path=str(e.target_path),
+            reason=e.reason,
+        )
+    return None
+```
+
+### Step 3 — Dispatch `turn_start` in `routes/chat.py`
+
+```python
+from brain_api.chat.events import parse_client_message, TurnStartMessage
+from brain_api.chat.session_runner import SessionRunner
+
+# Inside chat_ws after handshake:
+runner = SessionRunner(ctx=ctx, thread_id=thread_id, mode=mode)
+
+try:
+    while True:
+        raw = await websocket.receive_json()
+        try:
+            msg = parse_client_message(raw)
+        except Exception as exc:  # noqa: BLE001
+            await websocket.send_json(
+                serialize_server_event(
+                    ErrorEvent(code="invalid_message", message=str(exc), recoverable=True)
+                )
+            )
+            continue
+
+        if isinstance(msg, TurnStartMessage):
+            if msg.mode:
+                runner.mode = msg.mode
+            await runner.run_turn(msg.content, websocket)
+        # Task 20: CancelTurnMessage, SwitchModeMessage, SetOpenDocMessage dispatch.
+        else:
+            await websocket.send_json(
+                serialize_server_event(
+                    ErrorEvent(
+                        code="not_implemented",
+                        message=f"message type {msg.type!r} not handled yet",
+                        recoverable=True,
+                    )
+                )
+            )
+except WebSocketDisconnect:
+    logger.info("chat WS disconnected: thread_id=%s", thread_id)
+```
+
+### Step 4 — Run + commit
+
+Expect: **~123 passed** (119 prior + 2 turn tests + light fixture setup).
+
+Verify end-to-end: open `/ws/chat/t1`, send `turn_start`, receive ordered events, confirm `turn_end` fires. If `ChatSession.run_turn` is callback-based, swap to the Case-B adapter.
+
+```bash
+git commit -m "feat(api): plan 05 task 19 — ChatSession bridge (SessionRunner streams events to WS)"
+```
+
+---
+
+### Task 20 — Cancel-turn + `switch_mode` client messages
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/chat/session_runner.py` — expose cancellation + mode-switch
+- Modify: `packages/brain_api/src/brain_api/routes/chat.py` — dispatch `cancel_turn` / `switch_mode` / `set_open_doc`
+- Create: `packages/brain_api/tests/test_ws_chat_cancel.py`
+
+**Context for the implementer:**
+
+Two competing concerns during a turn:
+1. The `run_turn` task is emitting events.
+2. The client might send `cancel_turn` mid-stream.
+
+These must be concurrent. `asyncio.wait({turn_task, recv_task}, return_when=FIRST_COMPLETED)` picks whichever completes first. On cancel: `turn_task.cancel()` + await emit `cancelled{turn_number}`. On normal completion: proceed to the next receive.
+
+`switch_mode` and `set_open_doc` are only valid BETWEEN turns (no active turn). If sent mid-turn: emit `error{code: "invalid_state", message: "cannot switch mode during active turn", recoverable: true}`.
+
+**Orchestration skeleton:**
+
+```python
+import asyncio
+
+while True:
+    recv_task = asyncio.create_task(websocket.receive_json())
+    done, pending = await asyncio.wait(
+        [recv_task, *([turn_task] if turn_task else [])],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    if recv_task in done:
+        raw = recv_task.result()
+        msg = parse_client_message(raw)
+
+        if isinstance(msg, TurnStartMessage):
+            if turn_task and not turn_task.done():
+                # Can't start a new turn mid-turn.
+                emit error...
+                continue
+            turn_task = asyncio.create_task(runner.run_turn(msg.content, websocket))
+        elif isinstance(msg, CancelTurnMessage):
+            if not turn_task or turn_task.done():
+                emit error (no active turn)
+                continue
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
+            emit cancelled(turn_number=runner.current_turn)
+            turn_task = None
+        elif isinstance(msg, SwitchModeMessage):
+            if turn_task and not turn_task.done():
+                emit error (mid-turn)
+                continue
+            runner.mode = msg.mode
+        elif isinstance(msg, SetOpenDocMessage):
+            runner.open_doc = msg.path
+    elif turn_task and turn_task in done:
+        # Turn completed normally (or with exception — already emitted).
+        turn_task = None
+```
+
+### Step 1 — Failing tests
+
+```python
+"""Tests for cancel_turn + switch_mode + set_open_doc WS messages."""
+
+from __future__ import annotations
+
+import time
+
+from fastapi.testclient import TestClient
+
+
+def test_cancel_turn_mid_stream(client: TestClient, app) -> None:  # noqa: ANN001
+    # Queue a slow fake LLM that produces many chunks.
+    # (Implementation-specific: FakeLLMProvider might support delay injection.)
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/t3?token={token}") as ws:
+            ws.receive_json()  # schema_version
+            ws.receive_json()  # thread_loaded
+            ws.send_json({"type": "turn_start", "content": "slow one", "mode": "ask"})
+
+            # Wait for turn_start server event.
+            first = ws.receive_json()
+            assert first["type"] == "turn_start"
+
+            # Cancel.
+            ws.send_json({"type": "cancel_turn"})
+
+            # Drain until we see cancelled.
+            saw_cancelled = False
+            for _ in range(50):
+                frame = ws.receive_json()
+                if frame["type"] == "cancelled":
+                    saw_cancelled = True
+                    break
+            assert saw_cancelled
+
+
+def test_cancel_without_active_turn_emits_error(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/t4?token={token}") as ws:
+            ws.receive_json()
+            ws.receive_json()
+
+            ws.send_json({"type": "cancel_turn"})
+            frame = ws.receive_json()
+            assert frame["type"] == "error"
+            assert frame["code"] == "invalid_state"
+
+
+def test_switch_mode_between_turns(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/t5?token={token}") as ws:
+            ws.receive_json()
+            ws.receive_json()
+
+            ws.send_json({"type": "switch_mode", "mode": "brainstorm"})
+            # No error = success. (Task 20 emits no explicit ack — silent mode change.)
+            # Client implementations can re-request thread_loaded metadata if needed.
+
+
+def test_switch_mode_mid_turn_rejected(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/t6?token={token}") as ws:
+            ws.receive_json()
+            ws.receive_json()
+
+            ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
+            # Immediately follow with switch_mode — race with turn completion.
+            ws.send_json({"type": "switch_mode", "mode": "brainstorm"})
+
+            saw_error = False
+            for _ in range(30):
+                frame = ws.receive_json()
+                if frame["type"] == "error" and frame["code"] == "invalid_state":
+                    saw_error = True
+                    break
+                if frame["type"] == "turn_end":
+                    break
+            # Either we saw the error, or the turn was so fast it finished before
+            # switch_mode was processed. Both outcomes are valid.
+            # (The strict timing test is that switch_mode NEVER silently succeeds mid-turn.)
+```
+
+### Step 2 — Implement concurrent orchestration
+
+Rewrite `routes/chat.py` receive loop with `asyncio.wait`:
+
+```python
+import asyncio
+
+async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
+    # ... Task 17 handshake unchanged ...
+
+    runner = SessionRunner(ctx=ctx, thread_id=thread_id, mode=mode)
+    turn_task: asyncio.Task | None = None
+
+    try:
+        while True:
+            recv_task = asyncio.create_task(websocket.receive_json())
+            wait_set = [recv_task]
+            if turn_task is not None and not turn_task.done():
+                wait_set.append(turn_task)
+
+            done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+
+            if recv_task in done:
+                raw = recv_task.result()
+                try:
+                    msg = parse_client_message(raw)
+                except Exception as exc:  # noqa: BLE001
+                    await websocket.send_json(
+                        serialize_server_event(
+                            ErrorEvent(code="invalid_message", message=str(exc))
+                        )
+                    )
+                    continue
+
+                if isinstance(msg, TurnStartMessage):
+                    if turn_task and not turn_task.done():
+                        await websocket.send_json(
+                            serialize_server_event(
+                                ErrorEvent(
+                                    code="invalid_state",
+                                    message="cannot start new turn while one is active",
+                                )
+                            )
+                        )
+                        continue
+                    if msg.mode:
+                        runner.mode = msg.mode
+                    turn_task = asyncio.create_task(runner.run_turn(msg.content, websocket))
+
+                elif isinstance(msg, CancelTurnMessage):
+                    if turn_task is None or turn_task.done():
+                        await websocket.send_json(
+                            serialize_server_event(
+                                ErrorEvent(
+                                    code="invalid_state",
+                                    message="no active turn to cancel",
+                                )
+                            )
+                        )
+                        continue
+                    turn_task.cancel()
+                    try:
+                        await turn_task
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                        pass
+                    await websocket.send_json(
+                        serialize_server_event(
+                            CancelledEvent(turn_number=runner._turn_number)
+                        )
+                    )
+                    turn_task = None
+
+                elif isinstance(msg, SwitchModeMessage):
+                    if turn_task and not turn_task.done():
+                        await websocket.send_json(
+                            serialize_server_event(
+                                ErrorEvent(
+                                    code="invalid_state",
+                                    message="cannot switch mode during active turn",
+                                )
+                            )
+                        )
+                        continue
+                    runner.mode = msg.mode
+
+                elif isinstance(msg, SetOpenDocMessage):
+                    runner.open_doc = msg.path
+
+            if turn_task is not None and turn_task in done:
+                # Turn finished normally (or with handled exception inside run_turn).
+                turn_task = None
+
+    except WebSocketDisconnect:
+        logger.info("chat WS disconnected: thread_id=%s", thread_id)
+        if turn_task and not turn_task.done():
+            turn_task.cancel()
+```
+
+### Step 3 — Run + commit
+
+Expect: **~127 passed** (123 prior + 4 cancel/switch_mode tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 20 — cancel_turn + switch_mode + set_open_doc (concurrent asyncio.wait)"
+```
+
+---
+
+### Task 21 — Disconnect flush + reconnect rebuild
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/chat/session_runner.py` — add `persist()` + `load()`
+- Modify: `packages/brain_api/src/brain_api/routes/chat.py` — persist on disconnect; load on connect
+- Create: `packages/brain_api/tests/test_ws_chat_reconnect.py`
+
+**Context for the implementer:**
+
+Plan 03 already persists chat threads via `ChatSession.persist()` (or equivalent). Task 21 wires:
+
+- **On clean disconnect:** call `SessionRunner.persist()` → calls `session.persist()` → writes thread to vault + updates `state.sqlite`.
+- **On unclean disconnect:** same — exception or WebSocketDisconnect both trigger finally-block persistence.
+- **On reconnect with same `thread_id`:** in the handshake, instead of constructing a fresh `ChatSession`, call `ChatSession.load(thread_id, vault_root, ...)` (classmethod). Populates `turn_count`, `mode`, previous turns.
+
+The `thread_loaded` event in the handshake now reports the ACTUAL turn count + mode, not defaults:
+
+```python
+session = await load_or_build(thread_id, ctx)
+turn_count = session.turn_count
+mode = session.mode
+await websocket.send_json(
+    serialize_server_event(ThreadLoadedEvent(thread_id=thread_id, mode=mode, turn_count=turn_count))
+)
+```
+
+**Thread file shape** (Plan 03 canonical): `<vault>/<active_domain>/chats/<thread_id>.md` with frontmatter `mode`, `scope`, `created`, `updated`, `turns`, `cost_usd`. Body is alternating `## User` / `## Assistant` sections. `ChatSession.load` parses this.
+
+**Concurrent-connection edge case:** two simultaneous WS connections to the same `thread_id` from different tabs. Plan 05 accepts both — each gets its own `ChatSession` instance loaded from the same vault state. If both run turns concurrently, the second one's persist() overwrites the first's thread file (last-writer-wins). This is a Plan 07 frontend concern (the UI shouldn't allow two tabs to chat into the same thread), not a Plan 05 backend bug. Document in the brain_api README.
+
+### Step 1 — Failing tests
+
+```python
+"""Tests for disconnect flush + reconnect rebuild."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+
+def test_thread_persisted_on_clean_disconnect(
+    client: TestClient, app, seeded_vault: Path  # noqa: ANN001
+) -> None:
+    # Pre-queue one LLM response.
+    app.state.ctx.tool_ctx.llm.queue("assistant response")
+
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        with fresh.websocket_connect(f"/ws/chat/persist-me?token={token}") as ws:
+            ws.receive_json()  # schema
+            ws.receive_json()  # thread_loaded (turn_count=0)
+            ws.send_json({"type": "turn_start", "content": "hello", "mode": "ask"})
+            # Drain until turn_end.
+            while True:
+                frame = ws.receive_json()
+                if frame["type"] == "turn_end":
+                    break
+        # WS closed — runner.persist() should have fired.
+
+    # Verify thread file on disk.
+    # Path may be <vault>/research/chats/persist-me.md depending on default domain.
+    chats_dir = seeded_vault / "research" / "chats"
+    assert chats_dir.exists()
+    thread_files = list(chats_dir.glob("persist-me*"))
+    assert len(thread_files) >= 1
+    assert "hello" in thread_files[0].read_text(encoding="utf-8")
+
+
+def test_reconnect_reports_turn_count(client: TestClient, app) -> None:  # noqa: ANN001
+    app.state.ctx.tool_ctx.llm.queue("response 1")
+
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+
+        # Connection A — run one turn.
+        with fresh.websocket_connect(f"/ws/chat/rejoin?token={token}") as ws:
+            ws.receive_json()
+            loaded = ws.receive_json()
+            assert loaded["turn_count"] == 0
+
+            ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
+            while ws.receive_json()["type"] != "turn_end":
+                pass
+
+        # Connection B — reconnect; turn_count should be 1.
+        with fresh.websocket_connect(f"/ws/chat/rejoin?token={token}") as ws:
+            ws.receive_json()
+            loaded = ws.receive_json()
+            assert loaded["turn_count"] == 1
+            assert loaded["thread_id"] == "rejoin"
+
+
+def test_unclean_disconnect_still_persists(
+    client: TestClient, app, seeded_vault: Path  # noqa: ANN001
+) -> None:
+    """Raising during turn still triggers the persist via finally block."""
+    app.state.ctx.tool_ctx.llm.queue("asst reply")
+
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        try:
+            with fresh.websocket_connect(f"/ws/chat/unclean?token={token}") as ws:
+                ws.receive_json()
+                ws.receive_json()
+                ws.send_json({"type": "turn_start", "content": "will crash client", "mode": "ask"})
+                # Drain turn_start.
+                ws.receive_json()
+                # Context exits abnormally via raise.
+                raise RuntimeError("simulated client crash")
+        except RuntimeError:
+            pass  # expected
+
+    # Thread file should still exist — persist runs in finally.
+    chats_dir = seeded_vault / "research" / "chats"
+    files = list(chats_dir.glob("unclean*"))
+    assert len(files) >= 1
+```
+
+### Step 2 — Implement persist + load
+
+Modify `session_runner.py`:
+
+```python
+class SessionRunner:
+    # ... Task 19/20 body ...
+
+    async def persist(self) -> None:
+        """Flush the session to vault + state.sqlite. No-op if session never loaded."""
+        if self._session is None:
+            return
+        try:
+            self._session.persist()  # verify sync vs async; adjust if needed
+        except Exception:  # noqa: BLE001
+            logger.exception("persist failed for thread_id=%s", self.thread_id)
+
+    async def _ensure_session(self) -> Any:
+        """Load existing thread from vault, or build fresh."""
+        if self._session is None:
+            from brain_core.chat.session import ChatSession
+
+            self._session = ChatSession.load_or_create(
+                thread_id=self.thread_id,
+                vault_root=self.ctx.vault_root,
+                allowed_domains=self.ctx.allowed_domains,
+                mode=self.mode,
+                llm=self.ctx.tool_ctx.llm,
+                writer=self.ctx.tool_ctx.writer,
+                pending_store=self.ctx.tool_ctx.pending_store,
+                retrieval=self.ctx.tool_ctx.retrieval,
+                cost_ledger=self.ctx.tool_ctx.cost_ledger,
+                state_db=self.ctx.tool_ctx.state_db,
+            )
+        return self._session
+
+    @property
+    def turn_count(self) -> int:
+        if self._session is None:
+            return 0
+        return getattr(self._session, "turn_count", 0)
+```
+
+**Verify** that `ChatSession.load_or_create` exists. If Plan 03 only has `ChatSession(...)` that always creates fresh, add a thin `load_or_create` helper to `brain_core.chat.session` as an additive extension (one commit in Task 21 if needed, similar to Plan 04's `IngestPipeline.apply=False` addition).
+
+### Step 3 — Wire lifecycle in `routes/chat.py`
+
+Replace the handshake block:
+
+```python
+# After check_ws_token:
+await websocket.accept()
+
+runner = SessionRunner(ctx=ctx, thread_id=thread_id, mode=mode)
+# Eagerly load so turn_count is accurate in thread_loaded.
+await runner._ensure_session()
+
+await websocket.send_json(serialize_server_event(SchemaVersionEvent(version=_SCHEMA_VERSION)))
+await websocket.send_json(
+    serialize_server_event(
+        ThreadLoadedEvent(
+            thread_id=thread_id,
+            mode=runner.mode,
+            turn_count=runner.turn_count,
+        )
+    )
+)
+
+try:
+    # ... Task 19/20 receive loop ...
+except WebSocketDisconnect:
+    logger.info("chat WS disconnected: thread_id=%s", thread_id)
+finally:
+    # Always persist, even on unclean disconnect.
+    await runner.persist()
+    if turn_task and not turn_task.done():
+        turn_task.cancel()
+```
+
+### Step 4 — Run + commit
+
+Expect: **~130 passed** (127 prior + 3 reconnect/persist tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 21 — WS disconnect flush + reconnect rebuild (ChatSession.load_or_create)"
+```
+
+---
+
+**Checkpoint 6 — pause for main-loop review.**
+
+21 tasks landed. WebSocket chat is fully live:
+- Handshake: Origin/Host + query-param token → typed `schema_version` + `thread_loaded` frames
+- Typed event wire format: 11 server events + 4 client messages via Pydantic v2 discriminated unions
+- `SessionRunner` bridges `ChatSession.run_turn` to WS events
+- Concurrent `asyncio.wait` loop handles turn events + cancel + switch_mode concurrently
+- Clean + unclean disconnect both trigger `persist()` (finally block)
+- Reconnect to same `thread_id` loads existing thread from vault + `state.sqlite`
+
+Main loop reviews:
+
+- **`ChatSession.load_or_create` verification.** If Plan 03 only shipped `ChatSession(thread_id=...)` that always constructs fresh, Task 21 added the `load_or_create` helper as an additive `brain_core` extension. Verify the addition matches Plan 03's persistence format.
+- **Event-name mapping drift.** The `_convert_chat_event` function names Plan 03 event classes (`DeltaChatEvent`, `ToolCallChatEvent`, etc.). If reality differs (`ChatDelta`, `ToolCall`, snake_case attribute names, etc.), adjust in `session_runner.py` only — `brain_api.chat.events` contract stays.
+- **Concurrent-thread edge case.** Two WS connections to the same thread_id = last-writer-wins on persist. Documented in brain_api README; Plan 07 UI prevents the situation. Track for Plan 07 handoff.
+- **Cancel semantics.** After `cancel_turn` fires `turn_task.cancel()`, the partial assistant message is NOT persisted (ChatSession never completes the turn). Is that the right semantics, or should a partial message append to the thread file? **Recommendation:** drop the partial. Cancel = "I changed my mind"; the user can re-issue with a new `turn_start`. Track for Plan 07 UX review.
+- **`ChatSession.run_turn` shape drift.** The plan assumes `async for chat_event in session.run_turn(content)` (Case A). If reality is callback-based (Case B), `session_runner.py` adapts via `asyncio.Queue` — the WS contract is unchanged. Verify before Task 19 implementation.
+
+Before Task 22, main loop confirms the chat surface is locked — Group 7's contract tests use the Plan-04-style deferred-cassette pattern and don't exercise WS event content beyond shape assertions.
+
+---
