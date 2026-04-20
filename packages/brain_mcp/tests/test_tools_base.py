@@ -71,3 +71,16 @@ def test_text_result_with_data() -> None:
     assert out[1].type == "text"
     parsed = json.loads(out[1].text)
     assert parsed == {"key": "value", "count": 3}
+
+
+def test_brain_mcp_tool_context_is_brain_core_tool_context() -> None:
+    """The re-export preserves identity — no subclass or alias duplication.
+
+    Group 2 (Plan 05 Tasks 5/6) depends on this: every brain_mcp test that
+    constructs ``ToolContext(...)`` via the ``brain_mcp.tools.base`` import
+    path must produce the IDENTICAL class as ``brain_core.tools.base``.
+    """
+    from brain_core.tools.base import ToolContext as CoreCtx
+    from brain_mcp.tools.base import ToolContext as McpCtx
+
+    assert CoreCtx is McpCtx
