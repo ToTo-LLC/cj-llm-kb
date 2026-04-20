@@ -14,10 +14,12 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
+from fastapi import Depends, HTTPException, Request, WebSocket
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
+
+from brain_api.context import AppContext, get_ctx
 
 _TOKEN_FILENAME = "api-secret.txt"
 
@@ -155,3 +157,60 @@ class OriginHostMiddleware(BaseHTTPMiddleware):
                 )
 
         return await call_next(request)
+
+
+def require_token(
+    request: Request,
+    ctx: AppContext = Depends(get_ctx),  # noqa: B008 — FastAPI evaluates Depends lazily per request
+) -> None:
+    """FastAPI dependency — require a matching ``X-Brain-Token`` header.
+
+    Compares the request's ``X-Brain-Token`` header against ``ctx.token``
+    in constant time via :func:`secrets.compare_digest`. Raises
+    :class:`HTTPException` 403 on missing or mismatched token.
+
+    Attach to write endpoints with
+    ``dependencies=[Depends(require_token)]``. Task 10 wires it onto
+    ``POST /api/tools/{name}``; the liveness probe and the tool listing
+    endpoint remain unauthenticated.
+
+    Note: the 403 body is currently ``{"detail": {"error": ..., "message": ...}}``
+    because FastAPI wraps :class:`HTTPException` ``detail`` under a top-level
+    ``detail`` key. Plan 05 Task 15 flattens this via a project-wide exception
+    handler / ``ApiError`` so the envelope matches ``{"error", "message"}``
+    everywhere.
+    """
+    received = request.headers.get("x-brain-token", "")
+    expected = ctx.token or ""
+
+    if not received or not expected or not secrets.compare_digest(received, expected):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "refused",
+                "message": "missing or invalid X-Brain-Token header",
+            },
+        )
+
+
+async def check_ws_token(websocket: WebSocket, ctx: AppContext) -> bool:
+    """Validate the ``?token=<hex>`` query param on a WebSocket handshake.
+
+    Returns ``True`` when the token matches ``ctx.token`` in constant time.
+    Otherwise closes the socket with code ``1008`` (Policy Violation, RFC 6455)
+    + reason ``"invalid token"`` and returns ``False``. **The caller MUST
+    ``return`` on a ``False`` result — the socket is already closed and any
+    subsequent ``accept`` / ``send`` / ``receive`` will raise.**
+
+    Token lives in the query string (not a header) because browsers cannot
+    reliably attach custom headers to a ``WebSocket`` constructor; the
+    ``?token=...`` convention matches VSCode / Jupyter's localhost WS auth.
+    """
+    received = websocket.query_params.get("token", "")
+    expected = ctx.token or ""
+
+    if not received or not expected or not secrets.compare_digest(received, expected):
+        await websocket.close(code=1008, reason="invalid token")
+        return False
+
+    return True
