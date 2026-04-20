@@ -1088,3 +1088,614 @@ git commit -m "feat(api): plan 05 task 3 — tool registry + GET /api/tools list
 Before Task 4, the next main-loop dispatch confirms the registry shape is locked — Group 2's extraction logic depends on it.
 
 ---
+
+### Group 2 — Handler extraction (Tasks 4–6) — STRICTLY ADDITIVE REFACTOR
+
+**Checkpoint after Task 6:** main-loop reviews the full handler move. **Hard gate: all 101 `brain_mcp` tests must pass unchanged.** This is the highest-risk sweep in Plan 05; batching into read+ingest (Task 5) and patch+maintenance (Task 6) keeps blast radius per commit tight.
+
+**The pattern every extracted tool follows** (avoid bikeshedding in task bodies — this is the contract):
+
+1. **Move** `packages/brain_mcp/src/brain_mcp/tools/<name>.py` → `packages/brain_core/src/brain_core/tools/<name>.py`. In the moved file:
+   - Change `from brain_mcp.tools.base import ToolContext, scope_guard_path, text_result` → `from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path`
+   - Replace every `return text_result(text, data=data)` with `return ToolResult(text=text, data=data)` (or `ToolResult(text=text)` if no data)
+   - Handler signature changes from `-> list[types.TextContent]` to `-> ToolResult`
+   - Remove the `import mcp.types as types` line — no MCP SDK imports in `brain_core`
+2. **Append** `register(<module>)` to the end of `brain_core/tools/<name>.py` so it auto-registers at import time. (Cleaner alternative considered: explicit registration in `brain_core/tools/__init__.py`. See the design discussion at Checkpoint 2; Group 2 picks auto-register-at-import for simplicity.)
+3. **Rewrite** `packages/brain_mcp/src/brain_mcp/tools/<name>.py` as a 7-line shim:
+   ```python
+   """MCP transport shim for brain_<name>. Real handler lives in brain_core.tools.<name>."""
+
+   from brain_core.tools.<name> import DESCRIPTION, INPUT_SCHEMA, NAME
+   from brain_core.tools.<name> import handle as _core_handle
+
+   from brain_mcp.tools.base import ToolContext, text_result
+
+   __all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
+
+
+   async def handle(arguments, ctx: ToolContext):  # noqa: ANN001, ANN201
+       """Delegate to brain_core; wrap the ToolResult into MCP TextContent."""
+       result = await _core_handle(arguments, ctx)
+       return text_result(result.text, data=result.data)
+   ```
+4. **No test changes in `brain_mcp`.** Existing tests call `await handle(args, ctx)` and inspect `list[TextContent]`. The shim preserves that return shape, so tests pass unchanged. Hard gate: **all 101 brain_mcp tests stay green**.
+5. **Add one smoke test per moved tool in `brain_core`** asserting `ToolResult` shape — `packages/brain_core/tests/tools/test_<name>.py` with a single happy-path test. These are coverage insurance for the new module path; they do NOT duplicate brain_mcp's exhaustive tests.
+
+With this pattern fixed, Tasks 5 and 6 can be dispatched to a single subagent each with batched work.
+
+---
+
+### Task 4 — `brain_core.tools.base` (`ToolContext`, `ToolResult`, `scope_guard_path`)
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/tools/base.py`
+- Modify: `packages/brain_core/src/brain_core/tools/__init__.py` — also expose `ToolContext`, `ToolResult`, `scope_guard_path` at package root for convenience
+- Modify: `packages/brain_mcp/src/brain_mcp/tools/base.py` — re-export `ToolContext` + `scope_guard_path` from `brain_core.tools.base`, keep `text_result` locally, add a `ToolResult → list[TextContent]` conversion helper
+- Create: `packages/brain_core/tests/tools/__init__.py` (empty)
+- Create: `packages/brain_core/tests/tools/test_base.py`
+
+**Context for the implementer:**
+
+`ToolContext`, `scope_guard_path` are transport-agnostic: they name brain_core primitives only (`Any`-typed fields + `brain_core.vault.paths.scope_guard`). Moving them is clean.
+
+`text_result` is MCP-SDK-specific: `import mcp.types as types; [types.TextContent(type="text", text=...)]`. It MUST stay in `brain_mcp`. The current signature takes `(text: str, *, data: dict | None = None) -> list[types.TextContent]`. After Task 4 it ALSO accepts a `ToolResult` directly — overloaded:
+- `text_result(text: str, *, data: dict | None = None)` (existing, preserved for backwards compat)
+- `text_result(result: ToolResult)` (new, used by Task 5/6 shims)
+
+`ToolResult` is a new frozen dataclass in `brain_core.tools.base`:
+```python
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    text: str
+    data: dict[str, Any] | None = None
+```
+
+### Step 1 — Failing test
+
+`packages/brain_core/tests/tools/test_base.py`:
+
+```python
+"""Tests for brain_core.tools.base — ToolContext, ToolResult, scope_guard_path."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path
+from brain_core.vault.paths import ScopeError
+
+
+def test_tool_result_frozen_with_optional_data() -> None:
+    result = ToolResult(text="hello")
+    assert result.text == "hello"
+    assert result.data is None
+
+    result2 = ToolResult(text="hi", data={"k": "v"})
+    assert result2.data == {"k": "v"}
+
+    with pytest.raises(Exception):  # frozen dataclass rejects mutation
+        result.text = "mutated"  # type: ignore[misc]
+
+
+def test_tool_context_accepts_all_ten_fields(tmp_path: Path) -> None:
+    """Smoke — the field set matches ToolContext across brain_mcp."""
+    from dataclasses import fields
+
+    names = {f.name for f in fields(ToolContext)}
+    assert names == {
+        "vault_root",
+        "allowed_domains",
+        "retrieval",
+        "pending_store",
+        "state_db",
+        "writer",
+        "llm",
+        "cost_ledger",
+        "rate_limiter",
+        "undo_log",
+    }
+
+
+def test_scope_guard_path_rejects_absolute(tmp_path: Path) -> None:
+    ctx_stub = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+    with pytest.raises(ValueError, match="vault-relative"):
+        scope_guard_path(str(tmp_path / "research" / "notes" / "x.md"), ctx_stub)
+
+
+def test_scope_guard_path_rejects_out_of_scope(tmp_path: Path) -> None:
+    ctx_stub = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None, pending_store=None, state_db=None, writer=None,
+        llm=None, cost_ledger=None, rate_limiter=None, undo_log=None,
+    )
+    with pytest.raises(ScopeError):
+        scope_guard_path("personal/notes/secret.md", ctx_stub)
+```
+
+**Also** — verify the brain_mcp shim re-exports still work:
+
+`packages/brain_mcp/tests/test_tools_base.py` already exists from Plan 04. Add one assertion:
+
+```python
+def test_brain_mcp_tool_context_is_brain_core_tool_context() -> None:
+    """The re-export preserves identity — no subclass or alias duplication."""
+    from brain_core.tools.base import ToolContext as CoreCtx
+    from brain_mcp.tools.base import ToolContext as McpCtx
+    assert CoreCtx is McpCtx
+```
+
+### Step 2 — Implement `brain_core.tools.base`
+
+```python
+"""Shared tool primitives for brain_core.tools.<name> modules.
+
+Task 4 lands `ToolContext`, `ToolResult`, `scope_guard_path`. These are
+transport-agnostic — MCP-specific helpers live in `brain_mcp.tools.base`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from brain_core.vault.paths import scope_guard
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Per-request primitives every tool handler may need.
+
+    Heavy types (retrieval, llm, writer) are typed as `Any` to avoid import
+    cycles — concrete tools narrow at use site. Mirrors brain_mcp's shape
+    1:1 so every Plan 04 tool handler moves without signature changes.
+    """
+
+    vault_root: Path
+    allowed_domains: tuple[str, ...]
+    retrieval: Any  # BM25VaultIndex
+    pending_store: Any  # PendingPatchStore
+    state_db: Any  # StateDB
+    writer: Any  # VaultWriter
+    llm: Any  # LLMProvider
+    cost_ledger: Any  # CostLedger
+    rate_limiter: Any  # RateLimiter
+    undo_log: Any  # UndoLog
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    """Transport-agnostic return value for every tool handler.
+
+    `text` is a human-readable summary shown to LLMs or rendered in the UI.
+    `data` is the structured payload (None when the tool has nothing more to
+    say than the text). MCP wraps this into TextContent via
+    `brain_mcp.tools.base.text_result`. REST serializes it as
+    `{"text": ..., "data": ...}` directly.
+    """
+
+    text: str
+    data: dict[str, Any] | None = None
+
+
+def scope_guard_path(rel_path: str, ctx: ToolContext) -> Path:
+    """Convert a vault-relative string path to an absolute scope-guarded Path.
+
+    Raises:
+        ValueError: if ``rel_path`` is absolute.
+        ScopeError: if the resolved path falls outside ctx.allowed_domains.
+    """
+    p = Path(rel_path)
+    if p.is_absolute():
+        raise ValueError(f"path must be vault-relative, not absolute: {rel_path!r}")
+    return scope_guard(
+        ctx.vault_root / p,
+        vault_root=ctx.vault_root,
+        allowed_domains=ctx.allowed_domains,
+    )
+```
+
+Update `packages/brain_core/src/brain_core/tools/__init__.py` to re-export:
+
+```python
+"""brain_core.tools — shared tool-handler registry and base types."""
+
+from __future__ import annotations
+
+from types import ModuleType
+
+from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path
+
+ToolModule = ModuleType
+
+_TOOL_MODULES: list[ToolModule] = []
+
+
+def register(module: ToolModule) -> None:
+    """Append a tool module to the registry. Idempotent."""
+    if module not in _TOOL_MODULES:
+        _TOOL_MODULES.append(module)
+
+
+def list_tools() -> list[ToolModule]:
+    """Return the registered tool modules in registration order."""
+    return list(_TOOL_MODULES)
+
+
+__all__ = [
+    "ToolContext",
+    "ToolModule",
+    "ToolResult",
+    "list_tools",
+    "register",
+    "scope_guard_path",
+]
+```
+
+### Step 3 — Rewrite `brain_mcp/tools/base.py` as a shim + `text_result` home
+
+```python
+"""MCP-transport helpers. ToolContext + scope_guard_path re-export from brain_core.tools.base.
+
+`text_result` lives here because it's MCP-SDK-specific (returns
+list[types.TextContent]). Task 5/6 shims call `text_result(ToolResult)` to
+wrap the brain_core handler's output.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path
+
+ToolModule = types.ModuleType  # retained for type-narrowing across brain_mcp.server
+
+__all__ = ["ToolContext", "ToolModule", "ToolResult", "scope_guard_path", "text_result"]
+
+
+def text_result(
+    text_or_result: str | ToolResult,
+    *,
+    data: dict[str, Any] | None = None,
+) -> list[types.TextContent]:
+    """Wrap a tool's output into the MCP SDK's TextContent list shape.
+
+    Two call forms for backwards compat with Plan 04 handlers:
+        text_result("summary text", data={"k": "v"})          # existing Plan 04 call
+        text_result(ToolResult(text="summary", data={...}))   # new Task 5/6 shim call
+    """
+    if isinstance(text_or_result, ToolResult):
+        text = text_or_result.text
+        data = text_or_result.data
+    else:
+        text = text_or_result
+
+    out: list[types.TextContent] = [types.TextContent(type="text", text=text)]
+    if data is not None:
+        out.append(types.TextContent(type="text", text=json.dumps(data, indent=2, default=str)))
+    return out
+```
+
+### Step 4 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_core --reinstall-package brain_mcp
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_mcp packages/brain_api -v
+```
+
+Expect:
+- brain_core: **364 passed** (362 prior + 1 ToolResult + 1 ToolContext shape assertion; scope_guard_path tests replace nothing)
+- brain_mcp: **102 passed** (101 prior + 1 identity assertion)
+- brain_api: 9 passed (Task 1–3 baseline)
+- **Total: 505 passed + 8 skipped** (vs pre-Plan-05 baseline 502)
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_core && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_mcp && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_api && uv run mypy src tests
+```
+
+All clean. Self-review, then:
+
+```bash
+git commit -m "feat(core): plan 05 task 4 — brain_core.tools.base with ToolContext/ToolResult/scope_guard_path"
+```
+
+---
+
+### Task 5 — Move 9 read + ingest tool modules to `brain_core.tools.*`
+
+**Owning subagent:** brain-core-engineer
+
+**Modules moved (9):** `list_domains`, `get_index`, `read_note`, `search`, `recent`, `get_brain_md`, `ingest`, `classify`, `bulk_import`.
+
+**Files — per module (× 9):**
+- Move: `packages/brain_mcp/src/brain_mcp/tools/<name>.py` → `packages/brain_core/src/brain_core/tools/<name>.py`
+- Rewrite: `packages/brain_mcp/src/brain_mcp/tools/<name>.py` as the 7-line shim
+- Create: `packages/brain_core/tests/tools/test_<name>.py` — one happy-path `ToolResult`-shape test per module
+
+**Context for the implementer:**
+
+Follow the shared pattern defined at the top of Group 2. For each module, apply these transformations in order:
+
+1. **Read** the current `brain_mcp/tools/<name>.py`.
+2. **Copy** it to `brain_core/tools/<name>.py`.
+3. **Rewrite imports** in the copied file:
+   - `import mcp.types as types` → **delete**
+   - `from brain_mcp.tools.base import ToolContext, scope_guard_path, text_result` → `from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path`
+4. **Rewrite return type** of `handle`:
+   - `async def handle(arguments, ctx) -> list[types.TextContent]:` → `async def handle(arguments, ctx: ToolContext) -> ToolResult:`
+5. **Rewrite every `text_result(...)` call**:
+   - `return text_result("summary", data={"k": "v"})` → `return ToolResult(text="summary", data={"k": "v"})`
+   - `return text_result("summary")` → `return ToolResult(text="summary")`
+6. **Append auto-register** at module bottom:
+   ```python
+   import brain_core.tools as _tools
+   import sys
+   _tools.register(sys.modules[__name__])
+   ```
+   (This IS the auto-register pattern picked at the top of Group 2. Alternative considered: explicit registration in `__init__.py`. Auto-register keeps each module self-contained; explicit registration would centralize the order. Group 2 picks auto-register; Checkpoint 2 surfaces the choice for a final sign-off.)
+7. **Rewrite** `brain_mcp/tools/<name>.py` per the shim template from the Group 2 shared pattern.
+8. **Add one smoke test** in `packages/brain_core/tests/tools/test_<name>.py` that exercises the handler against a `ToolContext` built from a tmp vault, asserts the returned `ToolResult` has the expected `text` and `data` keys.
+
+### Detailed example — `list_domains`
+
+**Original `brain_mcp/tools/list_domains.py`:**
+
+```python
+"""brain_list_domains — list every top-level domain directory in the vault."""
+
+from typing import Any
+import mcp.types as types
+from brain_mcp.tools.base import ToolContext, text_result
+
+NAME = "brain_list_domains"
+DESCRIPTION = "List every domain (top-level directory with notes) in the vault."
+INPUT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
+    root = ctx.vault_root
+    domains = sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and list(d.rglob("*.md"))
+    )
+    text = "\n".join(f"- {d}" for d in domains) or "(no domains)"
+    return text_result(text, data={"domains": domains})
+```
+
+**New `brain_core/tools/list_domains.py`:**
+
+```python
+"""brain_list_domains — list every top-level domain directory in the vault."""
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+from brain_core.tools.base import ToolContext, ToolResult
+
+NAME = "brain_list_domains"
+DESCRIPTION = "List every domain (top-level directory with notes) in the vault."
+INPUT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
+
+
+async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    root = ctx.vault_root
+    domains = sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and list(d.rglob("*.md"))
+    )
+    text = "\n".join(f"- {d}" for d in domains) or "(no domains)"
+    return ToolResult(text=text, data={"domains": domains})
+
+
+# Auto-register at import time.
+import brain_core.tools as _tools  # noqa: E402
+_tools.register(sys.modules[__name__])
+```
+
+**New `brain_mcp/tools/list_domains.py` (shim):**
+
+```python
+"""MCP transport shim for brain_list_domains. Real handler in brain_core.tools.list_domains."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import mcp.types as types
+
+from brain_core.tools.list_domains import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.list_domains import handle as _core_handle
+
+from brain_mcp.tools.base import ToolContext, text_result
+
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
+
+
+async def handle(
+    arguments: dict[str, Any], ctx: ToolContext
+) -> list[types.TextContent]:
+    """Delegate to brain_core; wrap ToolResult into MCP TextContent list."""
+    result = await _core_handle(arguments, ctx)
+    return text_result(result)
+```
+
+**New `brain_core/tests/tools/test_list_domains.py`:**
+
+```python
+"""Smoke test for brain_core.tools.list_domains — ToolResult shape."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from brain_core.tools.base import ToolContext, ToolResult
+from brain_core.tools.list_domains import NAME, handle
+
+
+def _mk_ctx(vault: Path) -> ToolContext:
+    return ToolContext(
+        vault_root=vault,
+        allowed_domains=("research",),
+        retrieval=None, pending_store=None, state_db=None, writer=None,
+        llm=None, cost_ledger=None, rate_limiter=None, undo_log=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_lists_non_empty_domains(tmp_path: Path) -> None:
+    (tmp_path / "research" / "notes").mkdir(parents=True)
+    (tmp_path / "research" / "notes" / "x.md").write_text("x", encoding="utf-8", newline="\n")
+    (tmp_path / "personal" / "notes").mkdir(parents=True)
+    (tmp_path / "personal" / "notes" / "y.md").write_text("y", encoding="utf-8", newline="\n")
+
+    result = await handle({}, _mk_ctx(tmp_path))
+
+    assert isinstance(result, ToolResult)
+    assert "research" in result.data["domains"]  # type: ignore[index]
+    assert "personal" in result.data["domains"]  # type: ignore[index]
+
+
+def test_name_constant() -> None:
+    assert NAME == "brain_list_domains"
+```
+
+### Repeat for 8 more modules
+
+Each of `get_index`, `read_note`, `search`, `recent`, `get_brain_md`, `ingest`, `classify`, `bulk_import` follows the same transformation. The subagent should:
+
+1. Open the existing `brain_mcp/tools/<name>.py`
+2. Apply transformations 1–6 from the pattern
+3. Replace `brain_mcp/tools/<name>.py` with the shim
+4. Write a smoke test in `brain_core/tests/tools/test_<name>.py`
+
+**Pattern-specific notes:**
+- **`ingest`** — the `_build_pipeline_for_mcp` helper moves too. Rename it `_build_pipeline_from_ctx` in `brain_core.tools.ingest`; it only touches `ctx` + `brain_core.ingest.pipeline.IngestPipeline`, no MCP deps.
+- **`search`** — already imports `scope_guard` from `brain_core.vault.paths`. No additional changes beyond the standard pattern.
+- **`bulk_import`** — the `_LARGE_FOLDER_THRESHOLD = 20` named constant stays module-local.
+- **`classify`** — still passes `ctx.llm` + `"claude-haiku-4-5-20251001"`. Model string stays hardcoded (D10a defer).
+
+### Run + commit
+
+After all 9 moves:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_core --reinstall-package brain_mcp
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_mcp packages/brain_api -v
+```
+
+Expect:
+- brain_core: **373 passed** (364 prior + 9 smoke tests, one per moved module)
+- brain_mcp: **102 passed** (unchanged — shims preserve existing behavior)
+- brain_api: 9 passed (unchanged)
+- **Total: 514 passed + 8 skipped**
+
+Gates:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_core && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_mcp && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run ruff check packages/brain_core packages/brain_mcp && uv run ruff format --check packages/brain_core packages/brain_mcp
+```
+
+Self-review, then:
+
+```bash
+git commit -m "refactor(core): plan 05 task 5 — move 9 read+ingest tool handlers to brain_core.tools"
+```
+
+---
+
+### Task 6 — Move 9 patch + maintenance tool modules to `brain_core.tools.*`
+
+**Owning subagent:** brain-core-engineer
+
+**Modules moved (9):** `propose_note`, `list_pending_patches`, `apply_patch`, `reject_patch`, `undo_last`, `lint`, `cost_report`, `config_get`, `config_set`.
+
+**Context for the implementer:**
+
+Identical pattern to Task 5 — the 6-step transformation from the Group 2 shared pattern, applied module by module.
+
+**Pattern-specific notes:**
+- **`apply_patch`** — Plan 04 Task 25 cleaned up the `_absolutize_patchset` workaround (the core `VaultWriter.apply` now absolutizes). The tool module is now trivial; move as-is.
+- **`propose_note`** — imports `ChatMode.BRAINSTORM` from `brain_core.chat.types`; already a `brain_core` dep, clean.
+- **`undo_last`** — `_find_latest_undo_id(vault_root)` helper moves with it.
+- **`lint`** — stub only, returns `{"status": "not_implemented", "message": "Plan 09 will land the real lint engine."}`. Easiest move.
+- **`cost_report`** — depends on `CostLedger.summary()` (Plan 04 Task 19A landed it in brain_core); no cross-package concerns.
+- **`config_get` / `config_set`** — both depend on the local `_snapshot_config(ctx)` helper and the `_SECRET_SUBSTRINGS` / `_SETTABLE_KEYS` constants. Move those to `brain_core.tools.config_get` and `brain_core.tools.config_set` respectively (no cross-module sharing — duplication is ≤10 lines and makes each module self-contained).
+
+### Run + commit
+
+After all 9 moves:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_core --reinstall-package brain_mcp
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_mcp packages/brain_api -v
+```
+
+Expect:
+- brain_core: **382 passed** (373 prior + 9 smoke tests)
+- brain_mcp: **102 passed** (unchanged)
+- brain_api: 9 passed
+- **Total: 523 passed + 8 skipped**
+
+One MORE test in `brain_api`: the `GET /api/tools` listing now returns 18 tools instead of empty. Update `test_empty_registry_returns_empty_list` → `test_lists_eighteen_tools_after_extraction`:
+
+```python
+def test_lists_eighteen_tools_after_extraction(client: TestClient) -> None:
+    """After Group 2, the registry has all 18 tools auto-registered."""
+    response = client.get("/api/tools")
+    body = response.json()
+    names = {t["name"] for t in body["tools"]}
+    assert len(body["tools"]) == 18
+    # Spot-check a few names.
+    assert "brain_list_domains" in names
+    assert "brain_apply_patch" in names
+    assert "brain_cost_report" in names
+```
+
+Commit:
+
+```bash
+git commit -m "refactor(core): plan 05 task 6 — move 9 patch+maintenance tool handlers to brain_core.tools (18 total)"
+```
+
+---
+
+**Checkpoint 2 — pause for main-loop review.**
+
+6 tasks landed. Handler extraction is complete — all 18 tool handlers live in `brain_core.tools.*`, `brain_mcp.tools.*` are 7-line shims, `brain_mcp.server._TOOL_MODULES` still works via the shims (no server.py changes needed). Main loop reviews:
+
+- **Hard gate:** every one of the 101 brain_mcp tests still passes. If any regressed, investigate before continuing.
+- Auto-register-at-import pattern OK, or switch to explicit registration in `brain_core/tools/__init__.py` (centralizes ordering at cost of boilerplate)?
+- `ToolResult.data: dict | None` — is `None` the right "no data" signal, or should the default be `{}` for simpler consumer code?
+- The `brain_api → brain_mcp` dep from Task 1 (`pyproject.toml`) — can it drop now that tool handlers live in `brain_core`? Answer: ALMOST. `AppContext.build_app_context` still imports `brain_mcp.rate_limit.RateLimiter`. Task 14 (`RateLimitError` promotion) is the right time to move `RateLimiter` to `brain_core` and drop this dep. Track for Task 14.
+- Any cross-package import cycles surfaced by the mypy runs?
+
+Before Task 7, main-loop dispatches the auth/middleware work with the registry shape locked.
+
+---
