@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from brain_api.context import build_app_context
 from brain_api.routes import health
+from brain_api.routes import tools as tools_routes
 
 try:
     _VERSION = version("brain_api")
@@ -74,5 +75,6 @@ def create_app(
     app.state.token_override = token_override
 
     app.include_router(health.router)
+    app.include_router(tools_routes.router)
 
     return app
