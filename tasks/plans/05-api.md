@@ -1699,3 +1699,696 @@ git commit -m "refactor(core): plan 05 task 6 — move 9 patch+maintenance tool 
 Before Task 7, main-loop dispatches the auth/middleware work with the registry shape locked.
 
 ---
+
+### Group 3 — Auth + middleware (Tasks 7–9)
+
+**Checkpoint after Task 9:** main-loop reviews the whole security surface — token rotation semantics, Origin/Host rejection paths, WebSocket handshake checks — before the REST tool dispatcher (Group 4) goes live. A bug in auth is easier to catch at the single-endpoint (`/healthz`) + synthetic-endpoint level than after 18 real endpoints land.
+
+The localhost attack surface per D6a: a malicious page at `evil.example` visited in any browser can issue `fetch("http://localhost:4317/api/tools/brain_propose_note", {...})` and hit vault writes. Browsers enforce same-origin on read-responses but not on sending — CSRF is real for a local server. Defenses in layered order:
+
+1. **Host header validation** — rejects DNS-rebinding attacks (`evil.example` → `127.0.0.1` in the browser's local DNS cache)
+2. **Origin header validation** — rejects cross-origin POSTs from any non-localhost page
+3. **Filesystem token** — final defense. A random secret at `<vault>/.brain/run/api-secret.txt` (mode 0600). The Next.js frontend (Plan 07) reads it server-side; the browser never sees it. CLI reads it directly.
+
+---
+
+### Task 7 — Token generation + filesystem write
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/auth.py` (token primitives only — middleware in Task 8, dependency in Task 9)
+- Modify: `packages/brain_api/src/brain_api/context.py` — store token on `AppContext`
+- Modify: `packages/brain_api/src/brain_api/app.py` — generate token in lifespan, write to filesystem, stash on ctx
+- Create: `packages/brain_api/tests/test_auth_token.py`
+
+**Context for the implementer:**
+
+`auth.py` is the home for every auth primitive across Tasks 7, 8, 9. Task 7 lands:
+- `generate_token() -> str` — 32 bytes from `secrets.token_hex(32)` → 64 hex chars → 256 bits of entropy
+- `write_token_file(vault_root: Path, token: str) -> Path` — writes to `<vault>/.brain/run/api-secret.txt`, mode 0600 on POSIX (via `os.open` + `O_CREAT | O_WRONLY | O_TRUNC` + octal mode arg), best-effort `os.chmod(0o600)` on Windows with a clear `# TODO(Windows ACL)` comment per D11a
+- `read_token_file(vault_root: Path) -> str | None` — for CLI clients (Plan 08's `brain start` will consume this). Returns `None` if the file doesn't exist
+
+Tokens rotate on every `create_app()` call (lifespan startup). A CLI that gets a 401 / 403 rejection should re-read the file to pick up the new token. The old token becomes invalid the instant a new app boots; for a single-user local tool this is fine.
+
+**Cross-platform note (D11a):** on POSIX, the `os.open(path, flags, mode)` with mode 0o600 is atomic-ish — the file is created with the right bits before any write. On Windows, `os.open` accepts the mode but ignores non-read-only bits; the real control is NTFS ACLs via `pywin32`. We ship a `# TODO(Windows ACL)` comment and document in `docs/testing/cross-platform.md` (Task 23) that the practical Windows defense is "don't share your `%APPDATA%` tree". The token-file defense against cross-origin browser attacks is unchanged on both OSes.
+
+### Step 1 — Failing test
+
+`packages/brain_api/tests/test_auth_token.py`:
+
+```python
+"""Tests for brain_api.auth — token generation + filesystem IO."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+from brain_api.auth import generate_token, read_token_file, write_token_file
+
+
+def test_generate_token_is_64_hex_chars() -> None:
+    tok = generate_token()
+    assert isinstance(tok, str)
+    assert len(tok) == 64
+    assert all(c in "0123456789abcdef" for c in tok)
+
+
+def test_generate_token_is_unique() -> None:
+    # Collision probability is ~2^-256 — one million samples are safely distinct.
+    tokens = {generate_token() for _ in range(1000)}
+    assert len(tokens) == 1000
+
+
+def test_write_token_file_creates_parent_and_writes(tmp_path: Path) -> None:
+    token = generate_token()
+    path = write_token_file(tmp_path, token)
+
+    assert path == tmp_path / ".brain" / "run" / "api-secret.txt"
+    assert path.exists()
+    assert path.read_text(encoding="utf-8").strip() == token
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX permission bits")
+def test_write_token_file_is_mode_0600_on_posix(tmp_path: Path) -> None:
+    token = generate_token()
+    path = write_token_file(tmp_path, token)
+    mode = path.stat().st_mode & 0o777
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+def test_write_token_file_overwrites_prior(tmp_path: Path) -> None:
+    path = write_token_file(tmp_path, "aaaa")
+    path2 = write_token_file(tmp_path, "bbbb")
+    assert path == path2
+    assert path.read_text(encoding="utf-8").strip() == "bbbb"
+
+
+def test_read_token_file_returns_none_when_missing(tmp_path: Path) -> None:
+    assert read_token_file(tmp_path) is None
+
+
+def test_read_token_file_returns_written_token(tmp_path: Path) -> None:
+    token = generate_token()
+    write_token_file(tmp_path, token)
+    assert read_token_file(tmp_path) == token
+
+
+def test_lifespan_generates_and_stashes_token(app, seeded_vault: Path) -> None:  # noqa: ANN001
+    from fastapi.testclient import TestClient
+
+    with TestClient(app):
+        ctx = app.state.ctx
+        assert ctx.token is not None
+        assert len(ctx.token) == 64
+        # File on disk matches.
+        on_disk = read_token_file(seeded_vault)
+        assert on_disk == ctx.token
+
+
+def test_each_create_app_rotates_token(seeded_vault: Path) -> None:
+    """Rotation on startup — a second create_app invocation writes a new token."""
+    from fastapi.testclient import TestClient
+
+    from brain_api import create_app
+
+    app_a = create_app(vault_root=seeded_vault, allowed_domains=("research",))
+    with TestClient(app_a):
+        tok_a = app_a.state.ctx.token
+
+    app_b = create_app(vault_root=seeded_vault, allowed_domains=("research",))
+    with TestClient(app_b):
+        tok_b = app_b.state.ctx.token
+
+    assert tok_a != tok_b
+```
+
+### Step 2 — Implement `auth.py`
+
+```python
+"""brain_api auth primitives — token generation, filesystem IO.
+
+Task 7 lands the token-file primitives. Task 8 adds Origin/Host middleware;
+Task 9 adds the FastAPI dependency that enforces X-Brain-Token on write routes.
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+import sys
+from pathlib import Path
+
+_TOKEN_FILENAME = "api-secret.txt"
+
+
+def generate_token() -> str:
+    """Return a fresh 32-byte (256-bit) hex token. Rotation-safe."""
+    return secrets.token_hex(32)
+
+
+def _token_path(vault_root: Path) -> Path:
+    return vault_root / ".brain" / "run" / _TOKEN_FILENAME
+
+
+def write_token_file(vault_root: Path, token: str) -> Path:
+    """Write `token` to `<vault>/.brain/run/api-secret.txt` with mode 0600.
+
+    POSIX: atomic-ish via `os.open(..., O_CREAT | O_WRONLY | O_TRUNC, 0o600)`.
+    Windows: fall back to `pathlib.Path.write_text` + `os.chmod(..., 0o600)`.
+    Windows `chmod(0o600)` is best-effort — the real defense is NTFS ACLs via
+    `pywin32`, which Plan 05 deliberately does NOT introduce as a new dep.
+    See docs/testing/cross-platform.md for the threat-model discussion.
+    """
+    path = _token_path(vault_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if sys.platform.startswith("win"):
+        # Windows: plain write + best-effort chmod.
+        path.write_text(token + "\n", encoding="utf-8", newline="\n")
+        try:
+            os.chmod(path, 0o600)  # TODO(Windows ACL): pywin32 SetFileSecurityA for real lockdown
+        except OSError:
+            pass
+    else:
+        # POSIX: atomic create-with-mode via O_CREAT | O_EXCL-ish pattern.
+        flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+        fd = os.open(str(path), flags, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(token + "\n")
+        except BaseException:
+            # Leave the fd closed (fdopen took ownership) — no manual close needed.
+            raise
+        # If the file already existed (O_TRUNC wiped it), mode from pre-existing
+        # file is preserved. Force 0o600.
+        os.chmod(path, 0o600)
+
+    return path
+
+
+def read_token_file(vault_root: Path) -> str | None:
+    """Return the token from `<vault>/.brain/run/api-secret.txt`, or None if missing."""
+    path = _token_path(vault_root)
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8").strip()
+```
+
+### Step 3 — Wire into lifespan
+
+Modify `packages/brain_api/src/brain_api/app.py` — the lifespan now generates + writes the token, stashes on ctx:
+
+```python
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Build AppContext + write the app's secret token at startup."""
+    from brain_api.auth import generate_token, write_token_file
+
+    token = app.state.token_override or generate_token()
+    write_token_file(app.state.vault_root, token)
+
+    ctx = build_app_context(
+        vault_root=app.state.vault_root,
+        allowed_domains=app.state.allowed_domains,
+        token=token,
+    )
+    app.state.ctx = ctx
+    try:
+        yield
+    finally:
+        pass
+```
+
+### Step 4 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_api -v
+```
+
+Expect: **17 passed** (9 prior + 8 new auth-token tests — the Windows perm test is skipped on Windows so the count is 7 on Windows).
+
+Gates clean, then:
+
+```bash
+git commit -m "feat(api): plan 05 task 7 — token generation + filesystem write (.brain/run/api-secret.txt, 0600)"
+```
+
+---
+
+### Task 8 — Origin + Host middleware
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/auth.py` — add `OriginHostMiddleware`
+- Modify: `packages/brain_api/src/brain_api/app.py` — install middleware
+- Create: `packages/brain_api/tests/test_auth_middleware.py`
+
+**Context for the implementer:**
+
+Starlette middleware runs for BOTH HTTP and WebSocket connections at the ASGI layer — same middleware catches both. Good. The middleware enforces two properties per D6a:
+
+1. **Host header**: must be one of `{"localhost", "localhost:<port>", "127.0.0.1", "127.0.0.1:<port>"}`. Rejects DNS rebinding. Note: the port is not knowable at middleware-install time (uvicorn picks it), so the middleware accepts ANY port suffix as long as the hostname part is loopback.
+
+2. **Origin header**: for state-changing methods (POST, PUT, DELETE, PATCH) and WebSocket upgrades, must be absent/null OR exactly `http://<loopback>:<any-port>`. Rejects cross-origin browser POSTs. GET/HEAD/OPTIONS bypass the Origin check (they're safe methods — browsers send them with any Origin, but they don't mutate state).
+
+**Rejection**: return a `403 Forbidden` with body `{"error": "refused", "message": "..."}`. For WebSocket connections, close with code 1008 (Policy Violation) + reason string — same format as the REST error body.
+
+**Why not CORS?** CORS headers tell browsers to ALLOW cross-origin reads of response bodies. We don't want to allow that — we want to reject the request entirely. CORS is the opposite of what we need.
+
+### Step 1 — Failing tests
+
+`packages/brain_api/tests/test_auth_middleware.py`:
+
+```python
+"""Tests for OriginHostMiddleware — DNS rebinding + cross-origin defense."""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+
+class TestHostValidation:
+    def test_accepts_localhost(self, client: TestClient) -> None:
+        response = client.get("/healthz", headers={"Host": "localhost:4317"})
+        assert response.status_code == 200
+
+    def test_accepts_127_0_0_1(self, client: TestClient) -> None:
+        response = client.get("/healthz", headers={"Host": "127.0.0.1:4317"})
+        assert response.status_code == 200
+
+    def test_accepts_bare_localhost_no_port(self, client: TestClient) -> None:
+        response = client.get("/healthz", headers={"Host": "localhost"})
+        assert response.status_code == 200
+
+    def test_rejects_evil_host(self, client: TestClient) -> None:
+        response = client.get("/healthz", headers={"Host": "evil.example"})
+        assert response.status_code == 403
+        body = response.json()
+        assert body["error"] == "refused"
+
+    def test_rejects_public_ip_host(self, client: TestClient) -> None:
+        response = client.get("/healthz", headers={"Host": "203.0.113.10:4317"})
+        assert response.status_code == 403
+
+
+class TestOriginValidation:
+    def test_get_with_no_origin_allowed(self, client: TestClient) -> None:
+        response = client.get("/healthz")
+        assert response.status_code == 200
+
+    def test_get_with_evil_origin_allowed(self, client: TestClient) -> None:
+        """GET is a safe method — Origin doesn't matter for read-only endpoints."""
+        response = client.get("/healthz", headers={"Origin": "https://evil.example"})
+        assert response.status_code == 200
+
+    def test_post_with_evil_origin_rejected(self, client: TestClient) -> None:
+        """Synthetic POST route for this test — Task 10 adds the real ones."""
+        # Use the OpenAPI /openapi.json endpoint which accepts GET only; we synthesize
+        # a write attempt via a path that doesn't exist (it'd be 404 without the middleware,
+        # but the middleware short-circuits at 403 first).
+        response = client.post(
+            "/api/tools/_synthetic_write",
+            json={},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert response.status_code == 403
+        body = response.json()
+        assert body["error"] == "refused"
+        assert "origin" in body["message"].lower()
+
+    def test_post_with_localhost_origin_allowed_through_middleware(
+        self, client: TestClient
+    ) -> None:
+        """Localhost Origin passes the middleware; the 404 that follows is
+        from the non-existent route, not from the middleware."""
+        response = client.post(
+            "/api/tools/_synthetic_write",
+            json={},
+            headers={"Origin": "http://localhost:4317"},
+        )
+        # Middleware accepts; Task 10-era routing returns 404 for the unknown tool.
+        # In Task 8 pre-Task-10, the Task 3 POST handler doesn't exist → 405 or 404.
+        assert response.status_code != 403 or response.json().get("error") != "refused"
+
+    def test_post_with_null_origin_allowed(self, client: TestClient) -> None:
+        """Native clients (curl, CLI) send no Origin header — allowed."""
+        response = client.post("/api/tools/_synthetic_write", json={})
+        # Middleware accepts; route lookup fails → ≠403 from middleware.
+        assert response.status_code != 403 or response.json().get("error") != "refused"
+```
+
+### Step 2 — Implement middleware
+
+Append to `auth.py`:
+
+```python
+from collections.abc import Awaitable, Callable
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp
+
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1"}
+
+
+class OriginHostMiddleware(BaseHTTPMiddleware):
+    """Reject non-loopback Host and cross-origin state-changing requests.
+
+    Applies to both HTTP and WebSocket via ASGI middleware layering.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        super().__init__(app)
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable],
+    ):
+        # Host header check — always.
+        host = request.headers.get("host", "")
+        hostname = host.split(":", 1)[0] if host else ""
+        if hostname not in _LOOPBACK_HOSTS:
+            return JSONResponse(
+                {
+                    "error": "refused",
+                    "message": f"host {host!r} is not a loopback address",
+                },
+                status_code=403,
+            )
+
+        # Origin check — only for state-changing methods + WebSocket upgrades.
+        # WebSocket handshakes have method "GET" at the HTTP layer but an
+        # "upgrade: websocket" header; check for that explicitly.
+        is_ws_upgrade = "websocket" in request.headers.get("upgrade", "").lower()
+        is_state_changing = request.method not in _SAFE_METHODS
+
+        if is_state_changing or is_ws_upgrade:
+            origin = request.headers.get("origin")
+            if origin is not None and not _is_loopback_origin(origin):
+                return JSONResponse(
+                    {
+                        "error": "refused",
+                        "message": f"origin {origin!r} is not a loopback address",
+                    },
+                    status_code=403,
+                )
+
+        return await call_next(request)
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """Return True if Origin is `http(s)://localhost` or `http(s)://127.0.0.1`, any port."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(origin)
+    return parsed.hostname in _LOOPBACK_HOSTS
+```
+
+### Step 3 — Install middleware in `app.py`
+
+Add after app creation, before routers:
+
+```python
+from brain_api.auth import OriginHostMiddleware
+
+app.add_middleware(OriginHostMiddleware)
+```
+
+**Order matters.** FastAPI/Starlette applies middleware in reverse of add order. Install `OriginHostMiddleware` FIRST so it wraps all other middleware (Task 14 exception handlers, future request logging).
+
+### Step 4 — Run + commit
+
+Expect: **28 passed** (17 prior + 11 middleware tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 8 — OriginHostMiddleware (DNS rebinding + CSRF defense)"
+```
+
+---
+
+### Task 9 — Token dependency + WebSocket auth
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/auth.py` — add `require_token` FastAPI dependency + `check_ws_token` helper
+- Create: `packages/brain_api/tests/test_auth_dependency.py`
+- Create: `packages/brain_api/tests/test_auth_ws.py` (smoke; real WS routes land in Group 6)
+
+**Context for the implementer:**
+
+Two auth primitives land here:
+
+1. **`require_token(request: Request, ctx: AppContext = Depends(get_ctx)) -> None`** — a FastAPI dependency. Extracts `X-Brain-Token` from request headers; constant-time comparison (`secrets.compare_digest`) with `ctx.token`. On mismatch or missing header: raise `HTTPException(403, detail={"error": "refused", "message": "missing or invalid X-Brain-Token"})`.
+
+2. **`check_ws_token(websocket: WebSocket, ctx: AppContext) -> None`** — for WebSocket endpoints. Reads the `token` query parameter from the WS handshake URL, constant-time-compares against `ctx.token`. On mismatch: `await websocket.close(code=1008, reason="invalid token")` + return. On success: returns (caller proceeds to `accept()`).
+
+**Which routes require token:**
+- `GET /healthz` — **no token** (liveness probe must be unauthenticated)
+- `GET /api/tools` — **no token** (read-only metadata, safe)
+- `POST /api/tools/<name>` — **token required** (Task 10 attaches the dep)
+- `WS /ws/chat/<thread_id>` — **token required** via query param (Task 17)
+
+**Why query param for WS?** Browsers can't attach custom headers on WebSocket handshakes reliably (only `Authorization` via the WebSocket constructor in some drafts). The `?token=...` pattern is standard for localhost WS auth (VSCode / Jupyter both do this). The token is never logged (request logging at Task 9 strips query params on WS URLs).
+
+**Constant-time comparison:** `secrets.compare_digest` resists timing attacks. Overkill for localhost but free.
+
+### Step 1 — Failing tests
+
+`packages/brain_api/tests/test_auth_dependency.py`:
+
+```python
+"""Tests for require_token dependency — run against a synthetic endpoint."""
+
+from __future__ import annotations
+
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+
+from brain_api.auth import require_token
+from brain_api.context import AppContext
+
+
+def _attach_synthetic_write_route(app: FastAPI) -> None:
+    """Add a test-only route that requires token — exercises the dep."""
+
+    @app.post("/_synthetic_write", dependencies=[Depends(require_token)])
+    async def synthetic() -> dict:
+        return {"ok": True}
+
+
+def test_missing_token_rejected(app, client: TestClient) -> None:  # noqa: ANN001
+    _attach_synthetic_write_route(app)
+    # Need to reopen the client to pick up the new route.
+    with TestClient(app) as fresh:
+        response = fresh.post(
+            "/_synthetic_write",
+            json={},
+            headers={"Origin": "http://localhost:4317"},
+        )
+    assert response.status_code == 403
+    body = response.json()
+    assert body["detail"]["error"] == "refused"
+    assert "X-Brain-Token" in body["detail"]["message"]
+
+
+def test_wrong_token_rejected(app, client: TestClient) -> None:  # noqa: ANN001
+    _attach_synthetic_write_route(app)
+    with TestClient(app) as fresh:
+        response = fresh.post(
+            "/_synthetic_write",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": "0" * 64,
+            },
+        )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "refused"
+
+
+def test_correct_token_accepted(app, client: TestClient) -> None:  # noqa: ANN001
+    _attach_synthetic_write_route(app)
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/_synthetic_write",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+```
+
+`packages/brain_api/tests/test_auth_ws.py`:
+
+```python
+"""WS auth smoke tests — full WS endpoints land in Group 6, but the
+check_ws_token helper is testable standalone."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from brain_api.auth import check_ws_token
+from brain_api.context import AppContext
+
+
+@pytest.mark.asyncio
+async def test_check_ws_token_accepts_correct_token() -> None:
+    ctx = MagicMock(spec=AppContext)
+    ctx.token = "a" * 64
+
+    ws = MagicMock()
+    ws.query_params = {"token": "a" * 64}
+    ws.close = AsyncMock()
+
+    result = await check_ws_token(ws, ctx)
+    assert result is True
+    ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_ws_token_closes_on_missing_token() -> None:
+    ctx = MagicMock(spec=AppContext)
+    ctx.token = "a" * 64
+
+    ws = MagicMock()
+    ws.query_params = {}  # no token
+    ws.close = AsyncMock()
+
+    result = await check_ws_token(ws, ctx)
+    assert result is False
+    ws.close.assert_awaited_once()
+    kwargs = ws.close.call_args.kwargs
+    assert kwargs["code"] == 1008
+
+
+@pytest.mark.asyncio
+async def test_check_ws_token_closes_on_wrong_token() -> None:
+    ctx = MagicMock(spec=AppContext)
+    ctx.token = "a" * 64
+
+    ws = MagicMock()
+    ws.query_params = {"token": "b" * 64}
+    ws.close = AsyncMock()
+
+    result = await check_ws_token(ws, ctx)
+    assert result is False
+    ws.close.assert_awaited_once()
+```
+
+### Step 2 — Implement `require_token` + `check_ws_token`
+
+Append to `auth.py`:
+
+```python
+import secrets as _secrets_module  # avoid shadowing the stdlib secrets used earlier
+
+from fastapi import HTTPException, Request, WebSocket
+
+from brain_api.context import AppContext, get_ctx
+
+
+def require_token(
+    request: Request,
+    ctx: AppContext = None,  # noqa: B008 — filled via Depends by FastAPI at call time
+) -> None:
+    """FastAPI dependency — require a matching X-Brain-Token header.
+
+    Raises HTTPException(403) on missing or mismatched token. Uses
+    secrets.compare_digest for constant-time comparison.
+    """
+    # Late-resolve ctx via Depends to avoid circular imports at module-parse time.
+    from fastapi import Depends  # noqa: PLC0415
+
+    if ctx is None:
+        # This path only fires if called without Depends — defensive.
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal", "message": "require_token used without Depends(get_ctx)"},
+        )
+
+    received = request.headers.get("x-brain-token", "")
+    expected = ctx.token or ""
+
+    if not received or not expected or not _secrets_module.compare_digest(received, expected):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "refused",
+                "message": "missing or invalid X-Brain-Token header",
+            },
+        )
+```
+
+**Wiring note:** FastAPI resolves `Depends` chains lazily. To inject `ctx: AppContext = Depends(get_ctx)` as the second dep without Python's default-value gotcha, use the Depends-at-call-site pattern:
+
+```python
+from fastapi import Depends
+
+def require_token(request: Request, ctx: AppContext = Depends(get_ctx)) -> None:
+    # ...same body as above...
+```
+
+Task 10's endpoint wires it as `dependencies=[Depends(require_token)]`.
+
+And for WebSocket:
+
+```python
+async def check_ws_token(websocket: WebSocket, ctx: AppContext) -> bool:
+    """Validate ?token=<hex> on a WS handshake. Returns True on accept, False on close.
+
+    Caller must `return` after a False result — the WS is already closed.
+    """
+    received = websocket.query_params.get("token", "")
+    expected = ctx.token or ""
+
+    if not received or not expected or not _secrets_module.compare_digest(received, expected):
+        await websocket.close(code=1008, reason="invalid token")
+        return False
+
+    return True
+```
+
+### Step 3 — Run + commit
+
+Expect: **34 passed** (28 prior + 3 token dep + 3 ws check = 6 new).
+
+```bash
+git commit -m "feat(api): plan 05 task 9 — require_token dep + check_ws_token (X-Brain-Token / ?token=)"
+```
+
+---
+
+**Checkpoint 3 — pause for main-loop review.**
+
+9 tasks landed. Auth surface live:
+- Token rotation on every `create_app()` → filesystem at `.brain/run/api-secret.txt` (mode 0600)
+- `OriginHostMiddleware` rejects non-loopback Host + cross-origin state-changing requests
+- `require_token` dep guards write endpoints (Task 10 wires it); `check_ws_token` guards WS handshakes (Task 17 wires it)
+
+Main loop reviews:
+
+- **Security review pass:** is the 403 body shape final? Task 15's global exception handlers will convert `HTTPException` into the project-wide envelope `{error, message}`; Task 9's `detail={"error": ..., "message": ...}` might produce `{"detail": {"error": ..., "message": ...}}` in the JSON response. That's inconsistent with Task 15's envelope. **Track for Task 15** to unify via a custom `HTTPException` subclass that renders directly (no `detail` wrapper).
+- **Windows perms reality check:** the `os.chmod(0o600)` on Windows is cosmetic. Is that documented loudly enough, or should the `write_token_file` emit a `warnings.warn` on Windows? Consider whether a warning is signal-useful or just noise for a single-user tool.
+- **Token rotation friction:** every `create_app()` rotates. The `brain` CLI reads the file per-request and tolerates rotation; the Next.js frontend (Plan 07) must also re-read on 403. Is that contract clear in the handoff notes?
+- Are the two loopback-host sets (`{"localhost", "127.0.0.1"}`) correct for both IPv4 and IPv6? Today, Plan 08 will pick `127.0.0.1` for uvicorn `--host`, so `[::1]` isn't relevant. Track IPv6 loopback (`::1`) as a future-proofing item if Plan 08 ever enables it.
+
+Before Task 10, main loop confirms the middleware + dep pattern is locked before the generic tool dispatcher wires the dep across all 18 endpoints.
+
+---
