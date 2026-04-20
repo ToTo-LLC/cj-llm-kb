@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from brain_api.context import build_app_context
 from brain_api.routes import health
 
 try:
@@ -24,8 +25,25 @@ except PackageNotFoundError:  # pragma: no cover — fallback for source tree w/
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Lifespan context — Task 2 populates app.state.ctx here."""
-    yield
+    """Build AppContext at startup; hold it open for the app's lifetime.
+
+    Reads the constructor args stashed on app.state by ``create_app``, builds
+    the full ctx (StateDB, VaultWriter, retrieval, cost ledger, rate limiter,
+    embedded ToolContext, etc.), and stashes the result on ``app.state.ctx``.
+    FastAPI routes read it back via ``Depends(get_ctx)``.
+    """
+    ctx = build_app_context(
+        vault_root=app.state.vault_root,
+        allowed_domains=app.state.allowed_domains,
+        token=app.state.token_override,
+    )
+    app.state.ctx = ctx
+    try:
+        yield
+    finally:
+        # Close any resources needing explicit teardown (future-proof hook —
+        # current primitives all clean up via GC).
+        pass
 
 
 def create_app(
