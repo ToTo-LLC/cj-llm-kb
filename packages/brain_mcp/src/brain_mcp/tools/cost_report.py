@@ -1,46 +1,19 @@
-"""brain_cost_report — return today / month / by-domain cost summary.
-
-Thin wrapper over `CostLedger.summary()` that hands the MCP client a typed
-snapshot of spend. Takes no arguments; the server's `ctx.cost_ledger` carries
-the session's ledger handle. Stays privacy-safe — reports USD totals only, no
-prompt bodies or per-call detail.
-"""
+"""MCP transport shim for brain_cost_report. Real handler in brain_core.tools.cost_report."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import mcp.types as types
+from brain_core.tools.cost_report import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.cost_report import handle as _core_handle
 
 from brain_mcp.tools.base import ToolContext, text_result
 
-NAME = "brain_cost_report"
-DESCRIPTION = (
-    "Return the cost ledger summary: today's total USD, this month's total USD, "
-    "and today's by-domain breakdown."
-)
-INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-}
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
-    now = datetime.now(UTC)
-    today = now.date()
-    summary = ctx.cost_ledger.summary(today=today, month=(now.year, now.month))
-    by_domain_text = ", ".join(f"{d}=${c:.4f}" for d, c in summary.by_domain.items()) or "(empty)"
-    text = (
-        f"today: ${summary.today_usd:.4f}\n"
-        f"month: ${summary.month_usd:.4f}\n"
-        f"by domain today: {by_domain_text}"
-    )
-    return text_result(
-        text,
-        data={
-            "today_usd": summary.today_usd,
-            "month_usd": summary.month_usd,
-            "by_domain": summary.by_domain,
-        },
-    )
+    """Delegate to brain_core; wrap ToolResult into MCP TextContent list."""
+    result = await _core_handle(arguments, ctx)
+    return text_result(result)

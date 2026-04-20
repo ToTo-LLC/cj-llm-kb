@@ -1,0 +1,61 @@
+"""Smoke test for brain_core.tools.config_set — ToolResult shape + refusals.
+
+Covers: secret-like refusal, non-settable-key refusal, and a successful
+in-memory "updated" write on an allowlisted key. brain_mcp's existing
+test_tool_config_get_set.py covers the transport wrapper behavior.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from brain_core.tools.base import ToolContext, ToolResult
+from brain_core.tools.config_set import _SETTABLE_KEYS, NAME, handle
+
+
+def _mk_ctx(vault: Path) -> ToolContext:
+    return ToolContext(
+        vault_root=vault,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+
+
+def test_name() -> None:
+    assert NAME == "brain_config_set"
+
+
+def test_settable_keys_match_plan_04_task_25() -> None:
+    """Allowlist is deliberately narrow; active_domain is NOT settable."""
+    assert frozenset({"budget.daily_usd", "log_llm_payloads"}) == _SETTABLE_KEYS
+
+
+async def test_refuses_secret_like_key(tmp_path: Path) -> None:
+    with pytest.raises(PermissionError, match="secret-like"):
+        await handle({"key": "llm.api_key", "value": "nope"}, _mk_ctx(tmp_path))
+
+
+async def test_refuses_non_allowlisted_key(tmp_path: Path) -> None:
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle({"key": "active_domain", "value": "research"}, _mk_ctx(tmp_path))
+
+
+async def test_allows_budget_daily_usd(tmp_path: Path) -> None:
+    result = await handle(
+        {"key": "budget.daily_usd", "value": 5.0},
+        _mk_ctx(tmp_path),
+    )
+
+    assert isinstance(result, ToolResult)
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    assert result.data["persisted"] is False
+    assert result.data["value"] == 5.0

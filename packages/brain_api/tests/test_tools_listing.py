@@ -13,22 +13,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_empty_registry_returns_empty_list(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """With the registry forcibly emptied, GET /api/tools returns an empty list.
-
-    Tasks 5/6 import brain_core.tools.<name> modules that auto-register at
-    import time, so the "real" registry is non-empty any time a tool module
-    has been imported in the test process. Monkeypatching
-    ``_TOOL_MODULES`` to ``[]`` restores the empty-baseline shape assertion.
-    """
-    from brain_core import tools as tools_registry
-
-    monkeypatch.setattr(tools_registry, "_TOOL_MODULES", [])
+def test_lists_eighteen_tools_after_extraction(client: TestClient) -> None:
+    """After Group 2, the registry has all 18 tools auto-registered."""
     response = client.get("/api/tools")
-    assert response.status_code == 200
-    assert response.json() == {"tools": []}
+    body = response.json()
+    names = {t["name"] for t in body["tools"]}
+    assert len(body["tools"]) == 18
+    # Spot-check a few names across all 4 groups (read/ingest/patch/maintenance).
+    assert "brain_list_domains" in names
+    assert "brain_ingest" in names
+    assert "brain_apply_patch" in names
+    assert "brain_cost_report" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:
