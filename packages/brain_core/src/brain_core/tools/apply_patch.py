@@ -46,12 +46,9 @@ INPUT_SCHEMA: dict[str, Any] = {
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Rate-limit check FIRST — a refused call must not read the envelope
-    # or touch the writer.
-    if not ctx.rate_limiter.check("patches", cost=1):
-        return ToolResult(
-            text="rate limited (patches/min)",
-            data={"status": "rate_limited", "bucket": "patches", "retry_after_seconds": 60},
-        )
+    # or touch the writer. Raises RateLimitError on drain; transport/caller
+    # converts to the response shape.
+    ctx.rate_limiter.check("patches", cost=1)
 
     patch_id = str(arguments["patch_id"])
     envelope = ctx.pending_store.get(patch_id)

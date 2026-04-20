@@ -13,10 +13,10 @@ from brain_core.tools.classify import NAME, handle
 
 @dataclass
 class _AllowAllLimiter:
-    """Rate-limiter stand-in: every ``check`` passes."""
+    """Rate-limiter stand-in: every ``check`` succeeds (no raise, no return)."""
 
-    def check(self, bucket: str, *, cost: int = 1) -> bool:
-        return True
+    def check(self, bucket: str, *, cost: int = 1) -> None:
+        return None
 
 
 def _mk_ctx(vault: Path, llm: FakeLLMProvider) -> ToolContext:

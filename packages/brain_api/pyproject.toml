@@ -5,7 +5,7 @@ description = "brain REST + WebSocket backend — FastAPI wrapper around brain_c
 requires-python = ">=3.12"
 dependencies = [
     "brain_core",
-    "brain_mcp",
+    # "brain_mcp",  # REMOVED — Plan 05 Task 14 moved RateLimiter to brain_core.
     "fastapi>=0.115",
     "uvicorn>=0.32",
 ]
@@ -19,4 +19,3 @@ packages = ["src/brain_api"]
 
 [tool.uv.sources]
 brain_core = { workspace = true }
-brain_mcp = { workspace = true }

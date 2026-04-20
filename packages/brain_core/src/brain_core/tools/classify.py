@@ -60,11 +60,8 @@ _MAX_SNIPPET_CHARS = 2048
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Rate-limit check fires BEFORE any LLM work so refusals are cheap.
-    if not ctx.rate_limiter.check("tokens", cost=_CLASSIFY_TOKEN_COST):
-        return ToolResult(
-            text="rate limited (tokens/min)",
-            data={"status": "rate_limited", "bucket": "tokens", "retry_after_seconds": 60},
-        )
+    # Raises RateLimitError on drain; transport/caller converts.
+    ctx.rate_limiter.check("tokens", cost=_CLASSIFY_TOKEN_COST)
 
     content = str(arguments["content"])[:_MAX_SNIPPET_CHARS]
     hint_arg = arguments.get("hint")

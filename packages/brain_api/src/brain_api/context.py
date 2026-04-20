@@ -1,15 +1,16 @@
 """AppContext — per-app-instance primitives, injected via FastAPI Depends.
 
-AppContext is the HTTP analog of brain_mcp.tools.base.ToolContext. It CONTAINS
+AppContext is the HTTP analog of brain_core.tools.base.ToolContext. It CONTAINS
 a ToolContext (as `tool_ctx`) so the Task 10 tool dispatcher can hand the
 embedded ToolContext straight to `handle(args, ctx)` without conversion.
 
 Lifetime: one AppContext per FastAPI app instance, built once in the lifespan
 and stashed on ``app.state.ctx``. FastAPI routes read it via ``Depends(get_ctx)``.
 
-Imports note: ToolContext and RateLimiter currently live in ``brain_mcp.*``.
-Group 2 (Task 4) moves ToolContext to ``brain_core.tools.base``; Task 14 moves
-RateLimiter to ``brain_core.rate_limit``. This module flips its imports then.
+Plan 05 Task 14: ``RateLimiter`` moved to ``brain_core.rate_limit`` and
+``ToolContext`` to ``brain_core.tools.base``; brain_api no longer depends on
+brain_mcp. RateLimitError propagates out of the dispatcher to Task 15's global
+handler, which converts it to HTTP 429 + ``Retry-After`` header.
 """
 
 from __future__ import annotations
@@ -22,13 +23,13 @@ from brain_core.chat.retrieval import BM25VaultIndex
 from brain_core.cost.ledger import CostLedger
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.llm.provider import LLMProvider
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
 from brain_core.state.db import StateDB
 from brain_core.tools import ToolModule
 from brain_core.tools import list_tools as list_registered_tools
+from brain_core.tools.base import ToolContext
 from brain_core.vault.undo import UndoLog
 from brain_core.vault.writer import VaultWriter
-from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
-from brain_mcp.tools.base import ToolContext
 from fastapi import Request
 
 
@@ -61,7 +62,7 @@ def build_app_context(
     llm: LLMProvider | None = None,
     token: str | None = None,
 ) -> AppContext:
-    """Build a fresh AppContext wired to all brain_core + brain_mcp primitives.
+    """Build a fresh AppContext wired to all brain_core primitives.
 
     Mirrors ``brain_mcp/tests/conftest.py::make_tool_context`` so the ctx shape
     is identical between MCP tests and HTTP tests. Uses FakeLLMProvider by

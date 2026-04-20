@@ -45,12 +45,9 @@ INPUT_SCHEMA: dict[str, Any] = {
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Rate-limit check FIRST — a refused call must not reach scope_guard,
-    # pending-store IO, or any other side effect.
-    if not ctx.rate_limiter.check("patches", cost=1):
-        return ToolResult(
-            text="rate limited (patches/min)",
-            data={"status": "rate_limited", "bucket": "patches", "retry_after_seconds": 60},
-        )
+    # pending-store IO, or any other side effect. Raises RateLimitError on
+    # drain; transport/caller converts to the response shape.
+    ctx.rate_limiter.check("patches", cost=1)
 
     raw_path = str(arguments["path"])
     # scope_guard_path raises ValueError("...vault-relative...") on absolute

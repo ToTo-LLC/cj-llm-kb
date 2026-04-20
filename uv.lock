@@ -110,7 +110,7 @@ requires-dist = [
     { name = "brain-api", directory = "packages/brain_api" },
     { name = "brain-cli", directory = "packages/brain_cli" },
     { name = "brain-core", editable = "packages/brain_core" },
-    { name = "brain-mcp", editable = "packages/brain_mcp" },
+    { name = "brain-mcp", directory = "packages/brain_mcp" },
 ]
 
 [package.metadata.requires-dev]
@@ -134,7 +134,6 @@ version = "0.0.1"
 source = { directory = "packages/brain_api" }
 dependencies = [
     { name = "brain-core" },
-    { name = "brain-mcp" },
     { name = "fastapi" },
     { name = "uvicorn" },
 ]
@@ -142,7 +141,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "brain-core", editable = "packages/brain_core" },
-    { name = "brain-mcp", editable = "packages/brain_mcp" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]
@@ -202,7 +200,7 @@ requires-dist = [
 [[package]]
 name = "brain-mcp"
 version = "0.0.1"
-source = { editable = "packages/brain_mcp" }
+source = { directory = "packages/brain_mcp" }
 dependencies = [
     { name = "brain-core" },
     { name = "mcp" },

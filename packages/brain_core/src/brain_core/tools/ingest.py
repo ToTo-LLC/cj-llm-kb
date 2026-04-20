@@ -74,18 +74,12 @@ def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # ------------------------------------------------------------------
     # Rate-limit checks — fire BEFORE any pipeline work so a refused call
-    # is cheap and deterministic.
+    # is cheap and deterministic. Both checks raise RateLimitError on drain;
+    # transport shims (brain_mcp) or exception handlers (brain_api) convert
+    # the exception into their response shape.
     # ------------------------------------------------------------------
-    if not ctx.rate_limiter.check("patches", cost=1):
-        return ToolResult(
-            text="rate limited (patches/min)",
-            data={"status": "rate_limited", "bucket": "patches", "retry_after_seconds": 60},
-        )
-    if not ctx.rate_limiter.check("tokens", cost=_INGEST_TOKEN_ESTIMATE):
-        return ToolResult(
-            text="rate limited (tokens/min)",
-            data={"status": "rate_limited", "bucket": "tokens", "retry_after_seconds": 60},
-        )
+    ctx.rate_limiter.check("patches", cost=1)
+    ctx.rate_limiter.check("tokens", cost=_INGEST_TOKEN_ESTIMATE)
 
     source_arg = str(arguments["source"])
     autonomous = bool(arguments.get("autonomous", False))

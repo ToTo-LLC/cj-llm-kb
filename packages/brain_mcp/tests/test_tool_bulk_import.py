@@ -188,8 +188,11 @@ async def test_bulk_import_rate_limited_when_token_budget_exceeded(
     # Deliberately do NOT queue any LLM responses; if the tool called through
     # to plan() the FakeLLMProvider would raise on empty queue. The rate-limit
     # refusal must fire first.
-    # Drain the tokens bucket so any token-cost check refuses.
-    assert ctx.rate_limiter.check("tokens", cost=1_000_000)  # exhausts budget
+    # Drain the tokens bucket so any token-cost check refuses. Plan 05 Task 14:
+    # check() returns None on success; the subsequent handler-internal check
+    # raises RateLimitError, which the shim catches and converts to the
+    # inline-JSON envelope asserted below.
+    ctx.rate_limiter.check("tokens", cost=1_000_000)  # exhausts budget
     out = await handle({"folder": str(source_folder)}, ctx)
     data = json.loads(out[1].text)
     assert data["status"] == "rate_limited"

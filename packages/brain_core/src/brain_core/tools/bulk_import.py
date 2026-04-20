@@ -127,18 +127,11 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     # Rate-limit check fires BEFORE plan() so a refused call is cheap and
     # deterministic. We budget one classifier call per file the plan() phase
-    # would issue, capped at max_files if provided.
+    # would issue, capped at max_files if provided. Raises RateLimitError on
+    # drain; transport/caller converts to the response shape.
     classify_count = min(file_count, max_files) if max_files is not None else file_count
     token_cost = _CLASSIFY_TOKEN_COST * max(classify_count, 1)
-    if not ctx.rate_limiter.check("tokens", cost=token_cost):
-        return ToolResult(
-            text="rate limited (tokens/min)",
-            data={
-                "status": "rate_limited",
-                "bucket": "tokens",
-                "retry_after_seconds": 60,
-            },
-        )
+    ctx.rate_limiter.check("tokens", cost=token_cost)
 
     # ------------------------------------------------------------------
     # Plan phase — always run this (both dry_run and apply).
