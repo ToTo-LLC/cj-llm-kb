@@ -28,15 +28,25 @@ except PackageNotFoundError:  # pragma: no cover — fallback for source tree w/
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build AppContext at startup; hold it open for the app's lifetime.
 
+    Task 7 adds the token-rotation step: generate (or honor the
+    ``token_override`` injected by tests), write to
+    ``<vault>/.brain/run/api-secret.txt`` with mode 0600, and stash on
+    ``ctx.token`` so Task 9's ``require_token`` dependency can read it back.
+
     Reads the constructor args stashed on app.state by ``create_app``, builds
     the full ctx (StateDB, VaultWriter, retrieval, cost ledger, rate limiter,
     embedded ToolContext, etc.), and stashes the result on ``app.state.ctx``.
     FastAPI routes read it back via ``Depends(get_ctx)``.
     """
+    from brain_api.auth import generate_token, write_token_file
+
+    token = app.state.token_override or generate_token()
+    write_token_file(app.state.vault_root, token)
+
     ctx = build_app_context(
         vault_root=app.state.vault_root,
         allowed_domains=app.state.allowed_domains,
-        token=app.state.token_override,
+        token=token,
     )
     app.state.ctx = ctx
     try:

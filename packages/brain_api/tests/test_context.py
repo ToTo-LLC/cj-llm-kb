@@ -25,8 +25,9 @@ def test_ctx_populated_during_lifespan(app: FastAPI) -> None:
         assert isinstance(ctx, AppContext)
         assert ctx.vault_root.exists()
         assert ctx.allowed_domains == ("research",)
-        # Token defaults to None until Task 7 populates it.
-        assert ctx.token is None
+        # Task 7: lifespan generates a 256-bit hex token and stashes it on ctx.
+        assert ctx.token is not None
+        assert len(ctx.token) == 64
         # ToolContext embedded inside — single source of truth for the 10 primitives.
         assert ctx.tool_ctx.vault_root == ctx.vault_root
         assert ctx.tool_ctx.allowed_domains == ctx.allowed_domains
