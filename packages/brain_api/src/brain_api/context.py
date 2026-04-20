@@ -23,6 +23,8 @@ from brain_core.cost.ledger import CostLedger
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.llm.provider import LLMProvider
 from brain_core.state.db import StateDB
+from brain_core.tools import ToolModule
+from brain_core.tools import list_tools as list_registered_tools
 from brain_core.vault.undo import UndoLog
 from brain_core.vault.writer import VaultWriter
 from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
@@ -39,12 +41,16 @@ class AppContext:
         allowed_domains: Tuple of domain names this app instance may access.
         tool_ctx: Embedded ToolContext — handed straight to brain_core.tools
             handlers by the Task 10 dispatcher. Carries the 10 primitives.
+        tool_by_name: Name → module index built from ``brain_core.tools.list_tools()``
+            at app startup. O(1) lookup in the POST /api/tools/{name} dispatcher.
+            Also resolves Plan 04 Task 25's deferred _TOOL_BY_NAME perf concern.
         token: App secret for auth (populated by Task 7; None until then).
     """
 
     vault_root: Path
     allowed_domains: tuple[str, ...]
     tool_ctx: ToolContext
+    tool_by_name: dict[str, ToolModule]
     token: str | None = None
 
 
@@ -93,10 +99,15 @@ def build_app_context(
         rate_limiter=rate_limiter,
         undo_log=undo_log,
     )
+    # Build the name → module index once, up front. Task 10 dispatcher reads it
+    # via ``ctx.tool_by_name[name]``; this also eliminates the O(n) scan that
+    # Plan 04 Task 25 flagged inside the MCP server's dispatcher.
+    tool_by_name: dict[str, ToolModule] = {m.NAME: m for m in list_registered_tools()}
     return AppContext(
         vault_root=vault_root,
         allowed_domains=allowed_domains,
         tool_ctx=tool_ctx,
+        tool_by_name=tool_by_name,
         token=token,
     )
 

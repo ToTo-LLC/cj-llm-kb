@@ -9,6 +9,7 @@ real WS routes land in Group 6.
 
 from __future__ import annotations
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -62,31 +63,41 @@ class TestOriginValidation:
         assert body["error"] == "refused"
         assert "origin" in body["message"].lower()
 
-    def test_post_with_localhost_origin_allowed_through_middleware(
-        self, client: TestClient
-    ) -> None:
-        """Localhost Origin passes the middleware; the 404/405 that follows is
-        from the non-existent route, not from the middleware."""
-        response = client.post(
-            "/api/tools/_synthetic_write",
-            json={},
-            headers={"Origin": "http://localhost:4317"},
-        )
-        # Middleware accepts; Task 10-era routing returns 404 for the unknown tool.
-        # In Task 8 pre-Task-10, the POST handler doesn't exist → 404 or 405.
-        assert response.status_code != 403 or response.json().get("error") != "refused"
+    def test_post_with_localhost_origin_allowed_through_middleware(self, app: FastAPI) -> None:
+        """Localhost Origin passes the middleware; downstream handlers take over.
 
-    def test_post_with_null_origin_allowed(self, client: TestClient) -> None:
-        """Native clients (curl, CLI) send no Origin header — allowed."""
-        response = client.post("/api/tools/_synthetic_write", json={})
-        # Middleware accepts; route lookup fails → not a 403 from middleware.
-        assert response.status_code != 403 or response.json().get("error") != "refused"
+        Post-Task-10 the POST /api/tools/{name} dispatcher exists, so this hits
+        ``require_token`` which returns 403 with ``{"detail": {"error": "refused"}}``
+        (double-wrapped; Task 15 flattens). The middleware 403 envelope is
+        ``{"error": "refused"}`` at the top level — distinguishable. Requires
+        ``with TestClient(app)`` so the lifespan populates ``app.state.ctx``.
+        """
+        with TestClient(app, base_url="http://localhost") as fresh:
+            response = fresh.post(
+                "/api/tools/_synthetic_write",
+                json={},
+                headers={"Origin": "http://localhost:4317"},
+            )
+        # Middleware accepts; any 403 here comes from require_token (wrapped in
+        # "detail"), not from the middleware (top-level "error": "refused").
+        assert "error" not in response.json() or response.json().get("error") != "refused"
 
-    def test_post_with_127_origin_allowed(self, client: TestClient) -> None:
+    def test_post_with_null_origin_allowed(self, app: FastAPI) -> None:
+        """Native clients (curl, CLI) send no Origin header — allowed by middleware."""
+        with TestClient(app, base_url="http://localhost") as fresh:
+            response = fresh.post("/api/tools/_synthetic_write", json={})
+        # Middleware accepts; any 403 here comes from require_token (wrapped in
+        # "detail"), not from the middleware (top-level "error": "refused").
+        assert "error" not in response.json() or response.json().get("error") != "refused"
+
+    def test_post_with_127_origin_allowed(self, app: FastAPI) -> None:
         """Bonus: 127.0.0.1 origin also passes the middleware."""
-        response = client.post(
-            "/api/tools/_synthetic_write",
-            json={},
-            headers={"Origin": "http://127.0.0.1:4317"},
-        )
-        assert response.status_code != 403 or response.json().get("error") != "refused"
+        with TestClient(app, base_url="http://localhost") as fresh:
+            response = fresh.post(
+                "/api/tools/_synthetic_write",
+                json={},
+                headers={"Origin": "http://127.0.0.1:4317"},
+            )
+        # Middleware accepts; any 403 here comes from require_token (wrapped in
+        # "detail"), not from the middleware (top-level "error": "refused").
+        assert "error" not in response.json() or response.json().get("error") != "refused"
