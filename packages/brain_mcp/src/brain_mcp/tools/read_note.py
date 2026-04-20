@@ -1,36 +1,19 @@
-"""brain_read_note — read a note by vault-relative path via MCP."""
+"""MCP transport shim for brain_read_note. Real handler in brain_core.tools.read_note."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import mcp.types as types
-from brain_core.vault.frontmatter import FrontmatterError, parse_frontmatter
+from brain_core.tools.read_note import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.read_note import handle as _core_handle
 
-from brain_mcp.tools.base import ToolContext, scope_guard_path, text_result
+from brain_mcp.tools.base import ToolContext, text_result
 
-NAME = "brain_read_note"
-DESCRIPTION = "Read a note by vault-relative path. Returns frontmatter + body."
-INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "path": {
-            "type": "string",
-            "description": "Vault-relative path like 'research/notes/karpathy.md'",
-        },
-    },
-    "required": ["path"],
-}
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
-    raw = str(arguments["path"])
-    full = scope_guard_path(raw, ctx)
-    if not full.exists():
-        raise FileNotFoundError(f"note {raw!r} not found in vault")
-    text = full.read_text(encoding="utf-8")
-    try:
-        fm, body = parse_frontmatter(text)
-    except FrontmatterError:
-        fm, body = {}, text
-    return text_result(body, data={"frontmatter": fm, "body": body, "path": raw})
+    """Delegate to brain_core; wrap ToolResult into MCP TextContent list."""
+    result = await _core_handle(arguments, ctx)
+    return text_result(result)

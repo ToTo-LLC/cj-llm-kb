@@ -1,44 +1,19 @@
-"""brain_get_index — read a domain's index.md via MCP."""
+"""MCP transport shim for brain_get_index. Real handler in brain_core.tools.get_index."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import mcp.types as types
-from brain_core.vault.frontmatter import FrontmatterError, parse_frontmatter
-from brain_core.vault.paths import ScopeError, scope_guard
+from brain_core.tools.get_index import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.get_index import handle as _core_handle
 
 from brain_mcp.tools.base import ToolContext, text_result
 
-NAME = "brain_get_index"
-DESCRIPTION = "Read the <domain>/index.md file. Defaults to the first allowed domain."
-INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "domain": {
-            "type": "string",
-            "description": "Domain name. Omit to use the first allowed domain.",
-        },
-    },
-}
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
-    domain = str(arguments.get("domain") or ctx.allowed_domains[0])
-    if domain not in ctx.allowed_domains:
-        raise ScopeError(f"domain {domain!r} not in allowed {ctx.allowed_domains}")
-    index_path = scope_guard(
-        ctx.vault_root / domain / "index.md",
-        vault_root=ctx.vault_root,
-        allowed_domains=ctx.allowed_domains,
-    )
-    if not index_path.exists():
-        # Shape parity with the happy path: callers can unconditionally read
-        # data["frontmatter"] without a KeyError on the miss branch.
-        return text_result("(no index yet)", data={"domain": domain, "frontmatter": {}, "body": ""})
-    raw = index_path.read_text(encoding="utf-8")
-    try:
-        fm, body = parse_frontmatter(raw)
-    except FrontmatterError:
-        fm, body = {}, raw
-    return text_result(body, data={"domain": domain, "frontmatter": fm, "body": body})
+    """Delegate to brain_core; wrap ToolResult into MCP TextContent list."""
+    result = await _core_handle(arguments, ctx)
+    return text_result(result)

@@ -1,8 +1,8 @@
 """GET /api/tools listing endpoint.
 
-Plan 05 Task 3 lands the listing. Until Tasks 5/6 populate the registry, the
-endpoint returns an empty list; these tests pin the baseline shape and verify
-registered modules surface in the response.
+Plan 05 Task 3 lands the listing; Tasks 5/6 populate the registry as each
+tool module auto-registers at import time. These tests pin the response
+envelope shape and verify registered modules surface in the response.
 """
 
 from __future__ import annotations
@@ -13,8 +13,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_empty_registry_returns_empty_list(client: TestClient) -> None:
-    """Baseline: with no tools registered, GET /api/tools returns an empty list."""
+def test_empty_registry_returns_empty_list(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the registry forcibly emptied, GET /api/tools returns an empty list.
+
+    Tasks 5/6 import brain_core.tools.<name> modules that auto-register at
+    import time, so the "real" registry is non-empty any time a tool module
+    has been imported in the test process. Monkeypatching
+    ``_TOOL_MODULES`` to ``[]`` restores the empty-baseline shape assertion.
+    """
+    from brain_core import tools as tools_registry
+
+    monkeypatch.setattr(tools_registry, "_TOOL_MODULES", [])
     response = client.get("/api/tools")
     assert response.status_code == 200
     assert response.json() == {"tools": []}

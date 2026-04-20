@@ -1,29 +1,19 @@
-"""brain_get_brain_md — read the vault-root BRAIN.md system prompt."""
+"""MCP transport shim for brain_get_brain_md. Real handler in brain_core.tools.get_brain_md."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import mcp.types as types
+from brain_core.tools.get_brain_md import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.get_brain_md import handle as _core_handle
 
 from brain_mcp.tools.base import ToolContext, text_result
 
-NAME = "brain_get_brain_md"
-DESCRIPTION = (
-    "Read BRAIN.md at the vault root — the user's system prompt / persona / working rules."
-)
-INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-}
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
-    brain_md = ctx.vault_root / "BRAIN.md"
-    if not brain_md.exists():
-        return text_result(
-            "(no BRAIN.md yet — run `brain setup` to seed one)",
-            data={"exists": False, "body": ""},
-        )
-    body = brain_md.read_text(encoding="utf-8")
-    return text_result(body, data={"exists": True, "body": body})
+    """Delegate to brain_core; wrap ToolResult into MCP TextContent list."""
+    result = await _core_handle(arguments, ctx)
+    return text_result(result)

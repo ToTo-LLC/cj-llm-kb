@@ -1,55 +1,19 @@
-"""brain_recent — recently modified notes via filesystem walk (D6a)."""
+"""MCP transport shim for brain_recent. Real handler in brain_core.tools.recent."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import mcp.types as types
-from brain_core.vault.paths import ScopeError
+from brain_core.tools.recent import DESCRIPTION, INPUT_SCHEMA, NAME
+from brain_core.tools.recent import handle as _core_handle
 
 from brain_mcp.tools.base import ToolContext, text_result
 
-NAME = "brain_recent"
-DESCRIPTION = "List recently modified notes across allowed domains, sorted newest first."
-_DEFAULT_LIMIT = 10
-_MAX_LIMIT = 50
-INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "domain": {"type": "string"},
-        "limit": {"type": "integer", "minimum": 1, "maximum": _MAX_LIMIT},
-    },
-}
+__all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[types.TextContent]:
-    limit = min(int(arguments.get("limit", _DEFAULT_LIMIT)), _MAX_LIMIT)
-    domain_arg = arguments.get("domain")
-    if domain_arg and domain_arg not in ctx.allowed_domains:
-        raise ScopeError(f"domain {domain_arg!r} not in allowed {ctx.allowed_domains}")
-    domains = (domain_arg,) if domain_arg else ctx.allowed_domains
-
-    entries: list[tuple[int, str, str]] = []
-    for domain in domains:
-        domain_root = ctx.vault_root / domain
-        if not domain_root.exists():
-            continue
-        for md in domain_root.rglob("*.md"):
-            rel = md.relative_to(ctx.vault_root)
-            if "chats" in rel.parts:
-                continue  # Exclude chat threads per D6a.
-            stat = md.stat()
-            entries.append(
-                (
-                    stat.st_mtime_ns,
-                    rel.as_posix(),
-                    datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
-                )
-            )
-
-    entries.sort(reverse=True)
-    top = entries[:limit]
-    notes = [{"path": p, "modified_at": t} for (_, p, t) in top]
-    lines = [f"- {n['path']} ({n['modified_at']})" for n in notes] or ["(no recent notes)"]
-    return text_result("\n".join(lines), data={"notes": notes, "limit_used": limit})
+    """Delegate to brain_core; wrap ToolResult into MCP TextContent list."""
+    result = await _core_handle(arguments, ctx)
+    return text_result(result)
