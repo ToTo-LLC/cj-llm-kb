@@ -85,3 +85,51 @@ def test_wrong_origin_rejected_before_dispatch(app: FastAPI) -> None:
             },
         )
     assert response.status_code == 403
+
+
+def test_missing_required_field_returns_400(app: FastAPI) -> None:
+    """Task 11: a missing ``required`` field surfaces a 400 with ``errors`` list.
+
+    ``brain_propose_note`` requires ``path``, ``content``, and ``reason``. Sending
+    only ``path`` must be rejected before the handler runs — the handler never
+    sees a half-populated dict.
+    """
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_propose_note",
+            json={"path": "research/notes/x.md"},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 400
+    body = response.json()
+    # Task 15 will flatten the ``{"detail": {...}}`` wrap; until then pin
+    # the current shape so callers can parse field-level errors.
+    assert body["detail"]["error"] == "invalid_input"
+    assert isinstance(body["detail"]["errors"], list)
+    assert body["detail"]["errors"], "errors list should not be empty"
+
+
+def test_wrong_type_returns_400(app: FastAPI) -> None:
+    """Task 11: a wrong-typed field surfaces a 400 from Pydantic coercion failure.
+
+    ``brain_search``'s ``top_k`` is ``{"type": "integer"}``. A non-numeric string
+    like ``"not-an-int"`` can't coerce and must produce a 400 — the handler's
+    own ``int(...)`` coercion is a last line of defense, not a validation layer.
+    """
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_search",
+            json={"query": "x", "top_k": "not-an-int"},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error"] == "invalid_input"

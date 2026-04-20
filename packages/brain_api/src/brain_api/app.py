@@ -18,6 +18,7 @@ from brain_api.auth import OriginHostMiddleware
 from brain_api.context import build_app_context
 from brain_api.routes import health
 from brain_api.routes import tools as tools_routes
+from brain_api.schema import build_model_from_schema
 
 try:
     _VERSION = version("brain_api")
@@ -50,6 +51,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         token=token,
     )
     app.state.ctx = ctx
+
+    # Task 11: build one Pydantic model per tool INPUT_SCHEMA so the dispatcher
+    # can validate request bodies at the edge. Any unsupported schema feature
+    # raises ``UnsupportedSchemaError`` HERE (at boot), not on the first
+    # request — fail-loud is correct for a tool-author bug.
+    app.state.tool_models = {
+        name: build_model_from_schema(name, module.INPUT_SCHEMA)
+        for name, module in ctx.tool_by_name.items()
+    }
+
     try:
         yield
     finally:
