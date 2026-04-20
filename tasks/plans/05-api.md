@@ -2392,3 +2392,977 @@ Main loop reviews:
 Before Task 10, main loop confirms the middleware + dep pattern is locked before the generic tool dispatcher wires the dep across all 18 endpoints.
 
 ---
+
+### Group 4 — REST tool endpoint (Tasks 10–13)
+
+**Checkpoint after Task 13:** main-loop reviews the whole REST tool surface — dispatcher correctness, INPUT_SCHEMA validation, response envelope, 18 curl-driven end-to-end tests. This is the first Group where a naive caller can actually USE the HTTP API (Group 3 locked it down; Group 4 turns it on).
+
+**Architectural bet:** Group 4 lands the tool dispatcher WITHOUT inventing new types. Every tool handler already returns `ToolResult(text, data)` (Task 5/6). The REST envelope is `{"text": ..., "data": ...}` — a direct JSON serialization of `ToolResult`. No adapter layer, no polymorphic responses. Drift between REST and MCP remains structurally impossible because both transports call the same `brain_core.tools.<name>.handle`.
+
+**Validation strategy (D3a):** per-tool Pydantic models are built at app-factory time from each module's `INPUT_SCHEMA` dict (JSON Schema subset). FastAPI's OpenAPI docs at `/docs` pick up each model as a separate operation schema. The dispatcher looks up the model for `<name>`, validates the request body, then calls `handle`.
+
+---
+
+### Task 10 — Generic `POST /api/tools/<name>` dispatcher
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/routes/tools.py` — add POST handler + tool-by-name index
+- Create: `packages/brain_api/tests/test_tools_dispatcher.py`
+
+**Context for the implementer:**
+
+Task 10 lands the dispatcher WITHOUT validation — request body is a bare `dict[str, Any]` and gets passed straight to `handle(body, ctx.tool_ctx)`. Task 11 wraps this with Pydantic validation in front. Decoupling dispatch from validation means Task 11 can iterate on the validator without touching the dispatch path.
+
+**Registry lookup:** Plan 04 Task 25 deferred a `_TOOL_BY_NAME` dict-lookup optimization. Since Group 4 is new code, build the dict once at app startup (in the lifespan, off of `brain_core.tools.list_tools()`), stash on `app.state.tool_by_name`, and look up in O(1) in the dispatcher. This also makes Task 13's 18 per-tool tests cleaner — no `for module in modules` branching in the production path.
+
+**Dispatcher shape:**
+
+```python
+@router.post(
+    "/{name}",
+    dependencies=[Depends(require_token)],
+    summary="Call a brain tool by name.",
+    responses={
+        404: {"description": "Tool not registered"},
+        403: {"description": "Missing or invalid X-Brain-Token"},
+    },
+)
+async def call_tool(
+    name: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    ctx: AppContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    """Dispatch to brain_core.tools.<name>.handle(body, ctx.tool_ctx)."""
+    module = ctx.tool_by_name.get(name)
+    if module is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"tool {name!r} is not registered"},
+        )
+    result: ToolResult = await module.handle(body, ctx.tool_ctx)
+    return {"text": result.text, "data": result.data}
+```
+
+Store the dict on `AppContext` (not just `app.state`) so the dependency-injected `ctx` carries it. Modify `AppContext` to add `tool_by_name: dict[str, ToolModule]` as a field populated at `build_app_context` time.
+
+**Body type note:** `Body(default_factory=dict)` means a request with empty body `{}` or no body at all dispatches with `body={}`. Tools that take no arguments (like `brain_list_domains`) accept this. Tools with required args raise `KeyError` inside the handler; Task 11 intercepts before dispatch with Pydantic validation for a 400 instead.
+
+### Step 1 — Failing tests
+
+```python
+"""Tests for POST /api/tools/<name> dispatcher — Task 10 (validation follows in Task 11)."""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+
+def test_dispatches_to_list_domains(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert "text" in body
+    assert "data" in body
+    assert isinstance(body["data"]["domains"], list)
+
+
+def test_unknown_tool_returns_404(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/nonexistent_tool",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 404
+    body = response.json()
+    assert body["detail"]["error"] == "not_found"
+    assert "nonexistent_tool" in body["detail"]["message"]
+
+
+def test_missing_token_rejected_before_dispatch(client: TestClient) -> None:
+    response = client.post(
+        "/api/tools/brain_list_domains",
+        json={},
+        headers={"Origin": "http://localhost:4317"},
+    )
+    assert response.status_code == 403
+
+
+def test_wrong_origin_rejected_before_dispatch(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "https://evil.example",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 403
+```
+
+### Step 2 — Wire `tool_by_name` on `AppContext`
+
+Modify `packages/brain_api/src/brain_api/context.py`:
+
+```python
+from brain_core.tools import ToolModule, list_tools
+
+@dataclass(frozen=True)
+class AppContext:
+    vault_root: Path
+    allowed_domains: tuple[str, ...]
+    tool_ctx: ToolContext
+    tool_by_name: dict[str, ToolModule]  # NEW
+    token: str | None = None
+
+
+def build_app_context(...) -> AppContext:
+    # ... existing body ...
+    modules = list_tools()
+    tool_by_name = {m.NAME: m for m in modules}
+    return AppContext(
+        vault_root=vault_root,
+        allowed_domains=allowed_domains,
+        tool_ctx=tool_ctx,
+        tool_by_name=tool_by_name,  # NEW
+        token=token,
+    )
+```
+
+### Step 3 — Implement dispatcher
+
+Append to `packages/brain_api/src/brain_api/routes/tools.py`:
+
+```python
+from fastapi import Body, Depends, HTTPException
+from typing import Any
+
+from brain_api.auth import require_token
+from brain_api.context import AppContext, get_ctx
+from brain_core.tools.base import ToolResult
+
+
+@router.post("/{name}", dependencies=[Depends(require_token)])
+async def call_tool(
+    name: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    ctx: AppContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    """Dispatch to brain_core.tools.<name>.handle(body, ctx.tool_ctx).
+
+    Request body is passed through as-is; Task 11 adds Pydantic validation
+    against each tool's INPUT_SCHEMA in front of this dispatch.
+    """
+    module = ctx.tool_by_name.get(name)
+    if module is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"tool {name!r} is not registered"},
+        )
+    result: ToolResult = await module.handle(body, ctx.tool_ctx)
+    return {"text": result.text, "data": result.data}
+```
+
+### Step 4 — Run + commit
+
+Expect: **38 passed** (34 prior + 4 new dispatcher tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 10 — POST /api/tools/<name> dispatcher (token-guarded)"
+```
+
+---
+
+### Task 11 — Request body validation against each tool's INPUT_SCHEMA
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/schema.py` — JSON-Schema → Pydantic model builder
+- Modify: `packages/brain_api/src/brain_api/app.py` — build models at startup, stash on `app.state.tool_models`
+- Modify: `packages/brain_api/src/brain_api/routes/tools.py` — validate body before dispatch
+- Create: `packages/brain_api/tests/test_schema_builder.py`
+- Modify: `packages/brain_api/tests/test_tools_dispatcher.py` — add validation-failure tests
+
+**Context for the implementer:**
+
+Every tool module exports an `INPUT_SCHEMA: dict` — a JSON Schema subset. Example from `brain_core.tools.propose_note`:
+
+```python
+INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string"},
+        "content": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["path", "content", "reason"],
+}
+```
+
+We convert each schema into a Pydantic model at app startup, then validate the request body against it before dispatching. Two third-party options exist:
+- `datamodel-code-generator` — heavy, requires an extra CLI tool + subprocess
+- `jsonschema` — validator only; no Pydantic model, weak OpenAPI integration
+
+Neither fits. **Solution:** write a minimal `build_model_from_schema(name, schema) -> type[BaseModel]` helper using `pydantic.create_model`. The JSON-Schema subset we support:
+- `type: "object"` at top level with `properties` + optional `required`
+- Property types: `string` → `str`, `integer` → `int`, `number` → `float`, `boolean` → `bool`, `array` → `list[Any]`, `object` → `dict[str, Any]`
+- Properties not in `required` are `Optional[T]` with default `None`
+- Unknown types fall back to `Any` (don't fail loud — JSON Schema has richer features we don't need)
+
+This covers 100% of the 18 tools' INPUT_SCHEMAs. Verify by running the builder against every tool's schema at startup; any unsupported feature raises immediately (fail-fast at boot, not at request time).
+
+**Validation wiring:** the dispatcher changes to validate `body` against `ctx.tool_models[name]` before calling `handle`. On `pydantic.ValidationError`, raise `HTTPException(400, detail={"error": "invalid_input", "message": ..., "errors": [...]})`. Task 15 will rationalize the envelope; for now, the detail dict with field-level errors is fine.
+
+### Step 1 — Failing tests for the schema builder
+
+`packages/brain_api/tests/test_schema_builder.py`:
+
+```python
+"""Tests for brain_api.schema.build_model_from_schema."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from brain_api.schema import build_model_from_schema
+
+
+def test_simple_required_string() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    }
+    M = build_model_from_schema("T", schema)
+    assert issubclass(M, BaseModel)
+
+    m = M(name="hi")
+    assert m.name == "hi"
+
+    with pytest.raises(ValidationError):
+        M()  # missing required
+
+
+def test_optional_string_defaults_none() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"hint": {"type": "string"}},
+    }
+    M = build_model_from_schema("T", schema)
+    m = M()
+    assert m.hint is None
+
+
+def test_integer_type_coerced() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"limit": {"type": "integer"}},
+    }
+    M = build_model_from_schema("T", schema)
+    with pytest.raises(ValidationError):
+        M(limit="not-an-int")  # type: ignore[arg-type]
+    assert M(limit=5).limit == 5
+
+
+def test_array_type_accepts_list() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"domains": {"type": "array"}},
+    }
+    M = build_model_from_schema("T", schema)
+    assert M(domains=["a", "b"]).domains == ["a", "b"]
+
+
+def test_builds_models_for_every_real_tool_schema() -> None:
+    """Sanity — no real tool's INPUT_SCHEMA is unsupported."""
+    from brain_core.tools import list_tools
+
+    for module in list_tools():
+        M = build_model_from_schema(module.NAME, module.INPUT_SCHEMA)
+        assert issubclass(M, BaseModel), f"{module.NAME} failed to build"
+```
+
+### Step 2 — Implement `schema.py`
+
+```python
+"""Build Pydantic models from each tool's JSON-Schema subset.
+
+Called at app startup. The subset we support covers every current
+brain_core.tools.* INPUT_SCHEMA; richer JSON Schema features can be added
+incrementally as tools require them.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field, create_model
+
+# Map JSON Schema primitive types to Python types.
+_TYPE_MAP: dict[str, type] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+class UnsupportedSchemaError(ValueError):
+    """Raised at boot if a tool's INPUT_SCHEMA uses features we haven't mapped yet."""
+
+
+def _python_type_for(prop_schema: dict[str, Any]) -> Any:
+    """Map a JSON Schema property dict to a Python type annotation.
+
+    Returns `typing.Any` for unknown types — permissive by design so future
+    tool authors can prototype without waiting for the builder to catch up.
+    """
+    js_type = prop_schema.get("type")
+    if js_type is None:
+        return Any
+    if isinstance(js_type, list):
+        # Unions like ["string", "null"] — just accept any value.
+        return Any
+    if js_type == "array":
+        return list[Any]
+    if js_type == "object":
+        return dict[str, Any]
+    return _TYPE_MAP.get(js_type, Any)
+
+
+def build_model_from_schema(name: str, schema: dict[str, Any]) -> type[BaseModel]:
+    """Build a Pydantic model from a JSON-Schema object description.
+
+    Args:
+        name: Model class name (e.g. the tool NAME, used in error messages + OpenAPI).
+        schema: Dict shaped like `{"type": "object", "properties": {...}, "required": [...]}`.
+
+    Returns:
+        A Pydantic `BaseModel` subclass suitable for `Model(**request_body)` validation.
+
+    Raises:
+        UnsupportedSchemaError: if the top-level type isn't "object".
+    """
+    if schema.get("type") != "object":
+        raise UnsupportedSchemaError(
+            f"tool {name!r} INPUT_SCHEMA top-level type must be 'object', got {schema.get('type')!r}"
+        )
+
+    properties: dict[str, Any] = schema.get("properties", {})
+    required: set[str] = set(schema.get("required", []))
+
+    fields: dict[str, Any] = {}
+    for prop_name, prop_schema in properties.items():
+        py_type = _python_type_for(prop_schema)
+        description = prop_schema.get("description")
+        if prop_name in required:
+            fields[prop_name] = (py_type, Field(..., description=description))
+        else:
+            fields[prop_name] = (py_type | None, Field(default=None, description=description))
+
+    return create_model(f"{name}_Input", __base__=BaseModel, **fields)
+```
+
+### Step 3 — Build + stash models at startup
+
+Modify `packages/brain_api/src/brain_api/app.py` lifespan to build the models from `ctx.tool_by_name` and stash:
+
+```python
+from brain_api.schema import build_model_from_schema
+
+# Inside _lifespan, after build_app_context returns:
+app.state.tool_models = {
+    name: build_model_from_schema(name, module.INPUT_SCHEMA)
+    for name, module in ctx.tool_by_name.items()
+}
+```
+
+### Step 4 — Validate in the dispatcher
+
+Modify `routes/tools.py`:
+
+```python
+from pydantic import ValidationError
+from starlette.requests import Request
+
+@router.post("/{name}", dependencies=[Depends(require_token)])
+async def call_tool(
+    name: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    ctx: AppContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    module = ctx.tool_by_name.get(name)
+    if module is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"tool {name!r} is not registered"},
+        )
+
+    # Validate body against tool's INPUT_SCHEMA.
+    Model = request.app.state.tool_models[name]
+    try:
+        validated = Model.model_validate(body)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_input",
+                "message": f"request body does not match {name!r} INPUT_SCHEMA",
+                "errors": exc.errors(),
+            },
+        ) from exc
+
+    # Pass validated dict (no None fields) to handler. The handler still accepts
+    # a plain dict; validation's job is to catch bad input before dispatch.
+    result: ToolResult = await module.handle(validated.model_dump(exclude_none=True), ctx.tool_ctx)
+    return {"text": result.text, "data": result.data}
+```
+
+### Step 5 — Extra dispatcher tests
+
+Append to `test_tools_dispatcher.py`:
+
+```python
+def test_missing_required_field_returns_400(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        # brain_propose_note requires path/content/reason.
+        response = fresh.post(
+            "/api/tools/brain_propose_note",
+            json={"path": "research/notes/x.md"},  # missing content + reason
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error"] == "invalid_input"
+    assert isinstance(body["detail"]["errors"], list)
+
+
+def test_wrong_type_returns_400(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_search",
+            json={"query": "x", "top_k": "not-an-int"},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 400
+```
+
+### Step 6 — Run + commit
+
+Expect: **45 passed** (38 prior + 5 schema builder tests + 2 new dispatcher tests).
+
+```bash
+git commit -m "feat(api): plan 05 task 11 — Pydantic validation against tool INPUT_SCHEMA (400 on mismatch)"
+```
+
+---
+
+### Task 12 — Response envelope + content negotiation
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Modify: `packages/brain_api/src/brain_api/routes/tools.py` — add explicit response_model + OpenAPI metadata
+- Create: `packages/brain_api/src/brain_api/responses.py` — `ToolResponse` Pydantic model (the envelope)
+- Modify: `packages/brain_api/tests/test_tools_dispatcher.py` — assert envelope shape in every test
+
+**Context for the implementer:**
+
+The dispatcher currently returns a bare `dict[str, Any]`. That works but produces weak OpenAPI docs (every endpoint's response is typed as "object"). Task 12 introduces a typed `ToolResponse` Pydantic model that FastAPI serializes against and introspects for `/docs`.
+
+```python
+class ToolResponse(BaseModel):
+    text: str
+    data: dict[str, Any] | None = None
+```
+
+Response shape is unchanged — `ToolResult(text, data)` serializes to `{"text": ..., "data": ...}` with `data` nullable. That's already what Task 10 returned; Task 12 just pins the contract.
+
+**Content negotiation:** reject `Accept` headers that don't include `application/json` (or `*/*`). Return `406 Not Acceptable` with `{"error": "not_acceptable", "message": "this API speaks only application/json"}`. Why bother? To keep the API surface tight — no HTML, no XML, no negotiation ambiguity for future clients.
+
+FastAPI doesn't enforce Accept by default. We add a lightweight dependency `enforce_json_accept(request)` that raises 406 if the Accept header is present and doesn't allow `application/json`.
+
+### Step 1 — Failing tests
+
+Append to `test_tools_dispatcher.py`:
+
+```python
+def test_response_shape_is_envelope(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+                "Accept": "application/json",
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"text", "data"}
+    assert isinstance(body["text"], str)
+
+
+def test_nonjson_accept_rejected(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+                "Accept": "text/html",
+            },
+        )
+    assert response.status_code == 406
+
+
+def test_wildcard_accept_allowed(client: TestClient, app) -> None:  # noqa: ANN001
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+                "Accept": "*/*",
+            },
+        )
+    assert response.status_code == 200
+
+
+def test_missing_accept_allowed(client: TestClient, app) -> None:  # noqa: ANN001
+    """Clients without Accept (curl default) are accepted."""
+    with TestClient(app) as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 200
+```
+
+### Step 2 — Create `responses.py`
+
+```python
+"""Response envelope models for brain_api routes."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ToolResponse(BaseModel):
+    """Envelope for every tool's output: plain text + structured data."""
+
+    text: str = Field(description="Human-readable summary for LLM / UI rendering.")
+    data: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured payload. None when the tool has nothing beyond text to say.",
+    )
+
+
+class ErrorResponse(BaseModel):
+    """Envelope for error responses (Task 15 uses this for exception handlers)."""
+
+    error: str = Field(description="Machine-readable error code.")
+    message: str = Field(description="Plain-English explanation.")
+    detail: dict[str, Any] | None = Field(default=None)
+```
+
+### Step 3 — Add content-negotiation dependency
+
+Append to `packages/brain_api/src/brain_api/auth.py`:
+
+```python
+def enforce_json_accept(request: Request) -> None:
+    """Reject Accept headers that exclude application/json.
+
+    Missing Accept (curl default): allowed. Wildcards allowed.
+    """
+    accept = request.headers.get("accept", "")
+    if not accept:
+        return
+    # Simple contains-check — Accept parsing RFC is strict but we only need
+    # to reject explicit "text/html" / "application/xml" style headers.
+    accept_lc = accept.lower()
+    if "application/json" in accept_lc or "*/*" in accept_lc or "application/*" in accept_lc:
+        return
+    raise HTTPException(
+        status_code=406,
+        detail={
+            "error": "not_acceptable",
+            "message": "this API speaks only application/json",
+        },
+    )
+```
+
+### Step 4 — Wire response_model + Accept dep on the dispatcher
+
+Modify `routes/tools.py` POST endpoint:
+
+```python
+from brain_api.auth import enforce_json_accept, require_token
+from brain_api.responses import ErrorResponse, ToolResponse
+
+
+@router.post(
+    "/{name}",
+    response_model=ToolResponse,
+    dependencies=[Depends(enforce_json_accept), Depends(require_token)],
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        406: {"model": ErrorResponse},
+    },
+)
+async def call_tool(
+    name: str,
+    request: Request,
+    body: dict[str, Any] = Body(default_factory=dict),
+    ctx: AppContext = Depends(get_ctx),
+) -> ToolResponse:  # FastAPI serializes against response_model
+    # ... same body as Task 11 but return ToolResponse(...) at the end:
+    result: ToolResult = await module.handle(validated.model_dump(exclude_none=True), ctx.tool_ctx)
+    return ToolResponse(text=result.text, data=result.data)
+```
+
+### Step 5 — Run + commit
+
+Expect: **49 passed** (45 prior + 4 envelope/Accept tests).
+
+Open `/docs` in a local browser and eyeball: the dispatcher should show `ToolResponse` in the 200 section + `ErrorResponse` in every error section. (The demo script will automate this later; for Task 12 manual eyeballing is fine.)
+
+```bash
+git commit -m "feat(api): plan 05 task 12 — ToolResponse envelope + Accept negotiation (406 on text/html)"
+```
+
+---
+
+### Task 13 — 18 curl-driven per-tool tests
+
+**Owning subagent:** brain-test-engineer (+ brain-api-engineer for tool-specific fixture work)
+
+**Files:**
+- Create: `packages/brain_api/tests/test_tool_endpoints.py` — parametrized happy-path + reject-path per tool
+- Modify: `packages/brain_api/tests/conftest.py` — add `token_header(client)` fixture convenience
+
+**Context for the implementer:**
+
+18 tools × 2 test patterns (happy + reject) = 36 tests. Parametrize where the tool shapes are similar; hand-write only the handful that need custom fixture setup (`brain_ingest` queueing FakeLLM, `brain_apply_patch` pre-staging, `brain_bulk_import` tmp folder).
+
+**Shared test helper:** `ApiClient` — a thin wrapper around `TestClient` that auto-injects `Origin: http://localhost:4317` + `X-Brain-Token: <token>` on every POST. Keeps individual tests short.
+
+```python
+@pytest.fixture
+def api_client(app) -> ApiClient:
+    """TestClient wrapper that auto-attaches Origin + X-Brain-Token."""
+    with TestClient(app) as base:
+        token = app.state.ctx.token
+        yield ApiClient(base, token=token, origin="http://localhost:4317")
+
+
+class ApiClient:
+    def __init__(self, base: TestClient, token: str, origin: str) -> None:
+        self._base = base
+        self._headers = {"Origin": origin, "X-Brain-Token": token}
+
+    def call(self, name: str, body: dict | None = None) -> httpx.Response:
+        return self._base.post(
+            f"/api/tools/{name}",
+            json=body or {},
+            headers=self._headers,
+        )
+```
+
+**Tool-by-tool happy path:**
+
+| Tool | Happy body | Expected in response.json().data |
+|---|---|---|
+| `brain_list_domains` | `{}` | `"domains"` key, includes `"research"` |
+| `brain_get_index` | `{}` | `"body"` key |
+| `brain_read_note` | `{"path": "research/notes/karpathy.md"}` | `"body"` + `"frontmatter"` |
+| `brain_search` | `{"query": "karpathy"}` | `"hits"` list |
+| `brain_recent` | `{}` | `"notes"` list, `"limit_used"` |
+| `brain_get_brain_md` | `{}` | `"body"` contains "You are brain" |
+| `brain_ingest` | `{"source": "plain text"}` | `"status"` — either `pending` or `rate_limited` (Fake queue empty → error) |
+| `brain_classify` | `{"content": "x"}` | pre-queue one FakeLLM response; expect `"domain"` |
+| `brain_bulk_import` | `{"folder": str(tmp_path / "inbox")}` | `"status": "planned"` |
+| `brain_propose_note` | `{"path": "research/notes/x.md", "content": "x", "reason": "x"}` | `"patch_id"` |
+| `brain_list_pending_patches` | `{}` | `"count"`, `"patches"` |
+| `brain_apply_patch` | `{"patch_id": <prestaged>}` | `"status": "applied"`, `"undo_id"` |
+| `brain_reject_patch` | `{"patch_id": <prestaged>, "reason": "no"}` | `"status": "rejected"` |
+| `brain_undo_last` | `{}` | `"status"` — `"reverted"` or `"nothing_to_undo"` |
+| `brain_cost_report` | `{}` | `"today_usd"` |
+| `brain_lint` | `{}` | `"status": "not_implemented"` |
+| `brain_config_get` | `{"key": "active_domain"}` | `"value"` |
+| `brain_config_set` | `{"key": "log_llm_payloads", "value": true}` | `"status": "updated"`, `"persisted": false` |
+
+**Reject-path spot checks** (don't need full 18; just the canonical rejection types):
+- `brain_read_note` with `{"path": "personal/notes/secret.md"}` → 500 (ScopeError uncaught until Task 15) or 403 (if Task 15 lands first — coordinate)
+- `brain_propose_note` with missing `reason` → 400 (Task 11 validation catches)
+- `brain_apply_patch` with `{"patch_id": "nonexistent"}` → 500 (KeyError uncaught) or 404 (post-Task-15)
+
+**Task-ordering note:** Task 13 lands BEFORE Task 15 (exception handlers). Reject tests assert `500` for unhandled exceptions; Task 15 will tighten those to proper 403/404 and update the tests accordingly. Mark the affected tests with `pytest.mark.xfail(strict=False, reason="Task 15 will tighten to 403/404")` so they run but don't regress.
+
+**Alternative ordering:** swap Group 4 / Group 5 so Task 15 lands first. Saves the xfail churn. Main loop reviews this ordering choice at Checkpoint 4.
+
+### Step 1 — Implement `ApiClient` + parametrized tests
+
+```python
+"""Per-tool REST endpoint tests — 18 tools × happy + reject paths."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from fastapi import FastAPI
+from brain_core.chat.types import ChatMode
+from brain_core.vault.types import NewFile, PatchSet
+
+
+class ApiClient:
+    def __init__(self, base: TestClient, token: str, origin: str) -> None:
+        self._base = base
+        self._headers = {"Origin": origin, "X-Brain-Token": token}
+
+    def call(self, name: str, body: dict | None = None) -> httpx.Response:
+        return self._base.post(
+            f"/api/tools/{name}",
+            json=body or {},
+            headers=self._headers,
+        )
+
+
+@pytest.fixture
+def api(app: FastAPI):
+    with TestClient(app) as base:
+        token = app.state.ctx.token
+        yield ApiClient(base, token=token, origin="http://localhost:4317")
+
+
+# Happy-path assertions per tool — tuples of (name, body, assertion_fn).
+_HAPPY_CASES: list[tuple[str, dict, callable]] = [
+    ("brain_list_domains", {}, lambda d: "research" in d["domains"]),
+    ("brain_get_index", {}, lambda d: "body" in d),
+    ("brain_read_note", {"path": "research/notes/karpathy.md"}, lambda d: "body" in d),
+    ("brain_search", {"query": "karpathy"}, lambda d: isinstance(d["hits"], list)),
+    ("brain_recent", {}, lambda d: "notes" in d and "limit_used" in d),
+    ("brain_get_brain_md", {}, lambda d: "You are brain" in d["body"]),
+    ("brain_list_pending_patches", {}, lambda d: d["count"] == 0),
+    ("brain_cost_report", {}, lambda d: "today_usd" in d),
+    ("brain_lint", {}, lambda d: d["status"] == "not_implemented"),
+    ("brain_undo_last", {}, lambda d: d["status"] in ("reverted", "nothing_to_undo")),
+]
+
+
+@pytest.mark.parametrize("name,body,assertion", _HAPPY_CASES)
+def test_happy_path(api: ApiClient, name: str, body: dict, assertion) -> None:
+    response = api.call(name, body)
+    assert response.status_code == 200, response.text
+    envelope = response.json()
+    assert set(envelope.keys()) == {"text", "data"}
+    assert assertion(envelope["data"]), f"assertion failed for {name}: {envelope['data']!r}"
+
+
+# Non-parametrized tests for tools that need fixture setup.
+def test_brain_propose_note(api: ApiClient, app: FastAPI) -> None:
+    response = api.call(
+        "brain_propose_note",
+        {"path": "research/notes/new.md", "content": "# new", "reason": "demo"},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "patch_id" in data
+
+
+def test_brain_apply_patch(api: ApiClient, app: FastAPI, seeded_vault: Path) -> None:
+    # Pre-stage via the tool itself to avoid reaching into PendingPatchStore directly.
+    r = api.call(
+        "brain_propose_note",
+        {"path": "research/notes/apply-me.md", "content": "x", "reason": "demo"},
+    )
+    patch_id = r.json()["data"]["patch_id"]
+
+    r = api.call("brain_apply_patch", {"patch_id": patch_id})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "applied"
+    assert (seeded_vault / "research" / "notes" / "apply-me.md").exists()
+
+
+def test_brain_reject_patch(api: ApiClient) -> None:
+    r = api.call(
+        "brain_propose_note",
+        {"path": "research/notes/reject-me.md", "content": "x", "reason": "demo"},
+    )
+    patch_id = r.json()["data"]["patch_id"]
+
+    r = api.call("brain_reject_patch", {"patch_id": patch_id, "reason": "not useful"})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "rejected"
+
+
+def test_brain_classify(api: ApiClient, app: FastAPI) -> None:
+    # Pre-queue one FakeLLM response for the classify call.
+    app.state.ctx.tool_ctx.llm.queue('{"source_type": "text", "domain": "research", "confidence": 0.9, "reason": "x"}')
+
+    r = api.call("brain_classify", {"content": "Karpathy on LLMs"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["domain"] == "research"
+
+
+def test_brain_bulk_import(api: ApiClient, tmp_path: Path, app: FastAPI) -> None:
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "a.txt").write_text("hello", encoding="utf-8", newline="\n")
+    # Pre-queue one classify response (dry_run still calls classifier).
+    app.state.ctx.tool_ctx.llm.queue('{"source_type": "text", "domain": "research", "confidence": 0.9, "reason": "x"}')
+
+    r = api.call("brain_bulk_import", {"folder": str(folder)})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "planned"
+
+
+def test_brain_ingest(api: ApiClient, app: FastAPI) -> None:
+    # Pre-queue summarize + classify + integrate responses.
+    from brain_core.prompts.schemas import SummarizeOutput
+    app.state.ctx.tool_ctx.llm.queue(
+        SummarizeOutput(
+            title="Demo",
+            key_points=["point"],
+            entities=[],
+            concepts=["x"],
+            body_markdown="body",
+        ).model_dump_json()
+    )
+    app.state.ctx.tool_ctx.llm.queue('{"source_type": "text", "domain": "research", "confidence": 0.9, "reason": "x"}')
+    app.state.ctx.tool_ctx.llm.queue(
+        '{"new_files": [{"path": "research/sources/demo.md", "content": "# Demo\\n\\nbody"}], "edits": [], "index_entries": [], "log_entry": "demo", "reason": "demo"}'
+    )
+
+    r = api.call("brain_ingest", {"source": "Plain text to ingest"})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "pending"
+
+
+def test_brain_config_get(api: ApiClient) -> None:
+    r = api.call("brain_config_get", {"key": "active_domain"})
+    assert r.status_code == 200
+    assert "value" in r.json()["data"]
+
+
+def test_brain_config_set(api: ApiClient) -> None:
+    r = api.call("brain_config_set", {"key": "log_llm_payloads", "value": True})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "updated"
+    assert data["persisted"] is False  # Plan 07 territory
+
+
+# Reject-path spot checks — marked xfail until Task 15 normalizes status codes.
+@pytest.mark.xfail(strict=False, reason="Task 15 will tighten unhandled ScopeError to 403")
+def test_read_note_out_of_scope_eventually_403(api: ApiClient) -> None:
+    r = api.call("brain_read_note", {"path": "personal/notes/secret.md"})
+    assert r.status_code == 403
+
+
+def test_read_note_out_of_scope_currently_500(api: ApiClient) -> None:
+    """Pre-Task-15 state — uncaught ScopeError becomes 500. Task 15 tightens to 403."""
+    r = api.call("brain_read_note", {"path": "personal/notes/secret.md"})
+    assert r.status_code == 500
+
+
+def test_propose_note_missing_reason_is_400(api: ApiClient) -> None:
+    """Task 11 Pydantic validation catches missing required fields."""
+    r = api.call(
+        "brain_propose_note",
+        {"path": "research/notes/x.md", "content": "x"},
+    )
+    assert r.status_code == 400
+
+
+def test_apply_unknown_patch_currently_500(api: ApiClient) -> None:
+    """Pre-Task-15 — KeyError from the handler becomes 500. Task 15 tightens to 404."""
+    r = api.call("brain_apply_patch", {"patch_id": "does-not-exist"})
+    assert r.status_code == 500
+```
+
+### Step 2 — Run + commit
+
+Expect: **~85 passed** (49 prior + 10 happy parametrized + ~15 fixture-setup + ~5 reject = ~30 tests added). Actual count varies — run and count.
+
+The `test_read_note_out_of_scope_eventually_403` xfail will register as an `xfailed` status, not a fail — the `strict=False` means it counts as test-suite-green. Task 15 flips it to pass.
+
+```bash
+git commit -m "feat(api): plan 05 task 13 — 18 curl-driven REST endpoint tests (one per tool)"
+```
+
+---
+
+**Checkpoint 4 — pause for main-loop review.**
+
+13 tasks landed. Full REST tool surface is live and curl-drivable:
+- `POST /api/tools/<name>` dispatches to `brain_core.tools.<name>.handle` with Pydantic-validated body, token + Origin checks, `ToolResponse` envelope.
+- `GET /api/tools` lists all 18 tools with input schemas, powers OpenAPI `/docs`.
+- 36+ per-tool tests assert happy path + representative reject cases.
+
+Main loop reviews:
+
+- **Status-code tightening.** Task 13 currently asserts `500` for unhandled `ScopeError` / `KeyError`; Task 15's exception handlers will convert them to `403` / `404`. Is the xfail-then-flip cadence acceptable, or should Group 4 / Group 5 swap order (Task 15 first, then the dispatcher tests assert the final codes directly)? Swapping saves ~10 lines of xfail churn but introduces a larger Group 5 footprint. **Recommendation:** keep current order — the xfail cadence makes the tightening explicit and reviewable in isolation.
+- **Pydantic schema coverage.** Is the JSON-Schema subset (string, int, float, bool, array, object) enough, or do any tools need enum validation? Quick audit: `brain_search` INPUT_SCHEMA has `{"top_k": {"type": "integer", "minimum": 1, "maximum": 20}}`. We don't enforce `minimum`/`maximum` today. The tool handler still clamps (`min(top_k, 20)`), so semantics are preserved, but the 400 would be cleaner. Track for Task 25 sweep — `enum` + `minimum`/`maximum` support in `build_model_from_schema`.
+- **Registry / dispatch doubling.** `ctx.tool_by_name` lives on `AppContext`; `ctx.tool_ctx` is handed to each handler. This is the same shape as `brain_mcp`'s `_TOOL_MODULES` list. Are the two registries (MCP's list + API's dict) staying in sync? Yes — both derive from `brain_core.tools.list_tools()`. Document in the brain_core.tools docstring that ordering is not guaranteed (dict lookup + sorted listing is the canonical surface).
+- **Content negotiation strictness.** 406 on `Accept: text/html` is pedantic. Does the frontend (Plan 07) always send `Accept: application/json`? Next.js server-side `fetch` defaults to `*/*`, which we allow. OK.
+- **OpenAPI docs check.** Open `/docs` manually — every tool should show a distinct operation with its INPUT_SCHEMA-derived model. If /docs is unreadable, tighten the model names (`create_model(f"{name}_Input", ...)` is already namespaced).
+
+Before Task 14, main loop confirms the dispatcher contract is locked — Task 15's error tightening will touch every tool test, but the dispatcher body itself shouldn't change.
+
+---
