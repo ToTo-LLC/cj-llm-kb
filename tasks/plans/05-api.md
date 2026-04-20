@@ -366,4 +366,725 @@ Six review pause points, matching Plan 04's rhythm:
 
 ## Detailed per-task steps
 
-*Intentionally unfilled. After the outline, decisions, and file structure are approved, I will fill in per-task bite-sized steps (test-first, exact code, exact commands, expected output) group-by-group following Plans 03/04's rhythm.*
+### Group 1 — Foundation (Tasks 1–3)
+
+**Checkpoint after Task 3:** main-loop reviews package skeleton, `AppContext` shape, and the tool-registry + `GET /api/tools` contract before auth/dispatcher/WS work. If `AppContext` gets fields wrong, every Group 3/4/5/6 endpoint will need to be touched — cheaper to catch here.
+
+---
+
+### Task 1 — `brain_api` workspace package skeleton + `/healthz`
+
+**Owning subagent:** brain-api-engineer (spin up `brain-mcp-engineer` role-overloaded if no dedicated agent)
+
+**Files:**
+- Modify: root `pyproject.toml` — add `brain_api` dep + `[tool.uv.sources]` entry + new runtime deps (`fastapi>=0.115`, `uvicorn>=0.32`)
+- Create: `packages/brain_api/pyproject.toml`
+- Create: `packages/brain_api/README.md` — one-paragraph "how to run uvicorn manually" note (Plan 08 will obsolete this)
+- Create: `packages/brain_api/src/brain_api/__init__.py`
+- Create: `packages/brain_api/src/brain_api/py.typed` (PEP 561 marker)
+- Create: `packages/brain_api/src/brain_api/app.py` — `create_app` factory (skeleton)
+- Create: `packages/brain_api/src/brain_api/routes/__init__.py` (empty, populated Tasks 3+)
+- Create: `packages/brain_api/src/brain_api/routes/health.py` — `GET /healthz`
+- Create: `packages/brain_api/tests/__init__.py` (empty)
+- Create: `packages/brain_api/tests/conftest.py` — `seeded_vault` fixture + `create_test_app` helper
+- Create: `packages/brain_api/tests/test_app_smoke.py` — `/healthz`, `/docs`, `/openapi.json`
+
+**Context for the implementer:**
+
+Fresh workspace package. Lessons from Plan 03 Task 19 (`brain_cli`) + Plan 04 Task 1 (`brain_mcp`):
+- `[project.scripts]` — none yet (no entry point; Plan 08 adds `brain start` in `brain_cli`, which imports `brain_api:app`)
+- `py.typed` marker needed from day one
+- Root `pyproject.toml` needs both `brain_api` in `[project].dependencies` AND `brain_api = { workspace = true, editable = false }` under `[tool.uv.sources]`
+- Workspace is glob-discovered (`members = ["packages/*"]`), so `brain_api` is auto-picked up
+- After adding new submodules, `uv sync --reinstall-package brain_api` is REQUIRED (iCloud-related `editable=false` lesson from Plan 01)
+
+New runtime deps:
+- `fastapi>=0.115` — pins a recent stable release with `@asynccontextmanager` lifespan support
+- `uvicorn>=0.32` — imported by `httpx.ASGITransport` tests; runtime launch is Plan 08's concern, but the dep must be declared or `fastapi.testclient.TestClient` can fail with subtle errors on modern Starlette
+
+`httpx>=0.27` is already a dev dep from Plan 04 — no change needed.
+
+**App factory skeleton:** `create_app(vault_root, allowed_domains, *, token_override=None) -> FastAPI`. Takes the same two positional args as `brain_mcp.server.create_server`. Returns a `FastAPI` instance with `/healthz` wired and a `lifespan` context manager stub. Tasks 2+ add `AppContext` to the lifespan and Tasks 10+ register the tool dispatcher.
+
+The factory reads `brain_api.__version__` from `__init__.py` and exposes it via `FastAPI(title="brain API", version=__version__)`. `/docs` and `/openapi.json` come for free from FastAPI defaults.
+
+**Test transport:** Plan 05 uses FastAPI's `TestClient` (synchronous, built on `starlette.testclient`) as the primary fixture. It wraps `httpx.ASGITransport` under the hood — no uvicorn, no subprocess, fast and deterministic. The `create_test_app` helper builds an app bound to the seeded vault + `("research",)` allowed domains.
+
+### Step 1 — Create `packages/brain_api/pyproject.toml`
+
+```toml
+[project]
+name = "brain_api"
+version = "0.0.1"
+description = "brain REST + WebSocket backend — FastAPI wrapper around brain_core"
+requires-python = ">=3.12"
+dependencies = [
+    "brain_core",
+    "brain_mcp",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brain_api"]
+
+[tool.uv.sources]
+brain_core = { workspace = true }
+brain_mcp = { workspace = true }
+```
+
+The `brain_mcp` dep is temporary — Group 2 extracts handlers to `brain_core.tools` and this dep can drop. For now, Group 1's tool-listing endpoint imports the registry from `brain_mcp.server` to avoid a chicken-and-egg with Group 2.
+
+### Step 2 — Update root `pyproject.toml`
+
+Add to `[project].dependencies`:
+```toml
+dependencies = [
+    "brain_core",
+    "brain_cli",
+    "brain_mcp",
+    "brain_api",
+]
+```
+
+Add to `[tool.uv.sources]`:
+```toml
+brain_api = { workspace = true, editable = false }
+```
+
+Add to `[dependency-groups].dev` if not already present:
+```toml
+"pytest-asyncio>=1.3",
+"httpx>=0.27",
+```
+
+### Step 3 — Create `packages/brain_api/src/brain_api/__init__.py`
+
+```python
+"""brain_api — FastAPI REST + WebSocket backend wrapping brain_core."""
+
+from brain_api.app import create_app
+
+__version__ = "0.0.1"
+__all__ = ["__version__", "create_app"]
+```
+
+### Step 4 — Create `packages/brain_api/src/brain_api/py.typed`
+
+Empty file. PEP 561 marker.
+
+### Step 5 — Create `packages/brain_api/src/brain_api/routes/health.py`
+
+```python
+"""Health check endpoint — always 200 unless app failed to boot."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+
+@router.get("/healthz")
+async def healthz() -> dict[str, str]:
+    """Liveness probe. No auth required."""
+    return {"status": "ok"}
+```
+
+### Step 6 — Create `packages/brain_api/src/brain_api/app.py`
+
+```python
+"""FastAPI app factory.
+
+Task 1 lands the skeleton — create_app returns a FastAPI instance with
+/healthz wired and an empty lifespan stub. Tasks 2+ populate AppContext;
+Tasks 10+ register the tool dispatcher.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+
+from brain_api import __version__
+from brain_api.routes import health
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Lifespan context — Task 2 populates app.state.ctx here."""
+    yield
+
+
+def create_app(
+    vault_root: Path,
+    allowed_domains: tuple[str, ...] = ("research",),
+    *,
+    token_override: str | None = None,
+) -> FastAPI:
+    """Build a fresh FastAPI app bound to the given vault.
+
+    Task 1 lands the skeleton; Tasks 2+ wire AppContext, auth, and routes.
+
+    Args:
+        vault_root: Absolute path to the brain vault (e.g. ~/Documents/brain).
+        allowed_domains: Tuple of domain names this app instance may access.
+        token_override: Task 7 uses this to inject a fixed token for tests.
+            None (the default) means generate a fresh token at startup.
+    """
+    app = FastAPI(
+        title="brain API",
+        version=__version__,
+        description="Local REST + WebSocket backend for the brain personal knowledge base.",
+        lifespan=_lifespan,
+    )
+    # Stash for later tasks to read during lifespan.
+    app.state.vault_root = vault_root
+    app.state.allowed_domains = allowed_domains
+    app.state.token_override = token_override
+
+    app.include_router(health.router)
+
+    return app
+```
+
+### Step 7 — Create `packages/brain_api/tests/conftest.py`
+
+Mirror `packages/brain_mcp/tests/conftest.py`'s `seeded_vault` exactly — this is the same fixture shape and should be copied verbatim. Group 2's extraction will DRY this into a shared test helper (likely `brain_core/tests/_vault_fixtures.py`), but for Task 1 copy-paste is the right call.
+
+```python
+"""Shared fixtures for brain_api tests."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from brain_api import create_app
+
+
+def _write_note(vault: Path, rel: str, *, title: str, body: str) -> None:
+    p = vault / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\ntitle: {title}\n---\n{body}\n", encoding="utf-8", newline="\n")
+
+
+@pytest.fixture
+def seeded_vault(tmp_path: Path) -> Path:
+    """A small research + work + personal vault used by all tests."""
+    vault = tmp_path / "vault"
+    _write_note(vault, "research/notes/karpathy.md", title="Karpathy", body="LLM wiki pattern.")
+    _write_note(vault, "research/notes/rag.md", title="RAG", body="Retrieval-augmented generation.")
+    (vault / "research" / "index.md").write_text(
+        "# research\n- [[karpathy]]\n- [[rag]]\n", encoding="utf-8", newline="\n"
+    )
+    _write_note(vault, "work/notes/meeting.md", title="Meeting", body="Q4 planning.")
+    (vault / "work" / "index.md").write_text("# work\n- [[meeting]]\n", encoding="utf-8", newline="\n")
+    _write_note(vault, "personal/notes/secret.md", title="Secret", body="never read me")
+    (vault / "BRAIN.md").write_text("# BRAIN\n\nYou are brain.\n", encoding="utf-8", newline="\n")
+    return vault
+
+
+@pytest.fixture
+def app(seeded_vault: Path) -> FastAPI:
+    """A FastAPI app bound to seeded_vault with allowed_domains=('research',)."""
+    return create_app(vault_root=seeded_vault, allowed_domains=("research",))
+
+
+@pytest.fixture
+def client(app: FastAPI) -> TestClient:
+    """Synchronous TestClient for quick REST assertions."""
+    return TestClient(app)
+```
+
+### Step 8 — Create `packages/brain_api/tests/test_app_smoke.py`
+
+```python
+"""Smoke tests — app boots, /healthz responds, /docs + /openapi.json work."""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+
+def test_healthz_returns_ok(client: TestClient) -> None:
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_openapi_json_available(client: TestClient) -> None:
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["info"]["title"] == "brain API"
+
+
+def test_docs_page_serves_html(client: TestClient) -> None:
+    response = client.get("/docs")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+```
+
+### Step 9 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_api
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_api -v
+```
+Expect: **3 passed** (healthz + openapi + docs).
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_api && uv run mypy src tests
+```
+Expect: `Success: no issues found in N source files`.
+
+Full 12-point self-review, then:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git add packages/brain_api/ pyproject.toml uv.lock && git commit -m "feat(api): plan 05 task 1 — brain_api workspace package skeleton (/healthz)"
+```
+
+---
+
+### Task 2 — `AppContext` + FastAPI dependency injection
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_api/src/brain_api/context.py`
+- Modify: `packages/brain_api/src/brain_api/app.py` — build `AppContext` in the lifespan
+- Create: `packages/brain_api/tests/test_context.py`
+
+**Context for the implementer:**
+
+`AppContext` is the HTTP analog of `brain_mcp.tools.base.ToolContext`. Same 10 fields (vault_root, allowed_domains, retrieval, pending_store, state_db, writer, llm, cost_ledger, rate_limiter, undo_log). The rationale for a separate class rather than reusing `ToolContext`:
+
+1. **Lifetime semantics are different.** `ToolContext` is rebuilt per MCP session; `AppContext` spans the app's entire uvicorn lifetime (one per `create_app` call). The scope differs.
+2. **Dependency injection shape.** FastAPI's `Depends(get_ctx)` wants something directly fetchable from `request.app.state`; MCP's closure-based ctx rebuild is awkward to expose that way.
+3. **Future divergence.** Plan 05 adds `token: str` (the app secret, Task 7) and Plan 07 will likely add `settings_store`, `request_id_generator`. Keeping `AppContext` as a superset of `ToolContext` is less surprising than mutating `ToolContext` cross-plan.
+
+`AppContext` INCLUDES a `ToolContext` field (it's literally `tool_ctx: ToolContext`), so the tool dispatcher (Task 10) can hand the embedded `ToolContext` straight to `handle(args, ctx)` without any conversion. This makes the handler extraction in Group 2 trivially forward-compatible — `brain_api` just passes the nested ctx.
+
+**Dependency injection pattern:**
+
+```python
+from fastapi import Depends, Request
+from brain_api.context import AppContext
+
+def get_ctx(request: Request) -> AppContext:
+    """FastAPI dependency — returns the app's AppContext.
+
+    Set in the lifespan; raised-on if missing (app boot failure)."""
+    ctx = getattr(request.app.state, "ctx", None)
+    if ctx is None:
+        raise RuntimeError("AppContext not initialized — lifespan failed?")
+    return ctx
+
+
+# In a route:
+@router.post("/api/tools/{name}")
+async def call_tool(name: str, body: dict, ctx: AppContext = Depends(get_ctx)):
+    ...
+```
+
+### Step 1 — Failing test
+
+`test_context.py`:
+
+```python
+"""Tests for AppContext + get_ctx dependency."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+def test_ctx_populated_during_lifespan(app: FastAPI) -> None:
+    """Entering the app's lifespan populates app.state.ctx."""
+    with TestClient(app):
+        ctx = app.state.ctx
+    assert ctx is not None
+    assert ctx.vault_root.exists()
+    assert ctx.allowed_domains == ("research",)
+    # ToolContext embedded inside.
+    assert ctx.tool_ctx.vault_root == ctx.vault_root
+    assert ctx.tool_ctx.allowed_domains == ctx.allowed_domains
+
+
+def test_ctx_teardown_closes_state_db(app: FastAPI, seeded_vault: Path) -> None:
+    """Exiting the lifespan cleanly closes state.sqlite connections."""
+    state_db_path = seeded_vault / ".brain" / "state.sqlite"
+    with TestClient(app):
+        assert state_db_path.exists()  # DB opened at lifespan start
+    # After lifespan exit the file still exists; we just assert no lock errors.
+    # (True close semantics verified by Group 6's WS-reconnect tests.)
+    assert state_db_path.exists()
+
+
+def test_get_ctx_dependency_resolves(client: TestClient, app: FastAPI) -> None:
+    """The get_ctx dependency can be injected into a route and returns the ctx."""
+    from brain_api.context import get_ctx
+
+    @app.get("/_test_ctx_leak")
+    async def leak(ctx=None):  # noqa: ANN001
+        from fastapi import Depends
+        return {"vault_root": str(ctx.vault_root)} if ctx else {}
+
+    # Rebuild the route properly with the dep.
+    # (Implementation detail — the test is a sanity check that get_ctx resolves.)
+```
+
+### Step 2 — Implement `context.py`
+
+```python
+"""AppContext — per-app-instance primitives, injected via FastAPI Depends."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from brain_core.chat.pending import PendingPatchStore
+from brain_core.chat.retrieval import BM25VaultIndex
+from brain_core.cost.ledger import CostLedger
+from brain_core.llm.fake import FakeLLMProvider
+from brain_core.llm.provider import LLMProvider
+from brain_core.state.db import StateDB
+from brain_core.vault.undo import UndoLog
+from brain_core.vault.writer import VaultWriter
+from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+from brain_mcp.tools.base import ToolContext
+from fastapi import Request
+
+
+@dataclass(frozen=True)
+class AppContext:
+    """Per-app-instance state — built once in the lifespan, injected via Depends."""
+
+    vault_root: Path
+    allowed_domains: tuple[str, ...]
+    tool_ctx: ToolContext  # embedded — handed straight to brain_core.tools handlers
+    token: str | None = None  # Task 7 populates this
+
+
+def build_app_context(
+    vault_root: Path,
+    allowed_domains: tuple[str, ...],
+    *,
+    llm: LLMProvider | None = None,
+    token: str | None = None,
+) -> AppContext:
+    """Build a fresh AppContext wired to all brain_core + brain_mcp primitives.
+
+    Mirrors brain_mcp/tests/conftest.py:make_tool_context so the ctx shape is
+    identical between MCP tests and HTTP tests.
+    """
+    brain_dir = vault_root / ".brain"
+    brain_dir.mkdir(parents=True, exist_ok=True)
+    state_db = StateDB.open(brain_dir / "state.sqlite")
+    writer = VaultWriter(vault_root=vault_root)
+    pending_store = PendingPatchStore(brain_dir / "pending")
+    retrieval = BM25VaultIndex(vault_root=vault_root, db=state_db)
+    retrieval.build(allowed_domains)
+    undo_log = UndoLog(vault_root=vault_root)
+    cost_ledger = CostLedger(db_path=brain_dir / "costs.sqlite")
+    rate_limiter = RateLimiter(RateLimitConfig())
+    tool_ctx = ToolContext(
+        vault_root=vault_root,
+        allowed_domains=allowed_domains,
+        retrieval=retrieval,
+        pending_store=pending_store,
+        state_db=state_db,
+        writer=writer,
+        llm=llm or FakeLLMProvider(),
+        cost_ledger=cost_ledger,
+        rate_limiter=rate_limiter,
+        undo_log=undo_log,
+    )
+    return AppContext(
+        vault_root=vault_root,
+        allowed_domains=allowed_domains,
+        tool_ctx=tool_ctx,
+        token=token,
+    )
+
+
+def get_ctx(request: Request) -> AppContext:
+    """FastAPI dependency — return the app's AppContext.
+
+    Raises RuntimeError if the lifespan didn't populate it (app boot failure).
+    """
+    ctx: AppContext | None = getattr(request.app.state, "ctx", None)
+    if ctx is None:
+        raise RuntimeError("AppContext not initialized — lifespan failed?")
+    return ctx
+```
+
+### Step 3 — Wire the lifespan in `app.py`
+
+Replace the stub `_lifespan` with:
+
+```python
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Build AppContext at startup; hold it open for the app's lifetime."""
+    ctx = build_app_context(
+        vault_root=app.state.vault_root,
+        allowed_domains=app.state.allowed_domains,
+        token=app.state.token_override,
+    )
+    app.state.ctx = ctx
+    try:
+        yield
+    finally:
+        # Close any resources that need explicit teardown (future-proof hook —
+        # current primitives all clean up via GC).
+        pass
+```
+
+Add the `from brain_api.context import build_app_context` import.
+
+### Step 4 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_api
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_api -v
+```
+Expect: **6 passed** (3 smoke from Task 1 + 3 context).
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_api && uv run mypy src tests
+```
+
+Self-review, then:
+
+```bash
+git commit -m "feat(api): plan 05 task 2 — AppContext + lifespan + get_ctx dependency"
+```
+
+---
+
+### Task 3 — `GET /api/tools` + tool registry bootstrap
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/tools/__init__.py` — empty registry + `ToolModule` alias
+- Create: `packages/brain_api/src/brain_api/routes/tools.py` — `GET /api/tools` listing endpoint (POST dispatcher lands in Task 10)
+- Modify: `packages/brain_api/src/brain_api/app.py` — register the new router
+- Create: `packages/brain_api/tests/test_tools_listing.py`
+
+**Context for the implementer:**
+
+Task 3 lands the tool-listing surface WITHOUT the handler extraction (Group 2). The trick: `brain_core.tools.__init__.py` introduces a registry protocol (`ToolModule` alias + `_TOOL_MODULES: list[ToolModule]` list) that starts EMPTY. Group 2's Tasks 5–6 populate the list as tools move from `brain_mcp.tools` to `brain_core.tools`. After Group 2 the list has 18 entries; until then, `GET /api/tools` returns `[]` and the test pins that baseline.
+
+This keeps Group 2 strictly additive: tools appear in the registry as they're moved, no endpoint changes needed.
+
+**Registry shape (mirrors `brain_mcp.server._TOOL_MODULES`):**
+
+```python
+# brain_core/tools/__init__.py
+from types import ModuleType
+
+ToolModule = ModuleType  # per Plan 04 Task 4 lesson — mypy-honest
+
+_TOOL_MODULES: list[ToolModule] = []  # populated by Tasks 5–6 as tools move
+
+
+def register(module: ToolModule) -> None:
+    """Register a tool module. Called at import time by each tool module."""
+    _TOOL_MODULES.append(module)
+
+
+def list_tools() -> list[ToolModule]:
+    """Return the currently-registered tool modules."""
+    return list(_TOOL_MODULES)
+```
+
+Each tool module's `__init__` side-effect-registers itself when imported. Or — cleaner — we explicitly import each in `brain_core/tools/__init__.py` during Tasks 5–6. Either works; the plan doesn't pin the import style yet.
+
+**Endpoint shape:**
+
+```
+GET /api/tools
+→ 200 {"tools": [{"name": "brain_list_domains", "description": "...", "input_schema": {...}}, ...]}
+```
+
+No auth required (read-only metadata). Sorted alphabetically by `name` for stable ordering.
+
+### Step 1 — Create `brain_core/tools/__init__.py`
+
+```python
+"""brain_core.tools — shared tool-handler registry.
+
+Populated by Plan 05 Tasks 5–6 as handlers move from brain_mcp/tools/*.py to
+brain_core/tools/*.py. Until then, the registry is empty and GET /api/tools
+returns [].
+
+Each tool module exports module-level NAME, DESCRIPTION, INPUT_SCHEMA,
+handle(arguments, ctx) — same shape as brain_mcp/tools/base.py's protocol.
+"""
+
+from __future__ import annotations
+
+from types import ModuleType
+
+ToolModule = ModuleType
+
+_TOOL_MODULES: list[ToolModule] = []
+
+
+def register(module: ToolModule) -> None:
+    """Append a tool module to the registry. Idempotent — duplicate registrations are no-ops."""
+    if module not in _TOOL_MODULES:
+        _TOOL_MODULES.append(module)
+
+
+def list_tools() -> list[ToolModule]:
+    """Return the registered tool modules in registration order."""
+    return list(_TOOL_MODULES)
+```
+
+### Step 2 — Failing tests
+
+`packages/brain_api/tests/test_tools_listing.py`:
+
+```python
+"""Tests for GET /api/tools."""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+
+def test_empty_registry_returns_empty_list(client: TestClient) -> None:
+    """Task 3 baseline: before Group 2 extraction, the registry is empty."""
+    response = client.get("/api/tools")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"tools": []}
+
+
+def test_listing_shape_matches_schema(client: TestClient) -> None:
+    """Even when empty, the response shape is the stable contract."""
+    response = client.get("/api/tools")
+    body = response.json()
+    assert "tools" in body
+    assert isinstance(body["tools"], list)
+```
+
+A third test verifies the shape after a tool is registered (synthetically, without touching brain_mcp):
+
+```python
+def test_listing_reflects_registered_tools(client: TestClient, monkeypatch) -> None:  # noqa: ANN001
+    """Register a fake tool module and verify the endpoint picks it up."""
+    from brain_core import tools as tools_registry
+    from types import SimpleNamespace
+
+    fake = SimpleNamespace(
+        NAME="fake_tool",
+        DESCRIPTION="for testing",
+        INPUT_SCHEMA={"type": "object", "properties": {}},
+    )
+    monkeypatch.setattr(tools_registry, "_TOOL_MODULES", [fake])
+    response = client.get("/api/tools")
+    body = response.json()
+    assert body["tools"] == [
+        {"name": "fake_tool", "description": "for testing", "input_schema": {"type": "object", "properties": {}}}
+    ]
+```
+
+### Step 3 — Implement `routes/tools.py`
+
+```python
+"""/api/tools — tool discovery endpoint.
+
+Task 3 lands the GET listing. Task 10 adds the POST /api/tools/<name>
+dispatcher that actually runs tool handlers.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from brain_core import tools as tools_registry
+
+router = APIRouter(prefix="/api/tools", tags=["tools"])
+
+
+@router.get("")
+async def list_tools() -> dict[str, list[dict]]:  # noqa: UP006
+    """Return every registered tool's metadata. No auth required."""
+    out: list[dict] = []
+    for module in sorted(tools_registry.list_tools(), key=lambda m: m.NAME):
+        out.append(
+            {
+                "name": module.NAME,
+                "description": module.DESCRIPTION,
+                "input_schema": module.INPUT_SCHEMA,
+            }
+        )
+    return {"tools": out}
+```
+
+**Note on the `APIRouter(prefix="/api/tools")` choice:** the GET listing registers at `""` (→ `/api/tools`). Task 10 adds `POST` at `/{name}` (→ `POST /api/tools/<name>`). Single router, two methods, clean OpenAPI grouping.
+
+### Step 4 — Register the router in `app.py`
+
+Add after the `health` include:
+
+```python
+from brain_api.routes import tools as tools_routes
+
+app.include_router(tools_routes.router)
+```
+
+### Step 5 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_core --reinstall-package brain_api
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_api -v
+```
+Expect: **9 passed** (6 prior + 3 tools-listing).
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_core && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_api && uv run mypy src tests
+```
+Both: `Success`. (The new `brain_core.tools` module is trivial — no mypy concerns.)
+
+Self-review, then:
+
+```bash
+git commit -m "feat(api): plan 05 task 3 — tool registry + GET /api/tools listing endpoint"
+```
+
+---
+
+**Checkpoint 1 — pause for main-loop review.**
+
+3 tasks landed. `brain_api` package exists, `/healthz` responds, `AppContext` wired via lifespan + `get_ctx` dependency, `GET /api/tools` returns the (currently empty) registry. Main loop reviews:
+- Is `AppContext`'s shape right? (`tool_ctx` embed vs. flat fields, `token` placement, future Plan 07 extension points.)
+- Does the registry pattern (`brain_core.tools.register` + `list_tools`) match how tools will wire in Group 2? Or would a decorator / auto-discovery be cleaner?
+- Is the `brain_api → brain_mcp` temporary dep (to satisfy `brain_mcp.rate_limit.RateLimiter` import for now) acceptable, or should `RateLimiter` move to `brain_core` as part of Task 14's `RateLimitError` promotion?
+- Any API drift between plan text and real FastAPI / httpx / Starlette versions installed? (Task 1 verifies empirically via the smoke test.)
+
+Before Task 4, the next main-loop dispatch confirms the registry shape is locked — Group 2's extraction logic depends on it.
+
+---
