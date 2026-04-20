@@ -193,6 +193,46 @@ def require_token(
         )
 
 
+def enforce_json_accept(request: Request) -> None:
+    """FastAPI dependency — reject ``Accept`` headers that exclude ``application/json``.
+
+    Attach to write endpoints with ``dependencies=[Depends(enforce_json_accept), ...]``
+    BEFORE :func:`require_token` so callers get a tighter error code (406 vs 403)
+    when the real bug is content negotiation rather than auth.
+
+    Acceptance policy:
+
+    - Missing ``Accept`` (curl default): **allowed** — treated as ``*/*``.
+    - ``*/*`` or ``application/*`` wildcards: **allowed**.
+    - ``application/json`` (optionally alongside other types): **allowed**.
+    - Anything else (``text/html``, ``application/xml``, ...): **rejected** with 406.
+
+    The check uses a simple ``in`` test rather than an RFC 7231 Accept parser:
+    we only need to reject explicitly narrow clients, not do weighted negotiation.
+    Missing Accept is treated as ``*/*`` per RFC 7231 §5.3.2 and per every HTTP
+    client's default behavior.
+
+    Note: the 406 body is currently ``{"detail": {"error": ..., "message": ...}}``
+    because FastAPI wraps :class:`HTTPException` ``detail`` under a top-level
+    ``detail`` key. Plan 05 Task 15 flattens this via a project-wide exception
+    handler / ``ApiError`` so the envelope matches ``{"error", "message"}``
+    everywhere.
+    """
+    accept = request.headers.get("accept", "")
+    if not accept:
+        return
+    accept_lc = accept.lower()
+    if "application/json" in accept_lc or "*/*" in accept_lc or "application/*" in accept_lc:
+        return
+    raise HTTPException(
+        status_code=406,
+        detail={
+            "error": "not_acceptable",
+            "message": "this API speaks only application/json",
+        },
+    )
+
+
 async def check_ws_token(websocket: WebSocket, ctx: AppContext) -> bool:
     """Validate the ``?token=<hex>`` query param on a WebSocket handshake.
 

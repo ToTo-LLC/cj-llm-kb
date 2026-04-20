@@ -14,8 +14,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import ValidationError
 from starlette.requests import Request
 
-from brain_api.auth import require_token
+from brain_api.auth import enforce_json_accept, require_token
 from brain_api.context import AppContext, get_ctx
+from brain_api.responses import ErrorResponse, ToolResponse
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -41,12 +42,17 @@ async def list_tools() -> dict[str, list[dict[str, Any]]]:
 
 @router.post(
     "/{name}",
-    dependencies=[Depends(require_token)],
+    response_model=ToolResponse,
+    dependencies=[Depends(enforce_json_accept), Depends(require_token)],
     summary="Call a brain tool by name.",
     responses={
-        400: {"description": "Request body does not match tool INPUT_SCHEMA"},
-        404: {"description": "Tool not registered"},
-        403: {"description": "Missing or invalid X-Brain-Token"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Request body does not match tool INPUT_SCHEMA",
+        },
+        403: {"model": ErrorResponse, "description": "Missing or invalid X-Brain-Token"},
+        404: {"model": ErrorResponse, "description": "Tool not registered"},
+        406: {"model": ErrorResponse, "description": "Accept header excludes application/json"},
     },
 )
 async def call_tool(
@@ -54,7 +60,7 @@ async def call_tool(
     request: Request,
     body: dict[str, Any] = Body(default_factory=dict),  # noqa: B008 — FastAPI-idiomatic Body default
     ctx: AppContext = Depends(get_ctx),  # noqa: B008 — FastAPI resolves Depends lazily per request
-) -> dict[str, Any]:
+) -> ToolResponse:
     """Dispatch to ``brain_core.tools.<name>.handle(body, ctx.tool_ctx)``.
 
     Task 11 validates the request body against the tool's ``INPUT_SCHEMA``
@@ -64,6 +70,15 @@ async def call_tool(
     ``errors()`` list. Handlers receive the validated, None-stripped dict —
     identical in shape to what they received from Task 10's bare passthrough
     for any request that would have succeeded before.
+
+    Task 12 pins the response envelope as :class:`ToolResponse` so FastAPI
+    serializes handler output against a typed schema (extra keys dropped at
+    the wire) and the ``/docs`` page advertises a concrete 200 body rather
+    than a generic ``object``. The same task adds content-negotiation via
+    ``enforce_json_accept`` — clients that send ``Accept: text/html`` or
+    similar get a 406 *before* the tool is even looked up. The dependency
+    order matters: ``enforce_json_accept`` runs first so a wrong Accept
+    short-circuits to 406, a clearer signal than 403 for a client-side bug.
 
     The handler receives ``ctx.tool_ctx`` (the embedded ``ToolContext``), not
     the full ``AppContext`` — tool handlers know nothing about HTTP / FastAPI.
@@ -106,4 +121,4 @@ async def call_tool(
         validated.model_dump(exclude_none=True),
         ctx.tool_ctx,
     )
-    return {"text": result.text, "data": result.data}
+    return ToolResponse(text=result.text, data=result.data)

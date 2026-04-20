@@ -133,3 +133,83 @@ def test_wrong_type_returns_400(app: FastAPI) -> None:
     assert response.status_code == 400
     body = response.json()
     assert body["detail"]["error"] == "invalid_input"
+
+
+def test_response_shape_is_envelope(app: FastAPI) -> None:
+    """Task 12: successful response is exactly ``{"text", "data"}`` — no extras.
+
+    FastAPI serializes against ``response_model=ToolResponse``, so any keys the
+    handler returns beyond ``text`` / ``data`` are dropped. Pin the contract
+    so future additions (e.g. rate-limit hints) can't silently leak through.
+    """
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+                "Accept": "application/json",
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"text", "data"}
+    assert isinstance(body["text"], str)
+
+
+def test_nonjson_accept_rejected(app: FastAPI) -> None:
+    """Task 12: ``Accept: text/html`` → 406, dispatcher never runs.
+
+    ``enforce_json_accept`` runs BEFORE ``require_token`` so clients get a
+    useful content-negotiation error even when the token is present — the
+    tighter error code helps callers debug faster.
+    """
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+                "Accept": "text/html",
+            },
+        )
+    assert response.status_code == 406
+
+
+def test_wildcard_accept_allowed(app: FastAPI) -> None:
+    """Task 12: ``Accept: */*`` is the browser default — must pass."""
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+                "Accept": "*/*",
+            },
+        )
+    assert response.status_code == 200
+
+
+def test_missing_accept_allowed(app: FastAPI) -> None:
+    """Task 12: clients without Accept (curl default) are accepted.
+
+    A missing Accept header is conventionally treated as ``*/*``; refusing
+    would break every curl invocation that doesn't explicitly opt in.
+    """
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = app.state.ctx.token
+        response = fresh.post(
+            "/api/tools/brain_list_domains",
+            json={},
+            headers={
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            },
+        )
+    assert response.status_code == 200
