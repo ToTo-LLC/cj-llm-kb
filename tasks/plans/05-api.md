@@ -5613,3 +5613,589 @@ Main loop reviews:
 Before Task 22, main loop confirms the chat surface is locked — Group 7's contract tests use the Plan-04-style deferred-cassette pattern and don't exercise WS event content beyond shape assertions.
 
 ---
+
+### Group 7 — Contract + cross-platform + demo + close (Tasks 22–25)
+
+**Checkpoint after Task 25:** plan close, tag `plan-05-api`, push. Demo artifact captured.
+
+---
+
+### Task 22 — VCR contract test infrastructure
+
+**Owning subagent:** brain-prompt-engineer
+
+**Files:**
+- Create: `packages/brain_api/tests/prompts/__init__.py` (empty)
+- Create: `packages/brain_api/tests/prompts/conftest.py` — copy of Plan 02/04's VCR config
+- Create: `packages/brain_api/tests/prompts/cassettes/.gitkeep`
+- Create: `packages/brain_api/tests/prompts/test_chat_ask_contract.py` (skipped by default)
+- Create: `packages/brain_api/tests/prompts/test_chat_brainstorm_contract.py` (skipped by default)
+- Create: `packages/brain_api/tests/prompts/test_chat_draft_contract.py` (skipped by default)
+- Modify: `docs/testing/prompts-vcr.md` — append Plan 05 chat section
+
+**Context for the implementer:**
+
+Mirrors Plan 02/03/04's D9a deferral pattern. Three skipped contract tests — one per chat mode (Ask / Brainstorm / Draft) — that exercise the full WS chat surface end-to-end against a real Anthropic API. Cassettes deferred per D9a; the test skeletons register the surface so a future implementer with an `ANTHROPIC_API_KEY` can record-and-assert in one sitting.
+
+Tool-level contract tests (for `brain_ingest`, `brain_classify`, `brain_bulk_import`) already exist in `packages/brain_mcp/tests/prompts/` from Plan 04 Task 22. After Plan 05's Task 5/6 handler extraction, those tests still cover the core handlers correctly — no duplication needed in brain_api.
+
+**Three test skeletons:**
+
+```python
+# packages/brain_api/tests/prompts/test_chat_ask_contract.py
+"""Real-API contract test for Ask-mode chat turn. Deferred per Plan 05 D9a.
+
+When cassettes exist, removes the skipif and runs against the recorded
+responses. To record:
+    ANTHROPIC_API_KEY=sk-... RUN_LIVE_LLM_TESTS=1 uv run pytest -k chat_ask_contract
+"""
+
+from __future__ import annotations
+
+import pytest
+
+
+@pytest.mark.skipif(
+    True,
+    reason="Plan 05 D9a deferral — chat Ask-mode cassette not yet recorded",
+)
+@pytest.mark.vcr
+@pytest.mark.asyncio
+async def test_chat_ask_real_api_produces_citation_bearing_delta_stream() -> None:
+    """Placeholder for real-API contract test.
+
+    Will assert: given a seeded vault and an Ask-mode prompt that requires
+    search, the WS stream emits exactly (in order) a tool_call(brain_search),
+    a tool_result, then delta chunks, then a cost_update, then a turn_end.
+    Assistant text cites at least one wikilink from the vault.
+    """
+    raise NotImplementedError("chat Ask-mode contract test not yet recorded")
+```
+
+Mirror for `test_chat_brainstorm_contract.py` (asserts a `patch_proposed` event fires from `propose_note`) and `test_chat_draft_contract.py` (asserts `edit_open_doc`-driven diffs stream as `delta`s).
+
+**Docs update** (`docs/testing/prompts-vcr.md`): append a "## Plan 05 — API chat cassettes" section mirroring the Plan 04 MCP section, with the recording recipe + two-step un-skip procedure + note that chat cassettes are NOT a merge gate.
+
+### Step 1 — Copy the VCR conftest
+
+Reuse Plan 02/04's pattern verbatim — filter headers `authorization`, `x-api-key`, `anthropic-api-key`; record mode `new_episodes` only when `RUN_LIVE_LLM_TESTS=1`; otherwise `none` (offline replay).
+
+### Step 2 — Three test skeletons
+
+Each test:
+1. Has `@pytest.mark.skipif(True, reason="Plan 05 D9a deferral — ...")` — skip loud if someone removes the marker without recording
+2. Has `@pytest.mark.vcr` — cassette attached on record
+3. Has `@pytest.mark.asyncio` — WS tests are async
+4. Body: `raise NotImplementedError(...)` so accidental skipif removal fails loud
+
+### Step 3 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_api
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_api/tests/prompts -v
+```
+
+Expect: **3 skipped** (no other tests in the prompts/ subdir).
+
+Full suite:
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_cli packages/brain_mcp packages/brain_api -q
+```
+
+Expect: **~630 passed + 11 skipped** (prior 8 + 3 new chat deferrals).
+
+```bash
+git commit -m "test(api): plan 05 task 22 — VCR contract test infra + 3 deferred chat cassettes (D9a)"
+```
+
+---
+
+### Task 23 — Cross-platform sweep
+
+**Owning subagent:** brain-test-engineer
+
+**Files:** findings-dependent; expected 0–2 findings
+
+**Context for the implementer:**
+
+Walk every new Plan 05 module + the `brain_core.tools.*` + `brain_core.rate_limit` moves. Apply the Plan 04 Task 23 checklist + WS-specific concerns. Expected findings: **0–2** — Plan 05 is mostly new FastAPI code where cross-platform risk is limited to the auth token file and WS stream handling.
+
+**Nine-point checklist:**
+
+1. **Paths:** no hardcoded `/` or `\`, `pathlib` throughout `brain_api`, `brain_core.tools`, `brain_core.rate_limit`.
+2. **Token file perms:** POSIX uses `os.open(..., 0o600)`; Windows uses `os.chmod(path, 0o600)` best-effort with a TODO comment. Verify the Windows code path doesn't raise on any likely error.
+3. **Atomic writes:** the token file uses `os.replace` or POSIX `O_CREAT | O_TRUNC`-style atomicity. Concurrent `create_app` calls don't race. (Unlikely to happen in practice but verify.)
+4. **Line endings:** every `write_text` in `brain_api` uses `newline="\n"` explicitly. Grep:
+   ```bash
+   grep -rn "\.write_text(" packages/brain_api/src packages/brain_core/src/brain_core/tools packages/brain_core/src/brain_core/rate_limit.py | grep -v 'newline="\\\\n"'
+   ```
+5. **WS ordering:** does `TestClient.websocket_connect` work consistently on both Mac and Windows? Starlette's test client uses `anyio` under the hood — should be cross-platform. Verify by reading Starlette's changelog for any Windows-specific known issues in the pinned version.
+6. **Subprocess:** no `subprocess.Popen(..., shell=True)` anywhere. Verify:
+   ```bash
+   grep -rn "shell=True" packages/brain_api
+   ```
+7. **Windows reserved filenames:** `thread_id` regex (`^[a-z0-9-]{1,64}$`) prevents `con`, `prn`, `aux` reserved names from reaching the filesystem via chat thread files. Verify the regex + thread file path are compatible.
+8. **iCloud ghost files:**
+   ```bash
+   find /Users/chrisjohnson/Code/cj-llm-kb/.venv -name "* [0-9].py" | wc -l
+   ```
+9. **`secrets.compare_digest` cross-platform:** the stdlib `secrets` module behaves identically on Mac + Windows + Linux. No concern.
+
+**Additional WS-specific:**
+- **asyncio event loop policy:** on Windows, asyncio defaults to `ProactorEventLoop` which supports WebSockets. Starlette uses `anyio` which abstracts the policy. No change needed.
+- **WS close codes:** 1000 (clean), 1008 (policy), 1011 (server error). All are standard RFC 6455 codes — cross-platform.
+
+**Workflow:**
+1. Walk the checklist, collect findings
+2. For each finding: failing regression test → fix → test passes → commit
+3. If zero findings: single empty-commit with sweep receipt
+
+```bash
+# with fixes
+git commit -m "fix(plan-05): task 23 — <specific finding>"
+
+# or empty
+git commit --allow-empty -m "chore(plan-05): task 23 cross-platform sweep — no findings"
+```
+
+### Expected commits
+
+Plan 04's Task 23 found 1 finding (`/bin/sh` test hardcode). Plan 05's newly-authored code is smaller in cross-platform surface (tool handlers already cleared by Plan 04's sweep; only `brain_api` + `brain_core.rate_limit` + the chat WS code are new). Realistic expectation: **0 or 1 finding**.
+
+---
+
+### Task 24 — `scripts/demo-plan-05.py`
+
+**Owning subagent:** brain-api-engineer
+
+**Files:**
+- Create: `scripts/demo-plan-05.py`
+
+**Context for the implementer:**
+
+The demo script is the plan's proof artifact. Drives the full Plan 05 surface against `FakeLLMProvider` in a temp vault, uses `httpx.ASGITransport` for in-process REST + `httpx.AsyncClient` with the `websockets` test pattern for WS (Starlette's TestClient is sync — fine for WS but awkward for an async demo; use `httpx` throughout for consistency). Asserts all 14 demo gates. On success prints `PLAN 05 DEMO OK` + exits 0.
+
+### 14 gates
+
+| # | Gate | Assertion |
+|---|---|---|
+| 1 | `/healthz` live | `200 {"status": "ok"}` |
+| 2 | `GET /api/tools` lists 18 tools | `len(tools) == 18` + every NAME string matches `brain_*` |
+| 3 | `POST brain_list_domains` with valid token | `200`, `data.domains` contains `"research"` |
+| 4 | Same without `X-Brain-Token` | `403` with `error == "refused"` |
+| 5 | Same with `Origin: https://evil.example` | `403` with `error == "refused"` |
+| 6 | `POST brain_search` | `200`, `data.hits` non-empty, every hit's `path` starts with `research/` (scope held) |
+| 7 | `POST brain_read_note` | `200`, `data.body` non-empty |
+| 8 | `POST brain_propose_note` | `200`, `data.patch_id` present, target file NOT on disk |
+| 9 | `POST brain_apply_patch` | `200`, `data.status == "applied"`, `data.undo_id` present, target file IS on disk |
+| 10 | `POST brain_read_note` on `personal/notes/secret.md` | `403` with `error == "scope"` |
+| 11 | `POST brain_ingest` with drained rate limiter | `429`, `Retry-After` header + `detail.bucket == "patches"` |
+| 12 | WS handshake | `schema_version == "1"` first frame, `thread_loaded` second |
+| 13 | WS turn round-trip | `turn_start` → ≥1 `delta` → `turn_end` in order |
+| 14 | WS reconnect | same `thread_id` on second connection → `thread_loaded.turn_count >= 1` |
+
+### Demo shape
+
+```python
+"""Plan 05 end-to-end demo.
+
+Spins up brain_api in-process via httpx.ASGITransport, exercises REST via
+httpx.AsyncClient + WS via the httpx_ws library (or starlette TestClient for
+sync WS). Asserts 14 gates. Prints PLAN 05 DEMO OK on success.
+
+All LLM calls go through FakeLLMProvider — no network, no API key required.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+from brain_api import create_app
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
+
+import httpx
+
+
+def _check(cond: bool, msg: str) -> None:
+    if not cond:
+        print(f"FAIL: {msg}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"  OK  {msg}")
+
+
+def _scaffold_vault(root: Path) -> None:
+    """Seed the same shape as brain_api/tests/conftest.py seeded_vault."""
+    (root / "research" / "notes").mkdir(parents=True)
+    (root / "personal" / "notes").mkdir(parents=True)
+    (root / "research" / "notes" / "karpathy.md").write_text(
+        "---\ntitle: Karpathy\n---\nLLM wiki pattern.\n",
+        encoding="utf-8", newline="\n",
+    )
+    (root / "research" / "notes" / "rag.md").write_text(
+        "---\ntitle: RAG\n---\nRetrieval-augmented generation.\n",
+        encoding="utf-8", newline="\n",
+    )
+    (root / "research" / "index.md").write_text(
+        "# research\n- [[karpathy]]\n- [[rag]]\n",
+        encoding="utf-8", newline="\n",
+    )
+    (root / "personal" / "notes" / "secret.md").write_text(
+        "---\ntitle: Secret\n---\nnever read me\n",
+        encoding="utf-8", newline="\n",
+    )
+    (root / "BRAIN.md").write_text("# BRAIN\n\nYou are brain.\n", encoding="utf-8", newline="\n")
+
+
+async def _run_demo() -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        vault = Path(tmp) / "vault"
+        _scaffold_vault(vault)
+
+        app = create_app(vault_root=vault, allowed_domains=("research",))
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost:4317") as c:
+            # Kick the lifespan (httpx.ASGITransport doesn't auto-run lifespan; use starlette context).
+            async with c:
+                pass  # with c: is the run; extract ctx AFTER:
+
+            # NOTE: the actual lifespan-run pattern uses asgi-lifespan or starlette
+            # TestClient. If httpx.ASGITransport skips lifespan, use:
+            #     from asgi_lifespan import LifespanManager
+            #     async with LifespanManager(app): ...
+            # Verify empirically — if the token file isn't generated, lifespan didn't run.
+
+            # Gate 1
+            print("[gate 1] /healthz")
+            r = await c.get("/healthz")
+            _check(r.status_code == 200 and r.json() == {"status": "ok"}, "/healthz → 200 ok")
+
+            token = app.state.ctx.token
+
+            # Gate 2
+            print("[gate 2] GET /api/tools")
+            r = await c.get("/api/tools")
+            tools = r.json()["tools"]
+            names = {t["name"] for t in tools}
+            _check(len(tools) == 18, f"18 tools listed (got {len(tools)})")
+            _check(all(n.startswith("brain_") for n in names), "all tool names start with brain_")
+
+            headers_ok = {
+                "Origin": "http://localhost:4317",
+                "X-Brain-Token": token,
+            }
+
+            # Gate 3
+            print("[gate 3] POST /api/tools/brain_list_domains (token + origin OK)")
+            r = await c.post("/api/tools/brain_list_domains", json={}, headers=headers_ok)
+            _check(r.status_code == 200, f"200 (got {r.status_code})")
+            _check("research" in r.json()["data"]["domains"], "research listed")
+
+            # Gate 4
+            print("[gate 4] POST without token → 403")
+            r = await c.post(
+                "/api/tools/brain_list_domains",
+                json={},
+                headers={"Origin": "http://localhost:4317"},
+            )
+            _check(r.status_code == 403, f"403 (got {r.status_code})")
+            _check(r.json()["error"] == "refused", "error=refused")
+
+            # Gate 5
+            print("[gate 5] POST with evil origin → 403")
+            r = await c.post(
+                "/api/tools/brain_list_domains",
+                json={},
+                headers={"Origin": "https://evil.example", "X-Brain-Token": token},
+            )
+            _check(r.status_code == 403, f"403 (got {r.status_code})")
+
+            # Gate 6
+            print("[gate 6] brain_search")
+            r = await c.post(
+                "/api/tools/brain_search", json={"query": "karpathy"}, headers=headers_ok,
+            )
+            hits = r.json()["data"]["hits"]
+            _check(len(hits) > 0, f"non-empty hits (got {len(hits)})")
+            _check(all(h["path"].startswith("research/") for h in hits), "scope held")
+
+            # Gate 7
+            print("[gate 7] brain_read_note")
+            r = await c.post(
+                "/api/tools/brain_read_note",
+                json={"path": "research/notes/karpathy.md"},
+                headers=headers_ok,
+            )
+            _check("LLM wiki pattern" in r.json()["data"]["body"], "body content returned")
+
+            # Gate 8
+            print("[gate 8] brain_propose_note stages patch")
+            r = await c.post(
+                "/api/tools/brain_propose_note",
+                json={"path": "research/notes/demo.md", "content": "# demo\n\nbody", "reason": "demo"},
+                headers=headers_ok,
+            )
+            patch_id = r.json()["data"]["patch_id"]
+            _check(patch_id, "patch_id returned")
+            _check(not (vault / "research" / "notes" / "demo.md").exists(), "not on disk yet")
+
+            # Gate 9
+            print("[gate 9] brain_apply_patch")
+            r = await c.post(
+                "/api/tools/brain_apply_patch",
+                json={"patch_id": patch_id},
+                headers=headers_ok,
+            )
+            _check(r.json()["data"]["status"] == "applied", "status=applied")
+            _check((vault / "research" / "notes" / "demo.md").exists(), "file on disk")
+
+            # Gate 10
+            print("[gate 10] brain_read_note on personal/ → 403 scope")
+            r = await c.post(
+                "/api/tools/brain_read_note",
+                json={"path": "personal/notes/secret.md"},
+                headers=headers_ok,
+            )
+            _check(r.status_code == 403, f"403 (got {r.status_code})")
+            _check(r.json()["error"] == "scope", "error=scope")
+
+            # Gate 11
+            print("[gate 11] brain_ingest rate-limited → 429 + Retry-After")
+            # Drain the patches bucket.
+            drained = RateLimiter(RateLimitConfig(patches_per_minute=1))
+            drained.check("patches", cost=1)
+            # Frozen dataclass mutation trick.
+            object.__setattr__(app.state.ctx.tool_ctx, "rate_limiter", drained)
+            r = await c.post(
+                "/api/tools/brain_ingest",
+                json={"source": "text to ingest"},
+                headers=headers_ok,
+            )
+            _check(r.status_code == 429, f"429 (got {r.status_code})")
+            _check(r.headers["retry-after"].isdigit(), "Retry-After header present")
+            _check(r.json()["detail"]["bucket"] == "patches", "bucket=patches")
+
+            # Restore limiter for WS gates.
+            from brain_mcp.rate_limit import RateLimiter as _RL, RateLimitConfig as _RC
+            object.__setattr__(app.state.ctx.tool_ctx, "rate_limiter", _RL(_RC()))
+
+        # Gate 12-14 — WS via starlette TestClient (easier sync shape).
+        from fastapi.testclient import TestClient
+
+        # Re-queue a fake LLM response.
+        app.state.ctx.tool_ctx.llm.queue("hello there")
+
+        with TestClient(app) as sync_client:
+            token = app.state.ctx.token
+
+            print("[gate 12] WS handshake")
+            with sync_client.websocket_connect(f"/ws/chat/demo-thread?token={token}") as ws:
+                v = ws.receive_json()
+                _check(v["type"] == "schema_version", "schema_version first")
+                _check(v["version"] == "1", "version=1")
+                t = ws.receive_json()
+                _check(t["type"] == "thread_loaded", "thread_loaded second")
+                _check(t["turn_count"] == 0, "fresh thread")
+
+                print("[gate 13] WS turn round-trip")
+                ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
+                types_seen = []
+                while True:
+                    frame = ws.receive_json()
+                    types_seen.append(frame["type"])
+                    if frame["type"] == "turn_end":
+                        break
+                _check(types_seen[0] == "turn_start", "turn_start first")
+                _check("delta" in types_seen, "delta present")
+                _check(types_seen[-1] == "turn_end", "turn_end last")
+
+            print("[gate 14] WS reconnect shows turn_count=1")
+            with sync_client.websocket_connect(f"/ws/chat/demo-thread?token={token}") as ws:
+                ws.receive_json()
+                t = ws.receive_json()
+                _check(t["turn_count"] >= 1, f"turn_count >= 1 (got {t['turn_count']})")
+
+        print()
+        print("PLAN 05 DEMO OK")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(_run_demo()))
+```
+
+**Known caveats:**
+- `httpx.ASGITransport` may not run lifespan by default. If `app.state.ctx` is `None` after entering the `AsyncClient`, wrap with `asgi_lifespan.LifespanManager(app)` (new dev dep) or switch to `TestClient` for REST gates too. Verify empirically before shipping.
+- Gate 11's `object.__setattr__` frozen-dataclass trick mirrors Plan 04 Task 24's pattern. Same caveat applies.
+- Gate 13's FakeLLM queueing assumes the in-memory FakeLLMProvider emits one or more `delta` chunks. If `ChatSession` streams differently (e.g., only emits `delta` on provider streaming), queue an explicit streaming response. Adapt based on Plan 03 behavior.
+
+### Run the demo
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run python scripts/demo-plan-05.py
+```
+
+Expected: all 14 gates print OK, final line `PLAN 05 DEMO OK`, exit 0. Run twice to verify no state bleed (temp dir fresh each time; this is stability insurance).
+
+### Commit
+
+```bash
+git add scripts/demo-plan-05.py && git commit -m "feat(api): plan 05 task 24 — end-to-end demo script (14 gates)"
+```
+
+---
+
+### Task 25 — Hardening sweep + coverage + tag `plan-05-api`
+
+**Owning subagent:** brain-test-engineer + brain-api-engineer
+
+**Files:**
+- Modify: `tasks/todo.md` — mark Plan 05 ✅ with date + tag + demoable artifact summary
+- Modify: `tasks/lessons.md` — add Plan 05 completion section
+- Modify: `tasks/plans/05-api.md` — append Review section with final stats
+- Various — any hardening sweep fixes
+
+**Context:**
+
+Same shape as Plan 04 Task 25. Plan 05 bundles the hardening sweep + coverage + tag close into one task.
+
+### Workflow
+
+#### Step 1 — Coverage pass
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_cli packages/brain_mcp packages/brain_api -q \
+    --cov=brain_core --cov=brain_cli --cov=brain_mcp --cov=brain_api --cov-report=term-missing 2>&1 | tail -100
+```
+
+**Coverage targets:**
+- `brain_api.app` ≥ 85%
+- `brain_api.auth` ≥ 90% (security-critical)
+- `brain_api.errors` ≥ 95% (every handler should have a test)
+- `brain_api.routes.tools` ≥ 90%
+- `brain_api.routes.chat` ≥ 80% (harder to cover all branches — WS concurrency edges)
+- `brain_api.chat.session_runner` ≥ 80%
+- `brain_core.tools.*` ≥ 90% (wrappers — tests live in brain_mcp + brain_core)
+- `brain_core.rate_limit` ≥ 95%
+- Total `brain_core` ≥ 91% (must not regress from Plan 04 end-state 94%)
+
+#### Step 2 — Mini hardening sweep
+
+Collected deferrals from Plan 05 execution (Checkpoints 1–6):
+
+**Batch A — behavior fixes:**
+1. **`ToolResult.data` default.** Checkpoint 2 flagged: `None` vs `{}` default. Resolution — keep `None` (distinguishes "no structured payload" from "empty structured payload"). Document in docstring; no code change.
+2. **JSON-Schema `enum` + `minimum`/`maximum` support.** Checkpoint 4 flagged: `brain_search` top_k clamping not enforced by validation. Add `enum` + numeric constraint support to `build_model_from_schema`. One commit.
+3. **`thread_id` IPv6 loopback.** Checkpoint 3 flagged: `{"localhost", "127.0.0.1"}` doesn't include `::1`. If uvicorn config exposes IPv6 in Plan 08, add `::1` to `_LOOPBACK_HOSTS`. Track as Plan 08 handoff; no Plan 05 change.
+4. **HTTPException double-wrap check.** Checkpoint 3 / 5 flagged. Task 15's `ApiError` fix resolved this — verify no stray `HTTPException(detail={"error": ...})` survived the sweep by grep:
+   ```bash
+   grep -rn 'HTTPException' packages/brain_api/src
+   ```
+   Any hits: convert to `ApiError`.
+5. **Cancel-turn partial drop.** Checkpoint 6: "cancel = drop the partial assistant message". Verify SessionRunner does NOT persist partial turns. Add a regression test if missing.
+
+**Batch B — comments & named constants:**
+1. **`schema_version` constant.** Promote `_SCHEMA_VERSION = "1"` in `routes/chat.py` to a module-level exported constant `SCHEMA_VERSION` in `brain_api.chat.events`. Plan 07 frontend pins the same constant.
+2. **Request-id TODO.** Add `# TODO(Task 07): request-id correlation for 500 responses` near the catch-all exception handler.
+3. **IPv6 TODO.** Add `# TODO(Plan 08): ::1 support if uvicorn --host enables IPv6` near `_LOOPBACK_HOSTS`.
+4. **Concurrent-thread warning.** Add a docstring note in `routes/chat.py` about two-WS-per-thread last-writer-wins semantics.
+
+**Batch C — defer (lessons only):**
+- `ChatSession.load_or_create` additive extension — if added, it stays. If not needed, document which Plan 03 API satisfied the need.
+- `asgi-lifespan` vs `TestClient` for demo gates 1–11 — either works; document which Task 24 picked.
+- `AsyncIterator` vs callback `ChatSession.run_turn` — which shape Plan 03 shipped; adapter decision final.
+- Request logging format — stdlib logging vs. structured JSON. Defer to Plan 07 / 08.
+- WS session pooling / multi-tab concurrency — Plan 07 UI guards; no Plan 05 backend fix.
+
+Batch fixes into 1–3 commits.
+
+#### Step 3 — Final gates
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_core && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_cli && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_mcp && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb/packages/brain_api && uv run mypy src tests
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run ruff check . && uv run ruff format --check .
+find /Users/chrisjohnson/Code/cj-llm-kb/.venv -name "* [0-9].py" | wc -l
+```
+
+All clean, `0`.
+
+#### Step 4 — Run demo final time, capture artifact
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run python scripts/demo-plan-05.py 2>&1 | tee /tmp/plan-05-demo-receipt.txt
+```
+
+#### Step 5 — Update `tasks/todo.md`
+
+```markdown
+| 05 | [API](./plans/05-api.md) | ✅ Complete (2026-MM-DD, tag `plan-05-api`) | brain_api FastAPI REST (18 tool endpoints) + WebSocket chat (ChatSession-bridged, schema_version=1); Origin/Host/token auth; 14-gate demo passing (`PLAN 05 DEMO OK`); VCR chat cassettes deferred per D9a | brain-api-engineer, brain-core-engineer |
+```
+
+#### Step 6 — Update `tasks/lessons.md`
+
+Add new `### Plan 05 — API` section under "Per sub-plan". Mirror Plan 03/04's structure. Include:
+
+- **Completion entry** — date, test counts across 4 packages, coverage, commits since `plan-04-mcp`, demo receipt, tag name
+- **Subagent-driven-development retrospective** — FastAPI + WS integration surprises (lifespan handling, httpx.ASGITransport gotchas, starlette TestClient for WS, pydantic v2 discriminated unions)
+- **Handler extraction retrospective** — did the strictly-additive refactor hold? Any brain_mcp test that needed adjustment beyond the shim template? Did the shim pattern scale to all 18 tools cleanly?
+- **Plan-author API drift** — list every case where real API differed from plan text (ChatSession constructor / run_turn shape / chat event class names / anything else)
+- **Handoff to Plan 06 (UI design)** — `/api/tools` OpenAPI is the frontend contract; `brain_api.chat.events.SCHEMA_VERSION = "1"` is the WS wire-format pin; `ErrorResponse` is the error envelope shape every frontend error boundary should parse
+- **Cross-platform surprises** — Task 23's findings list
+- **Deferred items** from Batch C
+
+#### Step 7 — Append Review to `tasks/plans/05-api.md`
+
+```markdown
+## Review
+
+**Plan 05 — API: complete.**
+
+- **Tag:** `plan-05-api`
+- **Completed:** 2026-MM-DD
+- **Task count:** 25 planned / 25 actual
+- **Commits since `plan-04-mcp`:** <count>
+- **Test counts:** brain_core (X) + brain_cli (Y) + brain_mcp (Z) + brain_api (W) = **total passed + 11 skipped**
+- **Coverage:** brain_core N% · brain_cli N% · brain_mcp N% · brain_api N%
+- **Gates:** mypy strict clean (4 packages), ruff + format clean, ghost-file check 0
+- **Demo receipt:**
+
+```
+<paste the 14-gate demo output>
+```
+
+- **Handoff to Plan 06:** the frontend's contract lives in two places — `GET /api/tools` (discovery + INPUT_SCHEMA for every tool) and `brain_api.chat.events` (WS event wire format, pinned by `SCHEMA_VERSION = "1"`). Plan 06's mockups will reference both. Every error the frontend shows must parse `{"error", "message", "detail"}`. The frontend will read the filesystem token server-side (Next.js SSR route → `.brain/run/api-secret.txt`), never exposing it to the browser.
+```
+
+#### Step 8 — Tag locally
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git tag plan-05-api
+```
+
+Do NOT `git push`. Main loop reviews + pushes.
+
+#### Step 9 — Close commit
+
+```bash
+git add tasks/todo.md tasks/lessons.md tasks/plans/05-api.md && git commit -m "docs: close plan 05 (api) — tag plan-05-api"
+```
+
+## Report format
+
+**DONE** / **DONE_WITH_CONCERNS** / **NEEDS_CONTEXT** / **BLOCKED**. Include:
+- Close commit SHA + all Batch A/B sweep commit SHAs (expect 3–5 commits total for Task 25)
+- Final test count across 4 packages (post-sweep)
+- Coverage stats
+- Demo receipt (full 14-gate output)
+- Plan 05 deferrals list captured in tasks/lessons.md
+- Confirmation that `plan-05-api` tag exists locally
+
+Main loop pushes `main` + tag to `origin` after reviewing the close commit.
