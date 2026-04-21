@@ -2699,3 +2699,728 @@ Main loop reviews:
 Before Task 14, confirm the dialog + system-overlay primitives + setup wizard are stable — Group 4 starts consuming them for Chat.
 
 ---
+
+### Group 4 — Core screens (Tasks 14–18)
+
+**Pattern:** the daily-driver screens. Each screen is a composition of shadcn primitives + components from prior tasks + typed API/WS clients. Design reference for each: v3 zip's `src/{chat,pending,screens,browse}.jsx`. Port them to TypeScript + Tailwind, preserving interaction shape.
+
+**Route-to-task map:**
+- `/chat` + `/chat/[thread_id]` → Tasks 14 + 15
+- `/pending` → Task 16
+- `/inbox` → Task 17
+- `/browse` + `/browse/[...path]` → Task 18
+
+**Hard property:** every screen is accessible via keyboard alone. shadcn primitives + our a11y care at composition time satisfies WCAG 2.2 AA. Axe-core in Task 23 enforces.
+
+---
+
+### Task 14 — Chat transcript + streaming + tool calls + inline patch card + NewThreadEmpty
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/chat/page.tsx` — new-thread (no `thread_id`) route
+- Create: `apps/brain_web/src/app/chat/[thread_id]/page.tsx` — existing-thread route
+- Create: `apps/brain_web/src/components/chat/message.tsx` — Message + wikilink + code + bold/italic rendering
+- Create: `apps/brain_web/src/components/chat/tool-call.tsx` — collapsible ToolCall card
+- Create: `apps/brain_web/src/components/chat/inline-patch-card.tsx` — "Staged at `<path>` → Review in panel"
+- Create: `apps/brain_web/src/components/chat/msg-actions.tsx` — File to wiki / Fork / Copy / Quote row
+- Create: `apps/brain_web/src/components/chat/new-thread-empty.tsx` — mode-specific starter prompts
+- Create: `apps/brain_web/src/components/chat/transcript.tsx` — transcript container + auto-scroll
+- Create: `apps/brain_web/src/lib/chat/rendering.ts` — markdown inline parser (wikilinks, bold, italic, code)
+- Create: `apps/brain_web/src/lib/state/chat-store.ts` — Zustand store for per-thread transcript + streaming state + patches
+- Modify: `apps/brain_web/src/lib/ws/hooks.ts` — `useChatWebSocket(threadId)` hook drives chat-store from WS events
+- Create: `apps/brain_web/tests/unit/rendering.test.ts` — 6 tests (plain paragraph, wikilink, broken wikilink, bold, inline code, italic)
+- Create: `apps/brain_web/tests/unit/message.test.tsx` — 4 tests (user vs assistant, mode chip, timestamp, cost display)
+- Create: `apps/brain_web/tests/unit/tool-call.test.tsx` — 3 tests (collapsed default, expand on click, hit rendering with score + path + snip)
+- Create: `apps/brain_web/tests/unit/new-thread-empty.test.tsx` — 3 tests (renders mode-specific starters, clicks emit turn_start, scope badges visible)
+- Create: `apps/brain_web/tests/unit/chat-store.test.ts` — 5 tests (turn_start appends, delta accumulates, tool_call appended to assistant msg, patch_proposed adds to patches, turn_end marks msg complete)
+
+**Context for the implementer:**
+
+### Markdown inline rendering
+
+Port the v3 design's inline parser. Handles `[[wikilink]]`, `**bold**`, `` `code` ``, `*italic*`. Returns React nodes.
+
+```typescript
+// apps/brain_web/src/lib/chat/rendering.ts
+const INLINE_RE = /(\[\[[^\]]+\]\]|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+
+const BROKEN_WIKILINKS = new Set<string>();  // Populated by Task 25 / Plan 09's brain_wikilink_status (deferred)
+
+export function renderInline(text: string, key: number = 0): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  INLINE_RE.lastIndex = 0;
+  while ((m = INLINE_RE.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("[[")) {
+      const label = tok.slice(2, -2);
+      const broken = BROKEN_WIKILINKS.has(label);
+      nodes.push(<a key={`w${key++}`} className={cn("wikilink", broken && "broken")} href="#">{label}</a>);
+    } else if (tok.startsWith("**")) {
+      nodes.push(<strong key={`b${key++}`}>{tok.slice(2, -2)}</strong>);
+    } else if (tok.startsWith("`")) {
+      nodes.push(<code key={`c${key++}`}>{tok.slice(1, -1)}</code>);
+    } else if (tok.startsWith("*")) {
+      nodes.push(<em key={`i${key++}`}>{tok.slice(1, -1)}</em>);
+    }
+    last = m.index + tok.length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+export function renderBody(body: string): React.ReactNode {
+  return body.split(/\n\n+/).map((para, i) => <p key={i}>{renderInline(para, i * 100)}</p>);
+}
+```
+
+### Message component
+
+Shape from v3: avatar + role + mode chip (assistant only) + timestamp + cost. Body is rendered via `renderBody`. Tool calls render above the body (collapsible). Inline patch card renders below the body if `msg.proposedPatch` is set. Msg actions appear on hover / focus (assistant only, non-streaming).
+
+During streaming: the streaming cursor (`<span className="stream-caret" />`) appends to the body. `isStreaming` prop + `streamingText` prop handle this.
+
+### ToolCall component
+
+Collapsible card. Head: tool name + args one-liner + caret. Body (on expand): if `call.result.hits`, render each hit as score + path + snippet (score to 2 decimals, path monospace, snip dim).
+
+Default-collapsed per v3 design.
+
+### InlinePatchCard
+
+Small chip-style card under the assistant's body. Icon + "Staged a new note at" + target-path chip + "Review in panel →" button. Clicking "Review" scrolls the right-rail pending section to that patch + highlights it.
+
+### MsgActions
+
+Row of 4 buttons (File to wiki / Fork / Copy / Quote). Shows on assistant-message hover; always visible on keyboard focus for a11y.
+
+- **File to wiki** → opens FileToWiki dialog via `useDialogsStore.open({kind: "file-to-wiki", msg, onConfirm: ...})`
+- **Fork** → opens Fork dialog (Task 20)
+- **Copy** → clipboard
+- **Quote** → adds `> ` prefix + pastes into composer
+
+### NewThreadEmpty
+
+Shown in transcript area when the active route is `/chat` with no thread_id yet. Structure from v3:
+- Eyebrow "New thread"
+- H1 "What are we working on?"
+- Scope chips (current domains with lock icon if personal included)
+- Mode row showing "{Mode} — {description}" with colored dot
+- 3 mode-specific starter prompts as clickable buttons
+- Tip: "Your first message becomes the thread title. brain uses BRAIN.md as its system prompt."
+
+Starter prompts per v3 design:
+```typescript
+const STARTERS = {
+  ask: [
+    "What has the vault said this year about silent-buyer patterns?",
+    "Cross-reference Fisher-Ury with the April Helios call.",
+    "Summarize concepts tagged #decision-theory · last 30 days.",
+  ],
+  brainstorm: [
+    "Argue with me about compounding curiosity as a meta-practice.",
+    "What am I missing in the deal-stall pattern synthesis?",
+    "Propose three angles I haven't considered on tactical empathy.",
+  ],
+  draft: [
+    "Rewrite the intro to fisher-ury-interests.md for a non-expert reader.",
+    "Draft a board-memo section on Q2 research threads.",
+    "Turn the silent-buyer synthesis into a short public post.",
+  ],
+};
+```
+
+Clicking a starter = `setTurnContent(prompt)` + `sendTurnStart()` (Task 15 wires send).
+
+### Chat store
+
+```typescript
+// apps/brain_web/src/lib/state/chat-store.ts
+export type ChatRole = "user" | "brain";
+export interface ChatMessage {
+  role: ChatRole;
+  ts: string;
+  body: string;
+  mode?: ChatMode;
+  toolCalls?: ToolCallData[];
+  proposedPatch?: PatchMeta;
+  cost?: number;
+  isStreaming?: boolean;
+}
+
+interface ChatState {
+  transcript: ChatMessage[];
+  streaming: boolean;
+  streamingText: string;
+  currentTurn: number;
+  cumulativeTokensIn: number;
+
+  // Actions driven by WS events:
+  onTurnStart: (ev: TurnStartEvent) => void;
+  onDelta: (ev: DeltaEvent) => void;
+  onToolCall: (ev: ToolCallEvent) => void;
+  onToolResult: (ev: ToolResultEvent) => void;
+  onCostUpdate: (ev: CostUpdateEvent) => void;
+  onPatchProposed: (ev: PatchProposedEvent) => void;
+  onTurnEnd: (ev: TurnEndEvent) => void;
+  onError: (ev: ErrorEvent) => void;
+
+  // Actions driven by user:
+  sendUserMessage: (text: string) => void;  // optimistic append; WS send in Task 15
+  clearTranscript: () => void;  // on thread switch or "new chat"
+}
+```
+
+**Per-thread isolation:** the store is NOT per-thread. `activeThreadId` changes → `clearTranscript()` → new WS connection → events populate transcript fresh. One store; one active thread at a time.
+
+### Route → store wiring
+
+```tsx
+// apps/brain_web/src/app/chat/[thread_id]/page.tsx (CLIENT COMPONENT)
+"use client";
+import { useEffect } from "react";
+import { useChatStore } from "@/lib/state/chat-store";
+import { useAppStore } from "@/lib/state/app-store";
+import { useChatWebSocket } from "@/lib/ws/hooks";
+import { Transcript } from "@/components/chat/transcript";
+
+export default function ChatThreadPage({ params }: { params: { thread_id: string } }) {
+  const setActiveThread = useAppStore((s) => s.setActiveThreadId);
+  const clearTranscript = useChatStore((s) => s.clearTranscript);
+
+  useEffect(() => {
+    setActiveThread(params.thread_id);
+    clearTranscript();
+    return () => setActiveThread(null);
+  }, [params.thread_id]);
+
+  useChatWebSocket(params.thread_id);  // opens WS, binds events to store
+
+  return <Transcript />;
+}
+```
+
+### Step 1 — Failing tests
+
+Cover rendering, store reducers, component behaviors. No Playwright yet — that's Task 23.
+
+### Step 2 — Implement
+
+Sketches above. Port v3 design's interactions pixel-true.
+
+### Step 3 — Run + commit
+
+Expected: **~21 new tests** (6 rendering + 4 message + 3 tool-call + 3 new-thread + 5 store).
+
+```bash
+git commit -m "feat(web): plan 07 task 14 — chat transcript + streaming + tool calls + inline patch + new-thread empty"
+```
+
+---
+
+### Task 15 — Chat composer + WS wiring + invalid-state toasts + cancel
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/components/chat/composer.tsx` — textarea + mode-aware placeholder + scope chip + context meter + attach + send/cancel
+- Create: `apps/brain_web/src/components/chat/chat-screen.tsx` — composition of Transcript + Composer + sub-header (thread title, turns, cost)
+- Modify: `apps/brain_web/src/lib/ws/hooks.ts` — `useChatWebSocket(threadId)` now exposes `sendTurnStart / cancelTurn / switchMode`
+- Modify: `apps/brain_web/src/lib/state/chat-store.ts` — `pendingAttachedSources: string[]` for drag-to-attach ingest
+- Modify: `apps/brain_web/src/lib/state/app-store.ts` — `setMode` guard emits `invalid-state-mode` toast when streaming
+- Create: `apps/brain_web/tests/unit/composer.test.tsx` — 6 tests (mode placeholder changes, send on enter, shift+enter newline, send disabled when empty, cancel button appears during stream, context meter derives from tokensUsed)
+- Create: `apps/brain_web/tests/unit/chat-ws-hook.test.ts` — 6 tests (turn_start sends correct message, cancel_turn sends message, invalid-state-turn toast on 2nd turn_start during stream, invalid-state-mode toast on mid-turn switch, switch_mode sends between turns, attached_sources propagate)
+
+**Context for the implementer:**
+
+### Composer behavior
+
+From v3 design: placeholder per mode:
+- Ask: "Ask the vault — it will cite what it uses…"
+- Brainstorm: "Bring a half-formed idea — brain will push back and co-develop…"
+- Draft: "Open a document and collaborate inline…"
+
+Autosize textarea (max 220px). Enter submits; Shift+Enter inserts newline. Send button disabled when `text.trim()` empty OR `streaming`.
+
+During streaming: send button flips to cancel (stop icon). Cancel calls `sendCancelTurn()` via WS hook.
+
+Context meter: reads `cumulativeTokensIn` from chat store, divides by 200_000, displays as `≈{pct}%`. Tooltip shows raw token count.
+
+Scope chip: reads `scope` from app-store. Shows domain count OR single-domain name; lock icon if personal included.
+
+Attach chip row: if `pendingAttachedSources.length > 0`, show a row of chip pills with `×` to detach. (Task 17 wires drag-and-drop to populate.)
+
+### ChatScreen composition
+
+```tsx
+<div className="chat">
+  {draggingFile && <DropOverlay />}  {/* already mounted at app level via Task 12 */}
+  <ChatSubHeader thread={thread} />
+  <Transcript />
+  <Composer
+    mode={mode}
+    scope={scope}
+    streaming={streaming}
+    tokensUsed={cumulativeTokensIn}
+    pendingAttached={pendingAttachedSources}
+    onSend={(text) => sendTurnStart(text, { mode, attachedSources: pendingAttachedSources })}
+    onCancel={cancelTurn}
+    onDetach={(id) => removeAttachedSource(id)}
+  />
+</div>
+```
+
+### Chat sub-header
+
+- **Active thread:** icon + thread title + "N turns · $X.XXX"
+- **New thread:** icon + "New thread · untitled" + dim "brain will name it after your first message"
+- Right side: Export button (upload icon) + Fork button (opens Fork dialog at turn-N via Task 20)
+
+### WS hook — send methods + invalid-state handling
+
+```typescript
+// apps/brain_web/src/lib/ws/hooks.ts
+export function useChatWebSocket(threadId: string | null) {
+  const chatStore = useChatStore();
+  const appStore = useAppStore();
+  const systemStore = useSystemStore();
+  const wsRef = useRef<BrainWebSocket | null>(null);
+
+  useEffect(() => {
+    if (!threadId) return;
+    const token = /* from server-passed prop or context */;
+    const ws = new BrainWebSocket({
+      threadId,
+      token,
+      onEvent: (ev) => {
+        switch (ev.type) {
+          case "schema_version": /* check version */; break;
+          case "thread_loaded": /* init store state */; break;
+          case "turn_start": chatStore.onTurnStart(ev); break;
+          case "delta": chatStore.onDelta(ev); break;
+          case "tool_call": chatStore.onToolCall(ev); break;
+          case "tool_result": chatStore.onToolResult(ev); break;
+          case "cost_update": chatStore.onCostUpdate(ev); break;
+          case "patch_proposed": chatStore.onPatchProposed(ev); break;
+          case "doc_edit_proposed": chatStore.onDocEditProposed(ev); break;  // Task 19 draft
+          case "turn_end": chatStore.onTurnEnd(ev); break;
+          case "cancelled": chatStore.onCancelled(ev); break;
+          case "error":
+            if (ev.code === "invalid_state") {
+              // Route to the right mid-turn-toast kind.
+              const kind = ev.message.includes("mode") ? "invalid-state-mode" : "invalid-state-turn";
+              systemStore.setMidTurn(kind);
+            } else {
+              chatStore.onError(ev);
+            }
+            break;
+        }
+      },
+      onClose: () => systemStore.setConnection("reconnecting"),
+      onOpen: () => systemStore.setConnection("ok"),
+    });
+    ws.connect();
+    wsRef.current = ws;
+    return () => ws.close();
+  }, [threadId]);
+
+  return {
+    sendTurnStart: (content: string, opts?: { mode?: ChatMode; attachedSources?: string[] }) => {
+      if (chatStore.streaming) {
+        systemStore.setMidTurn("invalid-state-turn");
+        return;
+      }
+      chatStore.sendUserMessage(content);
+      wsRef.current?.send({
+        type: "turn_start",
+        content,
+        mode: opts?.mode,
+        attached_sources: opts?.attachedSources,
+      });
+    },
+    cancelTurn: () => wsRef.current?.send({ type: "cancel_turn" }),
+    switchMode: (mode: ChatMode) => {
+      if (chatStore.streaming) {
+        systemStore.setMidTurn("invalid-state-mode");
+        return;
+      }
+      wsRef.current?.send({ type: "switch_mode", mode });
+      appStore.setMode(mode);
+    },
+    setOpenDoc: (path: string | null) => wsRef.current?.send({ type: "set_open_doc", path }),
+  };
+}
+```
+
+**Double guard:** both the reducer (app-store.setMode's streaming guard from Task 10) AND the WS send (here) check streaming. Reducer guard is the fast path; WS guard is insurance against timing races.
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~12 new tests**. Manual smoke: run brain_api + brain_web; open `/chat`; send a turn; see streaming.
+
+```bash
+git commit -m "feat(web): plan 07 task 15 — chat composer + WS wiring + invalid-state guards"
+```
+
+---
+
+### Task 16 — Pending screen + diff view + approve-all / reject-all / undo-last + edit-approve flow
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/pending/page.tsx`
+- Create: `apps/brain_web/src/components/pending/pending-screen.tsx` — list + detail layout
+- Create: `apps/brain_web/src/components/pending/patch-card.tsx` — compact card in list view
+- Create: `apps/brain_web/src/components/pending/patch-detail.tsx` — right pane with target path + reason + diff + actions
+- Create: `apps/brain_web/src/components/pending/diff-view.tsx` — read-only monaco-style line-diff renderer
+- Create: `apps/brain_web/src/components/pending/filter-bar.tsx` — "All / Notes / Ingested / ..." chips
+- Create: `apps/brain_web/src/components/pending/autonomous-toggle.tsx` — per-category toggles on screen header
+- Create: `apps/brain_web/src/lib/state/pending-store.ts` — Zustand for patches list + filter + selected patch_id
+- Create: `apps/brain_web/src/lib/pending/bulk-approve.ts` — serial loop over `brain_apply_patch` + progress callback
+- Modify: `apps/brain_web/src/components/shell/right-rail.tsx` — chat view shows `PendingRail` compact variant
+- Create: `apps/brain_web/src/components/pending/pending-rail.tsx` — compact right-rail variant (auto-banner + patch list + count)
+- Create: `apps/brain_web/tests/unit/pending-store.test.ts` — 5 tests (load from API, filter, select, approve removes from list, reject removes from list)
+- Create: `apps/brain_web/tests/unit/patch-card.test.tsx` — 3 tests (renders metadata, domain chip, isNew bell)
+- Create: `apps/brain_web/tests/unit/diff-view.test.tsx` — 4 tests (add line green, del line red, context dim, gutter numbers)
+- Create: `apps/brain_web/tests/unit/bulk-approve.test.ts` — 3 tests (sequential calls, progress callbacks, cancel mid-loop)
+
+**Context for the implementer:**
+
+### Pending screen layout
+
+Two-column grid per v3 design: left (list with filter bar), right (detail pane). Header above with title + count + autonomous toggle + global actions (Undo last, Reject all, Approve all).
+
+### PatchCard
+
+Metadata only (per Plan 04 hard rule — patch body is loaded on-demand when card is selected). Fields:
+- Tool name (prefix stripped: "propose_note", "ingest", etc.)
+- Domain chip with color accent + lock icon if personal
+- Created-at relative time
+- Target path (monospace, dim)
+- Reason (truncated at 200 chars; full on hover)
+- 3 inline mini-actions: Approve / Edit / Reject
+- `isNew` bell badge (pulse animation on arrival from WS `patch_proposed`)
+
+Clicking a card selects it → detail pane renders.
+
+### PatchDetail
+
+Fetches full patch body on selection via `brain_list_pending_patches` (list returns metadata only; we need an on-demand body read). **Backend gap:** Plan 04 doesn't expose a single-patch-by-id read. The pending store file at `<vault>/.brain/pending/<patch_id>.json` IS readable by design, but there's no tool for it.
+
+**Resolution:** add `brain_get_pending_patch({patch_id}) -> {envelope, patchset}` tool to Task 4 scope (tool surface 25 → 26). Alternative: frontend reads the pending JSON file via a new Next.js API route with token auth. Cleaner to add as a tool — matches the pattern.
+
+**Update Task 4:** add `brain_get_pending_patch` to the 4 new tools list (becomes 5 new tools). Tool surface total after Task 4 now: **22 + 5 = 27 tools** (including the 3 MCP install tools flagged at Checkpoint 3 if accepted).
+
+Detail pane shows:
+- Target path chip
+- Reason (full)
+- Diff (via DiffView)
+- Source chat link (if `from_thread` present)
+- Actions: Approve & write / Edit, then approve / Reject with reason
+
+### DiffView
+
+Each line: gutter line numbers (left = before, right = after) + type marker + code. Add lines green; del lines red; context dim. Monospace. Pass diff as `{type: "add" | "del" | "ctx", n: number, code: string}[]` — format comes from v3's seed + Plan 04's PatchSet shape.
+
+### AutonomousToggle on screen header
+
+Per-category switches for ingest / entities / concepts / index_rewrites / draft. Each toggle calls `brain_config_set({key: "autonomous.<cat>", value: bool})`. Dangerous one (index_rewrites) has a `danger` class.
+
+### Bulk approve/reject
+
+Serial loop calling `brain_apply_patch` or `brain_reject_patch` per patch. Display progress ("Approving 3 of 12…"). Allow cancel. On error: stop, show toast, leave remaining patches un-touched.
+
+```typescript
+// apps/brain_web/src/lib/pending/bulk-approve.ts
+export interface BulkProgressEvent {
+  applied: number;
+  total: number;
+  current?: string;  // current patch_id
+  failed?: string[];  // patch_ids that errored
+}
+
+export async function approveAll(
+  patchIds: string[],
+  onProgress: (ev: BulkProgressEvent) => void,
+  shouldCancel: () => boolean,
+): Promise<BulkProgressEvent> {
+  const failed: string[] = [];
+  for (let i = 0; i < patchIds.length; i++) {
+    if (shouldCancel()) break;
+    const id = patchIds[i];
+    onProgress({ applied: i, total: patchIds.length, current: id, failed: [...failed] });
+    try {
+      await applyPatch(id);
+    } catch (err) {
+      failed.push(id);
+    }
+  }
+  return { applied: patchIds.length - failed.length, total: patchIds.length, failed };
+}
+```
+
+### PendingRail variant (chat view)
+
+On `/chat` route, right-rail shows compact pending list. Same PatchCard component but in "isInRail" mode (tighter padding, no actions on card). Autonomous-on banner. Opens full screen on click.
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~15 new tests** (5 store + 3 card + 4 diff + 3 bulk-approve).
+
+```bash
+git commit -m "feat(web): plan 07 task 16 — pending screen + diff view + approve-all + edit-approve flow"
+```
+
+---
+
+### Task 17 — Inbox screen + drop zone + drag-to-attach ingest pipeline
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/inbox/page.tsx`
+- Create: `apps/brain_web/src/components/inbox/inbox-screen.tsx`
+- Create: `apps/brain_web/src/components/inbox/drop-zone.tsx`
+- Create: `apps/brain_web/src/components/inbox/source-row.tsx`
+- Create: `apps/brain_web/src/components/inbox/tabs.tsx` — In progress / Needs attention / Recent
+- Create: `apps/brain_web/src/components/inbox/autonomous-ingest-toggle.tsx` — bound to `autonomous.ingest` config
+- Create: `apps/brain_web/src/lib/state/inbox-store.ts` — Zustand for source list + active tab
+- Create: `apps/brain_web/src/lib/ingest/upload.ts` — `uploadFile(file)` wraps File → text → `brain_ingest` pipeline
+- Create: `apps/brain_web/src/lib/ingest/url-paste.ts` — global paste handler that detects URLs / text
+- Create: `apps/brain_web/src/app/api/proxy/upload/route.ts` — multipart file upload endpoint (proxies to `brain_ingest` with file content)
+- Create: `apps/brain_web/tests/unit/inbox-store.test.ts` — 4 tests (load recent, filter by tab, optimistic in-progress add, status transitions)
+- Create: `apps/brain_web/tests/unit/drop-zone.test.tsx` — 3 tests (drag-enter highlights, drop triggers upload, click opens file picker)
+- Create: `apps/brain_web/tests/unit/url-paste.test.ts` — 3 tests (URL paste detected, plain text paste detected, empty paste ignored)
+- Create: `apps/brain_web/tests/unit/source-row.test.tsx` — 4 tests (each status variant renders distinct styling)
+
+**Context for the implementer:**
+
+### Inbox surface
+
+Three tabs pulling from `brain_recent_ingests` (Task 4 tool). Each source row:
+- Type icon (URL/PDF/TXT/EML)
+- Title + status sub-line (filed to X · $Y · relative time)
+- Domain chip (or "unclassified")
+- Progress bar (0–100%)
+- Status pill (queued / classifying / summarizing / integrating / done / failed)
+
+Failed rows show the error prominently with a "Retry" button.
+
+### Drop zone
+
+Big target area. States:
+- Idle: centered icon + "Drop anything worth remembering." copy + "Browse files" + "Paste a URL" buttons + `⌘V` hint
+- Drag-over: highlighted border, bigger orb, slight scale transform
+- Active upload: replaced by a progress card showing the in-flight source
+
+### Drag-to-attach integration (cross-task)
+
+Task 12's DropOverlay fires when dragging a file onto the app. On drop (outside the chat composer), it routes here:
+
+- If the user is on `/chat`, drop → attach the source to the next turn (via `chat-store.pendingAttachedSources`). The file gets ingested via `brain_ingest` first → the resulting `patch_id` becomes an `attached_sources[]` entry on the next `turn_start` message.
+- If the user is on `/inbox`, drop → add to ingest queue as a normal source.
+- Elsewhere: fall through to inbox (default ingest target).
+
+### Upload mechanism
+
+Browser can't send files directly to brain_api without token exposure. Route through Next.js:
+
+```typescript
+// apps/brain_web/src/app/api/proxy/upload/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { readToken } from "@/lib/auth/token";
+
+export async function POST(req: NextRequest) {
+  const token = await readToken();
+  if (!token) return NextResponse.json({ error: "setup_required" }, { status: 503 });
+
+  const formData = await req.formData();
+  const file = formData.get("file") as File | null;
+  if (!file) return NextResponse.json({ error: "invalid_input", message: "no file" }, { status: 400 });
+
+  // Read file → forward to brain_ingest as text source.
+  const content = await file.text();
+  const upstream = await fetch("http://127.0.0.1:4317/api/tools/brain_ingest", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Brain-Token": token,
+      "Origin": "http://localhost:4316",
+    },
+    body: JSON.stringify({ source: content }),
+  });
+  const body = await upstream.json();
+  return NextResponse.json(body, { status: upstream.status });
+}
+```
+
+**Note:** `brain_ingest` takes a `source: string` (URL or raw text or path). For binary PDFs, plan to either (a) base64-encode + new tool variant, or (b) temp-file save + path handoff. Start with text files only; PDFs deferred to Task 25 sweep or Plan 09.
+
+### Paste handler
+
+Global document-level paste listener on the app shell:
+
+```typescript
+// in AppShell useEffect:
+document.addEventListener("paste", (e) => {
+  const text = e.clipboardData?.getData("text/plain");
+  if (!text) return;
+  const isUrl = /^https?:\/\//.test(text.trim());
+  // If focus is on composer, let default paste happen.
+  if (document.activeElement?.tagName === "TEXTAREA") return;
+  // Otherwise: ingest.
+  if (isUrl) triggerIngest(text.trim());
+  else if (text.length > 50) triggerIngest(text);  // short text → noise filter
+});
+```
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~14 new tests**.
+
+```bash
+git commit -m "feat(web): plan 07 task 17 — inbox screen + drop zone + drag-to-attach ingest"
+```
+
+---
+
+### Task 18 — Browse screen + file tree + reader + ⌘K search + Monaco editor + wikilink hover + Obsidian link
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/browse/page.tsx` — default (no path): lands on the first note of first domain
+- Create: `apps/brain_web/src/app/browse/[...path]/page.tsx` — specific note view
+- Create: `apps/brain_web/src/components/browse/browse-screen.tsx`
+- Create: `apps/brain_web/src/components/browse/file-tree.tsx` — tree grouped by domain, with collapsible folders
+- Create: `apps/brain_web/src/components/browse/reader.tsx` — rendered Markdown with frontmatter strip + meta + body
+- Create: `apps/brain_web/src/components/browse/search-overlay.tsx` — ⌘K modal calling `brain_search`
+- Create: `apps/brain_web/src/components/browse/wikilink-hover.tsx` — popover preview on wikilink hover
+- Create: `apps/brain_web/src/components/browse/monaco-editor.tsx` — lazy-loaded Monaco wrapper
+- Create: `apps/brain_web/src/components/browse/meta-strip.tsx` — domain chip + folder · read-time · modified + Obsidian link + Edit toggle
+- Create: `apps/brain_web/src/components/browse/linked-rail.tsx` — right-rail variant: backlinks + outlinks
+- Create: `apps/brain_web/src/lib/vault/tree.ts` — `buildTree(notes): TreeNode[]` groups files into domain/folder/slug structure
+- Create: `apps/brain_web/src/lib/vault/wikilinks.ts` — `extractWikilinks(body): string[]`, `resolveLink(label): NotePath | null`
+- Create: `apps/brain_web/src/lib/vault/obsidian-url.ts` — `buildObsidianUri(vaultName, path): string`
+- Create: `apps/brain_web/tests/unit/file-tree.test.ts` — 4 tests (groups by domain, collapses folders, active node highlights, personal hidden-by-default label)
+- Create: `apps/brain_web/tests/unit/search-overlay.test.tsx` — 4 tests (opens on ⌘K, results render, click navigates, escape closes)
+- Create: `apps/brain_web/tests/unit/wikilinks.test.ts` — 5 tests (extract from body, resolve slug to path, unresolved → null, broken marker class)
+- Create: `apps/brain_web/tests/unit/obsidian-url.test.ts` — 3 tests (formats URI correctly, encodes vault name, handles nested paths)
+
+**Context for the implementer:**
+
+### File tree
+
+Grouped by domain (each has its own accent dot). Folders are `concepts/`, `notes/`, `sources/`, `entities/`, `concepts/`, `synthesis/`, `chats/`, `scratch/` (the last added in Plan 07 per spec update §6). Click folder: collapses/expands. Click file: navigates to `/browse/<domain>/<folder>/<slug>.md`.
+
+Personal domain renders with lock icon + dim label "— N notes, hidden by default" unless current scope includes it.
+
+### Reader
+
+- **Meta strip** at top: domain chip + "folder · N min read · modified Xd ago" + spacer + Obsidian link button + Edit toggle
+- **Body**: Markdown rendered via the same `renderBody` from Task 14, extended to support h1/h2/h3, blockquotes, lists, code blocks
+- **Frontmatter**: parsed from vault response; rendered as a collapsed "fm" strip at top of body with key-value rows + wikilink rendering for `links:` values
+
+### ⌘K Search overlay
+
+Global keyboard shortcut handled at app-shell level. Open overlay → autofocus input → debounced `brain_search(q, top_k: 20)` → render hits with score + path + snippet (highlighted on match terms). Arrow keys navigate; Enter opens; Escape closes.
+
+Also triggered from the "Search vault…" pseudo-button in the file tree.
+
+### Wikilink hover
+
+On hover of a `.wikilink` (rendered via `renderInline`):
+- Debounced 150ms to avoid thrashing
+- Calls `brain_read_note({path: resolved_path})` if not cached
+- Shows popover card: path + title + first paragraph (max 220 chars) + domain chip + "↵ to open" hint
+- `BROKEN_WIKILINKS` set from cached lookups — unresolved shows broken styling
+- No hover on broken wikilinks (no data to preview)
+
+### Monaco editor
+
+Lazy-loaded to avoid initial bundle bloat:
+
+```tsx
+// apps/brain_web/src/components/browse/monaco-editor.tsx
+"use client";
+import dynamic from "next/dynamic";
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+
+export function VaultEditor({ value, onChange, theme }: VaultEditorProps) {
+  return (
+    <MonacoEditor
+      value={value}
+      onChange={(v) => onChange(v ?? "")}
+      language="markdown"
+      theme={theme === "dark" ? "vs-dark" : "vs"}
+      options={{ fontSize: 13, wordWrap: "on", minimap: { enabled: false } }}
+    />
+  );
+}
+```
+
+Edit toggle flips reader → editor. Save triggers `brain_propose_note({path, content: edited, reason: "Direct edit from Browse"})` — staged as normal patch.
+
+### Obsidian link
+
+`obsidian://open?vault=<name>&file=<path>`. Vault name comes from config (`brain_config_get("vault_name")` OR derive from vault root basename). Path is relative to vault root, URI-encoded.
+
+### Linked rail (right rail)
+
+On browse view, right rail shows:
+- **Backlinks** (notes linking TO current note): call `brain_search(query: "[[<slug>]]")` + post-filter
+- **Outlinks** (wikilinks extracted from current note body)
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~16 new tests**. Monaco lazy-load verified in production build (bundle size ≤ 200KB for initial, Monaco ~2MB loaded on demand).
+
+```bash
+git commit -m "feat(web): plan 07 task 18 — browse (file tree + reader + ⌘K search + Monaco edit + wikilink hover + Obsidian)"
+```
+
+---
+
+**Checkpoint 4 — pause for main-loop review.**
+
+18 tasks landed. Daily-driver surface complete:
+- Chat: transcript + streaming + tool-call cards + inline patch card + composer + context meter + WS wiring + invalid-state guards
+- Pending: list + detail + diff view + approve-all loop + edit-approve 3-roundtrip flow + autonomous-mode per-category toggles
+- Inbox: drop zone + 3 tabs + drag-to-attach ingest pipeline + ⌘V global paste handler
+- Browse: file tree + reader with frontmatter + ⌘K BM25 search overlay + Monaco edit mode + wikilink hover + Obsidian link + backlinks/outlinks rail
+- NewThreadEmpty with mode-specific starter prompts
+
+Main loop reviews:
+
+- **`brain_get_pending_patch` tool surfaced by Task 16.** Accept into Task 4's scope → tool surface becomes 27 (with the 3 MCP-install tools from Checkpoint 3). Or reject + read pending JSON via a Next.js API route. Recommend accept.
+- **Upload mechanism** (Task 17): text-file only MVP. PDF + image + binary formats deferred. Is that acceptable for Plan 07 demo, or need at least PDF support? Claude Desktop via MCP already handles PDFs via `brain_ingest` natively; web app matching is spec-level.
+- **⌘K global shortcut** conflicts with browser find-in-page? Browsers bind ⌘F for that. ⌘K is unused in most browsers. Confirm on Mac + Windows.
+- **Monaco bundle size.** Lazy-loaded; first Browse-edit-click triggers ~2MB download. Could prefetch on hover over Edit button. Defer to Task 25 polish.
+- **Backlinks via `brain_search`.** Rough — returns any note containing the slug text, not precisely wikilinks. Plan 09 adds `brain_wikilink_status` or `brain_backlinks` for proper link-graph queries. Accept approximation for Plan 07.
+
+Expected cumulative test count after Group 4: **~78 frontend tests** (21 + 12 + 15 + 14 + 16). Plus backend extensions from Group 1. Combined: ~804 passed + 11 skipped.
+
+Before Task 19, confirm the core screen surface is stable — Group 5 fills in Draft / Bulk / specialized dialogs / Settings.
+
+---
