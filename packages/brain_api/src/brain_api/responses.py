@@ -45,6 +45,38 @@ class ErrorResponse(BaseModel):
         default=None,
         description=(
             "Optional extra context (field-level errors, rate-limit windows, etc.). "
-            "Heterogeneous across errors; typed detail models land in Task 16."
+            "Heterogeneous across errors; see RateLimitDetail / ValidationDetail "
+            "for the documented shapes."
         ),
+    )
+
+
+class RateLimitDetail(BaseModel):
+    """Typed shape of :attr:`ErrorResponse.detail` on 429 responses.
+
+    Documentation-only: the handler in :mod:`brain_api.errors` serializes this
+    shape into ``ErrorResponse.detail`` (which stays ``dict[str, Any] | None``
+    because :class:`ErrorResponse` is heterogeneous across error codes). The
+    model exists so ``/docs`` readers can see the exact fields a rate-limit
+    detail carries without having to crack open the handler source.
+    """
+
+    bucket: str = Field(description="Which bucket ran out ('patches' or 'tokens').")
+    retry_after_seconds: int = Field(
+        description="Approximate seconds until enough capacity refills. Matches the Retry-After header.",
+    )
+
+
+class ValidationDetail(BaseModel):
+    """Typed shape of :attr:`ErrorResponse.detail` on 400 validation responses.
+
+    Documentation-only — see :class:`RateLimitDetail` for the rationale.
+    ``errors`` is Pydantic 2's canonical ``ValidationError.errors()`` list;
+    each entry has ``loc`` / ``msg`` / ``type`` / ``input`` / ``url`` keys.
+    The entries are rendered as plain dicts (not a nested Pydantic model)
+    because the upstream shape is dictated by Pydantic itself.
+    """
+
+    errors: list[dict[str, Any]] = Field(
+        description="Pydantic ValidationError.errors() list — field-level paths + messages.",
     )

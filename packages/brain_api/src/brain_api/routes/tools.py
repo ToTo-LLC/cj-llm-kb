@@ -21,12 +21,21 @@ from brain_api.responses import ErrorResponse, ToolResponse
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
 
-@router.get("")
+@router.get(
+    "",
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal error"},
+    },
+)
 async def list_tools() -> dict[str, list[dict[str, Any]]]:
     """Return every registered tool's metadata. No auth required.
 
     Sorted alphabetically by ``name`` so downstream clients (Plan 07 frontend)
     can rely on stable ordering.
+
+    The only error this endpoint can surface is a 500 (registry walk explodes
+    unexpectedly); every read is in-process metadata. Declared here so
+    ``/docs`` advertises the error shape symmetrically with the POST.
     """
     out: list[dict[str, Any]] = []
     for module in sorted(tools_registry.list_tools(), key=lambda m: m.NAME):
@@ -48,11 +57,19 @@ async def list_tools() -> dict[str, list[dict[str, Any]]]:
     responses={
         400: {
             "model": ErrorResponse,
-            "description": "Request body does not match tool INPUT_SCHEMA",
+            "description": "Invalid input (schema validation or domain ValueError)",
         },
-        403: {"model": ErrorResponse, "description": "Missing or invalid X-Brain-Token"},
-        404: {"model": ErrorResponse, "description": "Tool not registered"},
+        403: {
+            "model": ErrorResponse,
+            "description": "Scope / permission / token failure",
+        },
+        404: {"model": ErrorResponse, "description": "Unknown tool or resource"},
         406: {"model": ErrorResponse, "description": "Accept header excludes application/json"},
+        429: {
+            "model": ErrorResponse,
+            "description": "Rate limited (see Retry-After header for wait time)",
+        },
+        500: {"model": ErrorResponse, "description": "Internal error"},
     },
 )
 async def call_tool(
