@@ -1,3 +1,58 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+  shadcn/ui semantic aliases.
+
+  Authoritative palette lives in tokens.css (TT brand + brain app surfaces).
+  These aliases bridge shadcn primitives (Button, Dialog, etc.) to those
+  tokens using direct color values (not the default HSL space) so we stay
+  consistent with TT. Light-mode overrides flip with [data-theme='light']
+  by referencing --surface-* and --text* which are theme-aware.
+*/
+@layer base {
+  :root {
+    --background: var(--surface-0);
+    --foreground: var(--text);
+
+    --card: var(--surface-2);
+    --card-foreground: var(--text);
+
+    --popover: var(--surface-2);
+    --popover-foreground: var(--text);
+
+    --primary: var(--tt-cyan);
+    --primary-foreground: var(--tt-ink);
+
+    --secondary: var(--surface-3);
+    --secondary-foreground: var(--text);
+
+    --muted: var(--surface-2);
+    --muted-foreground: var(--text-muted);
+
+    --accent: var(--surface-3);
+    --accent-foreground: var(--text);
+
+    --destructive: var(--tt-orange);
+    --destructive-foreground: var(--tt-white);
+
+    --border: var(--hairline);
+    --input: var(--surface-4);
+    --ring: var(--tt-cyan);
+
+    --radius: 0.5rem;
+  }
+}
+
+body {
+  font-family: var(--sans, Roboto, system-ui, sans-serif);
+  background: var(--surface-0, #0a0a0a);
+  color: var(--text, #e8e8e8);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Base element resets for consistent rendering across Mac + Windows */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
