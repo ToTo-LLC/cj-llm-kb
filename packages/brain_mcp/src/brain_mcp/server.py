@@ -27,11 +27,13 @@ from brain_mcp.resources import brain_md as _brain_md_res
 from brain_mcp.resources import config_public as _config_public_res
 from brain_mcp.resources import domain_index as _domain_index_res
 from brain_mcp.tools import apply_patch as _apply_patch_tool
+from brain_mcp.tools import budget_override as _budget_override_tool
 from brain_mcp.tools import bulk_import as _bulk_import_tool
 from brain_mcp.tools import classify as _classify_tool
 from brain_mcp.tools import config_get as _config_get_tool
 from brain_mcp.tools import config_set as _config_set_tool
 from brain_mcp.tools import cost_report as _cost_report_tool
+from brain_mcp.tools import create_domain as _create_domain_tool
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
 from brain_mcp.tools import ingest as _ingest_tool
@@ -41,7 +43,9 @@ from brain_mcp.tools import list_pending_patches as _list_pending_patches_tool
 from brain_mcp.tools import propose_note as _propose_note_tool
 from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools import recent as _recent_tool
+from brain_mcp.tools import recent_ingests as _recent_ingests_tool
 from brain_mcp.tools import reject_patch as _reject_patch_tool
+from brain_mcp.tools import rename_domain as _rename_domain_tool
 from brain_mcp.tools import search as _search_tool
 from brain_mcp.tools import undo_last as _undo_last_tool
 from brain_mcp.tools.base import ToolContext, ToolModule
@@ -66,6 +70,11 @@ _TOOL_MODULES: list[ToolModule] = [
     _lint_tool,
     _config_get_tool,
     _config_set_tool,
+    # Plan 07 Task 4 — Inbox / Settings / Domain admin tools.
+    _recent_ingests_tool,
+    _create_domain_tool,
+    _rename_domain_tool,
+    _budget_override_tool,
 ]
 
 

@@ -93,6 +93,7 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
         summarize_model=_SUMMARIZE_MODEL,
         integrate_model=_INTEGRATE_MODEL,
         classify_model=_CLASSIFY_MODEL,
+        state_db=ctx.state_db,
     )
 
 

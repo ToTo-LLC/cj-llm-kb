@@ -38,10 +38,12 @@ mcp_app = typer.Typer(
 # Module-level singleton so ruff/B008 is happy — see brain_cli.commands.patches.
 _DEFAULT_VAULT = Path.home() / "Documents" / "brain"
 
-# Tool count registered by ``brain_mcp.server.create_server`` (Task 19 brought
-# the count to 18). ``selftest`` checks for at least this many tools so a
-# botched registration surfaces as a failure rather than a silent pass.
-_EXPECTED_TOOL_COUNT = 18
+# Tool count registered by ``brain_mcp.server.create_server``. Plan 04 Task 19
+# brought the count to 18; Plan 07 Task 4 added 4 more (recent_ingests,
+# create_domain, rename_domain, budget_override) → 22. ``selftest`` checks
+# for at least this many tools so a botched registration surfaces as a
+# failure rather than a silent pass.
+_EXPECTED_TOOL_COUNT = 22
 
 
 def _resolve_brain_mcp_command() -> str:

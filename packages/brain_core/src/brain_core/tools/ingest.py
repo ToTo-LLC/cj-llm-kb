@@ -69,6 +69,7 @@ def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
         summarize_model="claude-sonnet-4-6",
         integrate_model="claude-sonnet-4-6",
         classify_model="claude-haiku-4-5-20251001",
+        state_db=ctx.state_db,
     )
 
 

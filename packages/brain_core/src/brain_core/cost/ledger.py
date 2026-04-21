@@ -6,6 +6,11 @@ Plan 07 Task 3: entries now carry optional ``mode`` (chat: ``ask`` /
 UX surface. Both default ``None`` so every Plan 02-05 call site
 compiles unchanged; unrecorded-mode rows aggregate into the empty-
 string key in ``CostSummary.by_mode``.
+
+Plan 07 Task 4: ``is_over_budget(config, today)`` consults the
+``BudgetConfig.override_until`` / ``override_delta_usd`` fields so a
+short-lived override (set via the ``brain_budget_override`` tool)
+raises the effective daily cap until the timestamp expires.
 """
 
 from __future__ import annotations
@@ -14,6 +19,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from brain_core.config.schema import BudgetConfig
 
 
 @dataclass(frozen=True)
@@ -145,6 +154,30 @@ class CostLedger:
                 (f"{prefix}%",),
             ).fetchone()
         return float(row[0])
+
+    def is_over_budget(self, config: BudgetConfig, today: date) -> bool:
+        """Return True if today's spend exceeds the (override-aware) daily cap.
+
+        Effective cap = ``config.daily_usd`` plus ``config.override_delta_usd``
+        IFF ``config.override_until`` is set and lies in the future. An expired
+        override is ignored — the caller is expected to clear the fields via
+        the next config write (Plan 07 Task 5 lands the persistence layer that
+        does this automatically).
+
+        ``today`` is provided by the caller (rather than inferred from
+        ``datetime.now``) so callers can drive the check in tests with
+        deterministic dates.
+        """
+        spent = self.total_for_day(today)
+        cap = config.daily_usd
+        override_until = config.override_until
+        if override_until is not None:
+            now = datetime.now(tz=UTC)
+            if override_until.tzinfo is None:
+                override_until = override_until.replace(tzinfo=UTC)
+            if now < override_until:
+                cap = config.daily_usd + config.override_delta_usd
+        return spent > cap
 
     def summary(self, *, today: date, month: tuple[int, int]) -> CostSummary:
         """Return a typed summary: today's total, this month's total, today's

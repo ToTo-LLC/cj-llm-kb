@@ -15,6 +15,7 @@ from pathlib import Path
 
 from brain_core.ingest.classifier import classify
 from brain_core.ingest.dispatcher import DispatchError, dispatch
+from brain_core.ingest.hashing import content_hash
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestResult
 
@@ -27,6 +28,12 @@ class BulkItem:
     slug: str  # preliminary slug from IngestPipeline._slug_for
     classified_domain: str | None  # None if dry-run skipped classify (domain_override path)
     confidence: float | None  # None if no classify call was made
+    # Plan 07 Task 4: idempotency hint surfaced from the dry-run.
+    # ``True`` iff the file's content_hash already matches a source note
+    # under one of ``allowed_domains`` — applying it would no-op via the
+    # pipeline's stage-4 SKIPPED_DUPLICATE branch. The frontend uses this
+    # to render the bulk-import dry-run table's "dup" warn-chip.
+    duplicate: bool = False
 
 
 @dataclass
@@ -98,12 +105,28 @@ class BulkImporter:
             # Build the BulkItem
             slug = self._pipeline._slug_for(p)
 
+            # Compute the duplicate flag. Use the file's full bytes (decoded
+            # best-effort) hashed via the same ``content_hash`` helper the
+            # pipeline uses inside ``ingest()`` Stage 4 — keeps the dry-run's
+            # dup detection consistent with the apply path. Skip on read
+            # failure (the file is also probably going to fail apply, but
+            # that's a separate signal we don't override here).
+            duplicate = False
+            try:
+                file_bytes = p.read_bytes()
+                file_text = file_bytes.decode("utf-8", errors="replace")
+                chash = content_hash(file_text)
+                duplicate = self._pipeline._already_ingested(chash, allowed_domains)
+            except OSError:
+                pass
+
             if domain_override is not None:
                 item = BulkItem(
                     spec=p,
                     slug=slug,
                     classified_domain=domain_override,
                     confidence=None,
+                    duplicate=duplicate,
                 )
             else:
                 # Read up to 1000 bytes and decode best-effort
@@ -122,6 +145,7 @@ class BulkImporter:
                     slug=slug,
                     classified_domain=cls.domain,
                     confidence=cls.confidence,
+                    duplicate=duplicate,
                 )
 
             result.items.append(item)

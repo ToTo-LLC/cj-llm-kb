@@ -119,9 +119,10 @@ def test_selftest_subprocess_env_reads_from_installed_config(
             args=mcp_cmd._resolve_brain_mcp_args(),
             env=env,
         )
-        # Pretend tools/list returned 18 tools so the final sanity check passes
-        # without requiring a real subprocess.
-        return 18
+        # Pretend tools/list returned 22 tools so the final sanity check passes
+        # without requiring a real subprocess. Plan 07 Task 4 raised the
+        # registered tool count from 18 → 22.
+        return 22
 
     monkeypatch.setattr(mcp_cmd, "_subprocess_tools_list", fake_subprocess_tools_list)
 

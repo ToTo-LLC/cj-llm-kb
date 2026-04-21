@@ -11,9 +11,18 @@ from brain_core.state.db import StateDB
 
 
 class TestMigrations:
-    def test_first_open_records_schema_version_1(self, tmp_path: Path) -> None:
+    def test_first_open_records_latest_schema_version(self, tmp_path: Path) -> None:
+        """Plan 07 Task 4 added migration 0002 → latest version is 2."""
         with StateDB.open(tmp_path / "state.sqlite") as db:
-            assert db.schema_version() == 1
+            assert db.schema_version() == 2
+
+    def test_ingest_history_table_exists(self, tmp_path: Path) -> None:
+        """Plan 07 migration 0002 creates the ingest_history table."""
+        with StateDB.open(tmp_path / "state.sqlite") as db:
+            cur = db.exec(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='ingest_history'"
+            )
+            assert cur.fetchone() is not None
 
     def test_chat_threads_table_exists(self, tmp_path: Path) -> None:
         with StateDB.open(tmp_path / "state.sqlite") as db:

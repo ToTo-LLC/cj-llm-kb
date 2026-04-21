@@ -6,6 +6,7 @@ in the async `ingest()` method and wires the LLM round-trips.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
 from brain_core.prompts.loader import load_prompt
 from brain_core.prompts.schemas import SummarizeOutput
+from brain_core.state.db import StateDB
 from brain_core.vault.frontmatter import parse_frontmatter, serialize_with_frontmatter
 from brain_core.vault.types import NewFile, PatchSet
 from brain_core.vault.writer import VaultWriter
@@ -37,6 +39,11 @@ class IngestPipeline:
     summarize_model: str
     integrate_model: str
     classify_model: str
+    # Plan 07 Task 4: optional StateDB so ``ingest()`` can append a row to
+    # ``ingest_history`` after each run. Defaults to ``None`` so every Plan 02
+    # call site (tests, demo scripts) keeps compiling without change. When
+    # absent, ``_record_history`` is a no-op.
+    state_db: StateDB | None = None
 
     async def ingest(
         self,
@@ -94,6 +101,14 @@ class IngestPipeline:
             # Stage 4: Content hash + Idempotency
             chash = content_hash(extracted.body_text)
             if self._already_ingested(chash, allowed_domains):
+                self._record_history(
+                    source=str(spec),
+                    source_type=extracted.source_type.value,
+                    domain=tentative_domain,
+                    status=IngestStatus.SKIPPED_DUPLICATE.value,
+                    patch_id=None,
+                    error=None,
+                )
                 return IngestResult(
                     status=IngestStatus.SKIPPED_DUPLICATE,
                     note_path=None,
@@ -117,6 +132,14 @@ class IngestPipeline:
                 )
             domain = cls_result.domain
             if domain not in allowed_domains:
+                self._record_history(
+                    source=str(spec),
+                    source_type=extracted.source_type.value,
+                    domain=domain,
+                    status=IngestStatus.QUARANTINED.value,
+                    patch_id=None,
+                    error=f"domain {domain!r} not in allowed {allowed_domains}",
+                )
                 return IngestResult(
                     status=IngestStatus.QUARANTINED,
                     note_path=None,
@@ -149,7 +172,15 @@ class IngestPipeline:
 
             # Stage 9: Apply (or stage)
             if apply:
-                self.writer.apply(integrate_patch, allowed_domains=(domain,))
+                receipt = self.writer.apply(integrate_patch, allowed_domains=(domain,))
+                self._record_history(
+                    source=str(spec),
+                    source_type=extracted.source_type.value,
+                    domain=domain,
+                    status=IngestStatus.OK.value,
+                    patch_id=receipt.undo_id,
+                    error=None,
+                )
                 return IngestResult(
                     status=IngestStatus.OK,
                     note_path=note_path,
@@ -157,6 +188,14 @@ class IngestPipeline:
                 )
             # apply=False — return the PatchSet for the caller to stage/apply.
             # note_path is the INTENDED path; nothing has been written.
+            self._record_history(
+                source=str(spec),
+                source_type=extracted.source_type.value,
+                domain=domain,
+                status=IngestStatus.OK.value,
+                patch_id=None,
+                error=None,
+            )
             return IngestResult(
                 status=IngestStatus.OK,
                 note_path=note_path,
@@ -170,6 +209,14 @@ class IngestPipeline:
                 slug=slug,
                 stage="pipeline",
                 exception=exc,
+            )
+            self._record_history(
+                source=str(spec),
+                source_type=None,
+                domain=None,
+                status=IngestStatus.FAILED.value,
+                patch_id=None,
+                error=str(exc),
             )
             return IngestResult(
                 status=IngestStatus.FAILED,
@@ -270,6 +317,47 @@ class IngestPipeline:
             if line:
                 return line[:60]
         return "source"
+
+    def _record_history(
+        self,
+        *,
+        source: str,
+        source_type: str | None,
+        domain: str | None,
+        status: str,
+        patch_id: str | None,
+        error: str | None,
+    ) -> None:
+        """Append a row to ``ingest_history`` (Plan 07 Task 4).
+
+        Best-effort: any sqlite error is swallowed so a write-side failure
+        cannot break the ingest pipeline. Logs the failure via stderr so
+        operators still see it. ``state_db is None`` short-circuits — Plan
+        02 call sites that never wired a StateDB still work unchanged.
+        """
+        if self.state_db is None:
+            return
+        # ``ingest_history`` is observability, not correctness — a sqlite
+        # failure here must NOT break the pipeline. Suppress broadly so a
+        # malformed schema, locked DB, or missing migration degrades to
+        # silent skip rather than a user-visible ingest failure.
+        with contextlib.suppress(Exception):
+            self.state_db.exec(
+                "INSERT INTO ingest_history "
+                "(source, source_type, domain, status, patch_id, classified_at, cost_usd, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    source,
+                    source_type,
+                    domain,
+                    status,
+                    patch_id,
+                    datetime.now(tz=UTC).isoformat(),
+                    # TODO(plan-07+): wire ingest pricing once Task 3 stage-tagged costs land.
+                    0.0,
+                    error,
+                ),
+            )
 
     def _already_ingested(self, chash: str, domains: tuple[str, ...]) -> bool:
         """Return True if any source note in `domains` has matching `content_hash` frontmatter.

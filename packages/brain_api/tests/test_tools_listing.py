@@ -13,17 +13,27 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_lists_eighteen_tools_after_extraction(client: TestClient) -> None:
-    """After Group 2, the registry has all 18 tools auto-registered."""
+def test_lists_twenty_two_tools_after_plan07_task4(client: TestClient) -> None:
+    """After Plan 07 Task 4, the registry has all 22 tools auto-registered.
+
+    Plan 05 baseline: 18. Plan 07 Task 4 adds:
+      brain_recent_ingests, brain_create_domain,
+      brain_rename_domain, brain_budget_override.
+    """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 18
+    assert len(body["tools"]) == 22
     # Spot-check a few names across all 4 groups (read/ingest/patch/maintenance).
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
     assert "brain_apply_patch" in names
     assert "brain_cost_report" in names
+    # Plan 07 Task 4 additions.
+    assert "brain_recent_ingests" in names
+    assert "brain_create_domain" in names
+    assert "brain_rename_domain" in names
+    assert "brain_budget_override" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:

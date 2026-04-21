@@ -33,12 +33,13 @@ def test_name() -> None:
     assert NAME == "brain_config_set"
 
 
-def test_settable_keys_match_plan_07_task_1() -> None:
+def test_settable_keys_match_plan_07_task_4() -> None:
     """Allowlist is deliberately narrow; active_domain is NOT settable.
 
     Plan 04 baseline: ``budget.daily_usd`` + ``log_llm_payloads``.
     Plan 07 Task 1: adds the 5 ``autonomous.<category>`` flags.
     Plan 07 Task 2: adds the 3 per-mode ``{mode}_model`` overrides.
+    Plan 07 Task 4: adds ``domain_order`` + 2 ``budget.override_*`` fields.
     """
     assert (
         frozenset(
@@ -53,6 +54,9 @@ def test_settable_keys_match_plan_07_task_1() -> None:
                 "ask_model",
                 "brainstorm_model",
                 "draft_model",
+                "domain_order",
+                "budget.override_until",
+                "budget.override_delta_usd",
             }
         )
         == _SETTABLE_KEYS

@@ -381,3 +381,59 @@ async def test_apply_honors_per_item_classified_domain(
 
     # Exactly 6 LLM calls total: 2 classify (plan) + 2 summarize + 2 integrate.
     assert len(fake.requests) == 6
+
+
+# ---------------------------------------------------------------------------
+# Plan 07 Task 4 — BulkPlan.duplicate flag
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plan_marks_already_ingested_files_as_duplicate(
+    ephemeral_vault: Path, tmp_path: Path
+) -> None:
+    """A folder file whose ``content_hash`` matches an existing source note
+    must surface ``duplicate=True`` on the BulkItem so the dry-run UI can
+    flag it before the user spends LLM tokens on apply.
+    """
+    from brain_core.ingest.hashing import content_hash
+    from brain_core.vault.frontmatter import serialize_with_frontmatter
+
+    # Seed an existing source note with a known content_hash.
+    duplicate_text = "this exact body is already in the vault"
+    chash = content_hash(duplicate_text)
+    sources_dir = ephemeral_vault / "research" / "sources"
+    sources_dir.mkdir(exist_ok=True, parents=True)
+    fm = {
+        "title": "Existing",
+        "domain": "research",
+        "type": "source",
+        "created": "2026-04-01",
+        "updated": "2026-04-01",
+        "source_type": "text",
+        "source_url": None,
+        "content_hash": chash,
+        "ingested_by": "brain",
+    }
+    (sources_dir / "existing.md").write_text(
+        serialize_with_frontmatter(fm, body="# Existing\n"),
+        encoding="utf-8",
+    )
+
+    # Build the inbox folder: one duplicate, one fresh.
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "dup.txt").write_text(duplicate_text, encoding="utf-8")
+    (folder / "fresh.txt").write_text("brand new body", encoding="utf-8")
+
+    fake = FakeLLMProvider()
+    importer = BulkImporter(_make_pipeline(ephemeral_vault, fake))
+    plan = await importer.plan(
+        folder,
+        allowed_domains=("research",),
+        domain_override="research",
+    )
+
+    by_name = {item.spec.name: item for item in plan.items}
+    assert by_name["dup.txt"].duplicate is True
+    assert by_name["fresh.txt"].duplicate is False

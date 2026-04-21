@@ -62,6 +62,14 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         "ask_model",
         "brainstorm_model",
         "draft_model",
+        # Plan 07 Task 4: domain ordering for the sidebar + ephemeral
+        # budget override fields. ``domain_order`` is a list[str] mirroring
+        # the user's preferred sidebar order; the override fields are
+        # written by ``brain_budget_override`` directly but also exposed
+        # here so the Settings page can wipe them via brain_config_set.
+        "domain_order",
+        "budget.override_until",
+        "budget.override_delta_usd",
     }
 )
 
