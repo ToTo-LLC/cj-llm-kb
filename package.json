@@ -1,6 +1,12 @@
 {
-  "name": "brain-monorepo",
+  "name": "cj-llm-kb",
   "private": true,
   "version": "0.1.0",
-  "packageManager": "pnpm@9.12.0"
+  "packageManager": "pnpm@9.15.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "pnpm --filter brain_web dev",
+    "build": "pnpm --filter brain_web build",
+    "test": "pnpm --filter brain_web test"
+  }
 }
