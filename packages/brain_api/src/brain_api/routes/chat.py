@@ -89,6 +89,22 @@ logger = logging.getLogger("brain_api.chat")
 # thread_id concept.
 _THREAD_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
+# Windows reserves these device names as file aliases regardless of
+# extension — ``con.md`` / ``prn.md`` / ``com1.md`` all fail to create
+# on NTFS. The regex above accepts them (they are valid kebab-case),
+# so we filter them explicitly here. The persistence layer writes
+# ``<vault>/<domain>/chats/<thread_id>.md`` (see
+# ``brain_core.chat.persistence.ThreadPersistence.thread_path``); an
+# unfiltered reserved name would pass the handshake but raise
+# ``OSError`` at turn-commit time on Windows — silent persist failure,
+# no user-visible feedback.
+# Reference: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
 
 @router.websocket("/ws/chat/{thread_id}")
 async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
@@ -101,7 +117,9 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     """
     # 1. Validate thread_id shape BEFORE accept. Closing without accepting
     # is the cleanest rejection — no leaked state, no half-open socket.
-    if not _THREAD_ID_RE.match(thread_id):
+    # Second check rejects Windows reserved device names that slip past
+    # the regex — see ``_WINDOWS_RESERVED_NAMES`` for the rationale.
+    if not _THREAD_ID_RE.match(thread_id) or thread_id in _WINDOWS_RESERVED_NAMES:
         await websocket.close(code=1008, reason=f"invalid thread_id {thread_id!r}")
         return
 

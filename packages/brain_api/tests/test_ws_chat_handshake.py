@@ -91,6 +91,45 @@ def test_handshake_rejects_bad_thread_id(app: FastAPI) -> None:
             pass
 
 
+@pytest.mark.parametrize(
+    "reserved_name",
+    [
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        "com1",
+        "com9",
+        "lpt1",
+        "lpt9",
+    ],
+)
+def test_handshake_rejects_windows_reserved_thread_id(app: FastAPI, reserved_name: str) -> None:
+    """thread_id equal to a Windows reserved device name -> close(1008).
+
+    Plan 05 Task 23 cross-platform sweep finding: the bare regex
+    ``^[a-z0-9][a-z0-9-]{0,63}$`` accepted purely-alphanumeric names like
+    ``con`` / ``prn`` / ``com1``. On Windows 11, ``<vault>/research/chats/con.md``
+    cannot be created regardless of extension (NTFS reserves these as device
+    aliases), so the WS handshake would succeed but every turn's persist-to-
+    vault write would raise ``OSError`` at commit time. The user gets a chat
+    that appears to work but silently fails to persist.
+
+    This regression test pins the property on Mac (where ``con.md`` is a
+    valid filename) so we catch any future regression without needing a
+    Windows runner to reproduce the failure mode.
+    """
+    with TestClient(app, base_url="http://localhost") as fresh:
+        token = fresh.app.state.ctx.token
+        with (
+            pytest.raises(WebSocketDisconnect),
+            fresh.websocket_connect(
+                f"/ws/chat/{reserved_name}?token={token}", headers=_LOOPBACK_HEADERS
+            ),
+        ):
+            pass
+
+
 def test_handshake_rejects_evil_origin(app: FastAPI) -> None:
     """Middleware blocks WS upgrade from a non-loopback Origin (DNS rebinding / CSRF).
 
