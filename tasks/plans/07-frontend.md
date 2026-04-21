@@ -2212,3 +2212,490 @@ Main loop reviews:
 Before Task 11, confirm the shell + auth + client + store are stable — Groups 3/4/5 all consume these primitives.
 
 ---
+
+### Group 3 — Dialog system + setup wizard (Tasks 11–13)
+
+**Pattern:** dialogs + system overlays are the connective tissue between screens. Group 3 lands them standalone so Groups 4/5 can compose without reinventing. Setup wizard lands here too because it's technically a full-screen "dialog" — a first-run takeover that uses the same modal primitive.
+
+**Design reference:** the v3 design zip's `src/dialogs.jsx` + `src/dialogs-v3.jsx` + `src/screens.jsx` (SetupWizard) are the canonical implementations. Port them to TypeScript + shadcn/ui.
+
+**Single mount point:** all system overlays (OfflineBanner, BudgetWall, MidTurnToast, DropOverlay, ConnectionIndicator, dialog host) mount once in `app/layout.tsx`. Trigger via Zustand store actions; render conditionally. Avoids "which component owns the modal?" confusion.
+
+---
+
+### Task 11 — Dialog primitives (Modal + Reject/Edit/TypedConfirm)
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/lib/state/dialogs-store.ts` — Zustand store for dialog state
+- Create: `apps/brain_web/src/components/dialogs/modal.tsx` — base Modal wrapping shadcn's `Dialog` with eyebrow + footer slots
+- Create: `apps/brain_web/src/components/dialogs/reject-reason-dialog.tsx` — with preset chips + textarea
+- Create: `apps/brain_web/src/components/dialogs/edit-approve-dialog.tsx` — side-by-side before/after editor
+- Create: `apps/brain_web/src/components/dialogs/typed-confirm-dialog.tsx` — "type DELETE to confirm" pattern
+- Create: `apps/brain_web/src/components/dialogs/dialog-host.tsx` — reads dialogs-store, renders active dialog
+- Modify: `apps/brain_web/src/app/layout.tsx` — mount `<DialogHost />` inside `<AppShell>`
+- Create: `apps/brain_web/tests/unit/modal.test.tsx` — 3 tests (open/close, escape key, backdrop click)
+- Create: `apps/brain_web/tests/unit/reject-reason.test.tsx` — 3 tests (preset chip selection, textarea input, submit passes reason)
+- Create: `apps/brain_web/tests/unit/typed-confirm.test.tsx` — 3 tests (disabled until exact match, case-sensitive match, submit fires onConfirm)
+- Create: `apps/brain_web/tests/unit/dialog-store.test.ts` — 4 tests (open, close, switching active dialog, multiple modal stacking rejected)
+
+**Context for the implementer:**
+
+### Store shape
+
+```typescript
+// apps/brain_web/src/lib/state/dialogs-store.ts
+import { create } from "zustand";
+
+export type DialogKind =
+  | { kind: "reject-reason"; patchId: string; targetPath: string; onConfirm: (reason: string) => void }
+  | { kind: "edit-approve"; patchId: string; targetPath: string; before: string; after: string; onConfirm: (edited: string) => void }
+  | { kind: "typed-confirm"; title: string; eyebrow?: string; body: string; word: string; danger?: boolean; onConfirm: () => void }
+  | { kind: "file-to-wiki"; msg: { body: string; threadId: string }; onConfirm: (p: FileToWikiResult) => void }
+  | { kind: "fork"; thread: ThreadMeta; turnIndex: number; onConfirm: (p: ForkResult) => void }
+  | { kind: "rename-domain"; domain: DomainMeta; onConfirm: (from: string, to: string, rewrite: boolean) => void }
+  | { kind: "doc-picker"; onPick: (path: string) => void; onNewBlank: () => void };
+
+interface DialogsState {
+  active: DialogKind | null;
+  open: (d: DialogKind) => void;
+  close: () => void;
+}
+
+export const useDialogsStore = create<DialogsState>((set) => ({
+  active: null,
+  open: (d) => set({ active: d }),
+  close: () => set({ active: null }),
+}));
+```
+
+**One-dialog-at-a-time rule.** No stacking. If a dialog is open and another `open()` is called, the first is replaced. (Stacking modals is confusing UX + keyboard-trap nightmare; if a flow needs two modals the second is a sub-step of the first and chained via `onConfirm`.)
+
+### Base Modal
+
+```tsx
+// apps/brain_web/src/components/dialogs/modal.tsx
+"use client";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { X } from "lucide-react";
+
+interface ModalProps {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  eyebrow?: string;
+  width?: number;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+export function Modal({ open, onClose, title, eyebrow, width = 520, footer, children }: ModalProps) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent style={{ maxWidth: width }} className="modal-card">
+        <DialogHeader>
+          {eyebrow && <div className="eyebrow">{eyebrow}</div>}
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="modal-body">{children}</div>
+        {footer && <DialogFooter className="modal-foot">{footer}</DialogFooter>}
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+shadcn's `Dialog` handles: focus trap, escape-to-close, backdrop click, body-scroll-lock, ARIA labeling. We add eyebrow + footer slots to match the v3 design shape.
+
+### Reject reason dialog
+
+Presets from v3: `"Wrong domain"`, `"Already noted elsewhere"`, `"Source is unreliable"`, `"Too speculative"`, `"Formatting is off"`. Textarea for custom. Confirm button is `danger` variant.
+
+Submit handler calls `brain_reject_patch(patchId, reason)` via the typed API client from Task 9, then closes.
+
+### Edit-approve dialog
+
+Two-column layout. Left: current file content (read-only, dim styling for "new file" case). Right: editable textarea initialized with `after`. Footer shows char count + Save/Cancel. On save: calls `brain_apply_patch(patchId)` — but the backend supports only single-patch-id apply, not "apply with edit." Two options:
+
+**Option A — two-step:** user edits → dialog closes with the edited body → frontend calls `brain_reject_patch(patchId, "editing")` + `brain_propose_note(path, editedContent, "edited from patch")` → re-approves via `brain_apply_patch(newPatchId)`. Three round trips; clean semantics.
+
+**Option B — extend `brain_apply_patch`:** add an optional `edited_body` kwarg. On receipt, rewrite the patch's NewFile/Edit content, then apply. Atomic; backend change.
+
+**Recommendation: Option A.** No backend change, stays within the existing "all writes staged" invariant. Cost: three HTTP round-trips per edit-approve; cheap on localhost.
+
+Document this in the dialog's `onConfirm` handler comment so the implementer doesn't accidentally reach for option B.
+
+### Typed-confirm dialog
+
+Exact-match requirement on a user-provided `word` (e.g., `"DELETE"`, `"UNINSTALL"`, `"RESTORE"`, or a domain name). Confirm button disabled until `input === word`. Case-sensitive. Matches v3 design's `TypedConfirmDialog`.
+
+**Used by:** Settings → Domains → Delete; Settings → Backups → Restore; Settings → Integrations → Uninstall.
+
+### DialogHost
+
+```tsx
+// apps/brain_web/src/components/dialogs/dialog-host.tsx
+"use client";
+import { useDialogsStore } from "@/lib/state/dialogs-store";
+import { RejectReasonDialog } from "./reject-reason-dialog";
+import { EditApproveDialog } from "./edit-approve-dialog";
+import { TypedConfirmDialog } from "./typed-confirm-dialog";
+// Task 20 adds: FileToWikiDialog, ForkDialog, RenameDomainDialog
+// Task 19 adds: DocPickerDialog
+
+export function DialogHost() {
+  const active = useDialogsStore((s) => s.active);
+  const close = useDialogsStore((s) => s.close);
+
+  if (!active) return null;
+
+  switch (active.kind) {
+    case "reject-reason": return <RejectReasonDialog {...active} onClose={close} />;
+    case "edit-approve": return <EditApproveDialog {...active} onClose={close} />;
+    case "typed-confirm": return <TypedConfirmDialog {...active} onClose={close} />;
+    // Task 19/20 cases filled in then.
+    default: return null;
+  }
+}
+```
+
+### Step 1 — Failing tests
+
+Cover each dialog's core interactions + the store's single-active contract.
+
+### Step 2 — Implement
+
+See sketches. Each dialog component accepts its own typed props + an `onClose` — the host coordinates.
+
+### Step 3 — Run + commit
+
+Expected: **~13 new tests** (3 + 3 + 3 + 4). Manual smoke: trigger each dialog via the store from a dev panel or console.
+
+```bash
+git commit -m "feat(web): plan 07 task 11 — dialog primitives (Modal + RejectReason + EditApprove + TypedConfirm)"
+```
+
+---
+
+### Task 12 — System overlays (Offline + Budget + MidTurn + Drop + ConnectionIndicator)
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/lib/state/system-store.ts` — Zustand for system UI state (connection, budget-wall-open, mid-turn-kind, dragging, toasts)
+- Create: `apps/brain_web/src/components/system/offline-banner.tsx`
+- Create: `apps/brain_web/src/components/system/budget-wall.tsx` — modal + session breakdown + model-switch hint
+- Create: `apps/brain_web/src/components/system/mid-turn-toast.tsx` — 5 kinds (rate-limit, context-full, tool-failed, invalid-state-turn, invalid-state-mode)
+- Create: `apps/brain_web/src/components/system/drop-overlay.tsx` — fullscreen drag-to-attach
+- Create: `apps/brain_web/src/components/system/connection-indicator.tsx` — topbar pip
+- Create: `apps/brain_web/src/components/system/system-overlays.tsx` — compositor that mounts all of the above
+- Create: `apps/brain_web/src/components/system/toasts.tsx` — toast list with undo + countdown + auto-dismiss
+- Modify: `apps/brain_web/src/app/layout.tsx` — mount `<SystemOverlays />` alongside `<DialogHost />`
+- Modify: `apps/brain_web/src/components/shell/topbar.tsx` — include `<ConnectionIndicator />`
+- Modify: `apps/brain_web/src/lib/ws/hooks.ts` — `useWebSocket(threadId)` drives `connection` state
+- Create: `apps/brain_web/tests/unit/budget-wall.test.tsx` — 3 tests (renders cost breakdown, raise-cap button triggers `brain_budget_override`, close dismisses)
+- Create: `apps/brain_web/tests/unit/mid-turn-toast.test.tsx` — 6 tests (one per kind + dismiss + retry)
+- Create: `apps/brain_web/tests/unit/offline-banner.test.tsx` — 2 tests (offline copy, reconnecting copy)
+- Create: `apps/brain_web/tests/unit/drop-overlay.test.tsx` — 2 tests (renders when dragging, hidden otherwise)
+- Create: `apps/brain_web/tests/unit/system-store.test.ts` — 5 tests (dispatch actions, toast auto-dismiss timer, mid-turn kind switching, connection transitions, drag-enter/leave app-level handlers)
+
+**Context for the implementer:**
+
+### System store
+
+```typescript
+// apps/brain_web/src/lib/state/system-store.ts
+import { create } from "zustand";
+
+export type ConnectionState = "ok" | "reconnecting" | "offline";
+export type MidTurnKind = "rate-limit" | "context-full" | "tool-failed" | "invalid-state-turn" | "invalid-state-mode";
+
+export interface Toast {
+  id: string;
+  lead: string;
+  msg: string;
+  icon?: string;
+  variant?: "default" | "success" | "warn" | "danger";
+  countdown?: number;
+  undo?: () => void;
+}
+
+interface SystemState {
+  connection: ConnectionState;
+  budgetWallOpen: boolean;
+  midTurn: MidTurnKind | null;
+  draggingFile: boolean;
+  toasts: Toast[];
+
+  setConnection: (s: ConnectionState) => void;
+  openBudgetWall: () => void;
+  closeBudgetWall: () => void;
+  setMidTurn: (k: MidTurnKind | null) => void;
+  setDragging: (v: boolean) => void;
+  pushToast: (t: Omit<Toast, "id">) => void;
+  dismissToast: (id: string) => void;
+}
+
+export const useSystemStore = create<SystemState>((set, get) => ({
+  connection: "ok",
+  budgetWallOpen: false,
+  midTurn: null,
+  draggingFile: false,
+  toasts: [],
+
+  setConnection: (connection) => set({ connection }),
+  openBudgetWall: () => set({ budgetWallOpen: true }),
+  closeBudgetWall: () => set({ budgetWallOpen: false }),
+  setMidTurn: (midTurn) => set({ midTurn }),
+  setDragging: (draggingFile) => set({ draggingFile }),
+  pushToast: (t) => {
+    const id = String(Date.now() + Math.random());
+    set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
+    // Auto-dismiss after 6s if no countdown was specified.
+    if (!t.countdown) {
+      setTimeout(() => get().dismissToast(id), 6000);
+    }
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+}));
+```
+
+### BudgetWall modal
+
+Shows cost breakdown by mode (from `brain_cost_report` response — uses `by_mode` field added in Task 3). "Raise cap by $5 for today" button calls `brain_budget_override(5, 24)` (Task 4) → closes + `pushToast({lead: "Cap raised.", msg: "Today's cap is now $X.XX"})`.
+
+Also shows the heaviest turn (derive from `brain_cost_report` history — future Plan 09 richer data) and a model-switch hint.
+
+### MidTurnToast
+
+Copy from delta-v2 §M3 + v3 design's 5-kind map:
+
+```typescript
+const COPY: Record<MidTurnKind, { lead: string; msg: string; icon: string; tone: "warn" | "danger" }> = {
+  "rate-limit": { lead: "Rate limit.", msg: "Anthropic slowed us down. Retrying in 8s — or retry now.", icon: "alert", tone: "warn" },
+  "context-full": { lead: "Context full.", msg: "Compact the thread to keep going, or start a fresh one.", icon: "layers", tone: "warn" },
+  "tool-failed": { lead: "Tool failed.", msg: "A tool couldn't complete — the vault path may not be reachable.", icon: "x", tone: "danger" },
+  "invalid-state-turn": { lead: "Finish this turn first.", msg: "Wait for it to complete, or cancel to start fresh.", icon: "clock", tone: "warn" },
+  "invalid-state-mode": { lead: "Can't switch mid-turn.", msg: "Mode change takes effect on the next turn.", icon: "alert", tone: "warn" },
+};
+```
+
+Non-blocking, auto-dismisses on next turn event (Task 15 wires this in the WS event handler).
+
+### DropOverlay
+
+Full-screen fixed overlay, pointer-events none until `draggingFile === true`. Centered card: "Drop to attach — brain will ingest and summarize before filing." File type chips (pdf, txt · md, eml, url) per v3 design.
+
+Wire drag handlers at `<AppShell>` level:
+
+```tsx
+// app-shell.tsx
+onDragEnter={(e) => {
+  if (e.dataTransfer?.types?.includes("Files")) useSystemStore.getState().setDragging(true);
+}}
+onDragLeave={(e) => { if (e.relatedTarget === null) useSystemStore.getState().setDragging(false); }}
+onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); }}
+onDrop={(e) => {
+  e.preventDefault();
+  useSystemStore.getState().setDragging(false);
+  // Task 17 wires the actual ingest pipeline call.
+}}
+```
+
+### ConnectionIndicator
+
+Small pip in topbar. `ok` → hidden. `reconnecting` → yellow dot + "reconnecting…". `offline` → red dot + "offline". Reads `connection` from system-store.
+
+### SystemOverlays compositor
+
+```tsx
+// components/system/system-overlays.tsx
+"use client";
+import { useSystemStore } from "@/lib/state/system-store";
+import { OfflineBanner } from "./offline-banner";
+import { BudgetWall } from "./budget-wall";
+import { MidTurnToast } from "./mid-turn-toast";
+import { DropOverlay } from "./drop-overlay";
+import { Toasts } from "./toasts";
+
+export function SystemOverlays() {
+  const { connection, budgetWallOpen, midTurn, draggingFile, toasts, closeBudgetWall, setMidTurn, dismissToast } = useSystemStore();
+  return (
+    <>
+      {connection !== "ok" && <OfflineBanner state={connection} />}
+      <BudgetWall open={budgetWallOpen} onClose={closeBudgetWall} />
+      {midTurn && <MidTurnToast kind={midTurn} onDismiss={() => setMidTurn(null)} />}
+      <DropOverlay visible={draggingFile} />
+      <Toasts toasts={toasts} dismiss={dismissToast} />
+    </>
+  );
+}
+```
+
+### WS ↔ connection wiring
+
+```typescript
+// lib/ws/hooks.ts — useWebSocket hook
+export function useWebSocket(threadId: string | null, token: string | null) {
+  const setConnection = useSystemStore((s) => s.setConnection);
+  // ...
+  // On WS open: setConnection("ok")
+  // On WS close (non-manual): setConnection("reconnecting")
+  // On reconnect exhausted: setConnection("offline")
+}
+```
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~18 new tests** (3 + 6 + 2 + 2 + 5). All dialogs + overlays render at the right times driven by store state.
+
+```bash
+git commit -m "feat(web): plan 07 task 12 — system overlays (OfflineBanner + BudgetWall + MidTurnToast + DropOverlay)"
+```
+
+---
+
+### Task 13 — Setup wizard (6 steps + auto-detect first-run)
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/setup/page.tsx` — full-screen wizard container
+- Create: `apps/brain_web/src/components/setup/wizard.tsx` — stepper + navigation
+- Create: `apps/brain_web/src/components/setup/steps/welcome.tsx`
+- Create: `apps/brain_web/src/components/setup/steps/vault-location.tsx`
+- Create: `apps/brain_web/src/components/setup/steps/api-key.tsx`
+- Create: `apps/brain_web/src/components/setup/steps/starting-theme.tsx`
+- Create: `apps/brain_web/src/components/setup/steps/brain-md.tsx`
+- Create: `apps/brain_web/src/components/setup/steps/claude-desktop.tsx`
+- Create: `apps/brain_web/src/lib/setup/detect.ts` — server-side first-run detection
+- Modify: `apps/brain_web/src/app/page.tsx` — Server Component: read detect result, redirect to `/setup` if first-run
+- Create: `apps/brain_web/tests/unit/setup-detect.test.ts` — 4 tests (missing BRAIN.md → true, exists → false, missing token → true, both present → false)
+- Create: `apps/brain_web/tests/unit/wizard.test.tsx` — 5 tests (back/next navigation, step 1 skip link, final step closes wizard, step 2 vault validation, step 3 API key save)
+- Create: `apps/brain_web/tests/e2e/setup-wizard.spec.ts` — Playwright (deferred to Task 23 actually but scaffolded here)
+
+**Context for the implementer:**
+
+### First-run detection
+
+```typescript
+// apps/brain_web/src/lib/setup/detect.ts
+// Server-only — runs in Server Components.
+import { access } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { readToken } from "@/lib/auth/token";
+
+export interface SetupStatus {
+  isFirstRun: boolean;
+  hasVault: boolean;
+  hasToken: boolean;
+  hasBrainMd: boolean;
+  hasApiKey: boolean;
+}
+
+export async function detectSetupStatus(): Promise<SetupStatus> {
+  const vaultRoot = process.env.BRAIN_VAULT_ROOT || join(homedir(), "Documents", "brain");
+
+  const hasVault = await fileExists(vaultRoot);
+  const hasToken = (await readToken()) !== null;
+  const hasBrainMd = await fileExists(join(vaultRoot, "BRAIN.md"));
+  // API key check — try a cheap brain_config_get roundtrip server-side
+  const hasApiKey = hasToken ? await pingApi() : false;
+
+  return {
+    isFirstRun: !hasVault || !hasBrainMd || !hasApiKey,
+    hasVault, hasToken, hasBrainMd, hasApiKey,
+  };
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try { await access(path); return true; } catch { return false; }
+}
+
+async function pingApi(): Promise<boolean> {
+  // GET /healthz via the proxy; signal that backend is responsive.
+  // Don't actually call brain_config_get here — keeps the detection cheap.
+  // ...
+}
+```
+
+### Root page → routing
+
+```tsx
+// apps/brain_web/src/app/page.tsx (SERVER COMPONENT)
+import { redirect } from "next/navigation";
+import { detectSetupStatus } from "@/lib/setup/detect";
+
+export default async function RootPage() {
+  const status = await detectSetupStatus();
+  if (status.isFirstRun) {
+    redirect("/setup");
+  }
+  redirect("/chat");
+}
+```
+
+### Wizard structure
+
+6 steps matching v3's `SetupWizard`:
+
+1. **Welcome.** Copy: "A knowledge base that stays on your machine, run by an LLM you control. Nothing leaves this computer unless you tell it to." Skip link "Already set up → open app" (bottom-right).
+2. **Vault location.** Default `~/Documents/brain`. Hint: "Your vault is a plain folder. Point Obsidian at it if you want."
+3. **LLM provider.** Paste Anthropic API key. "Test" button pings. Link to "Get an API key →".
+4. **Starting theme.** 4 cards — Research / Work / Personal / Blank. Picking one seeds `<vault>/<slug>/index.md` with a welcome note (patch staged via `brain_propose_note`).
+5. **BRAIN.md.** Optional. Pre-filled template. Save triggers `brain_propose_note("BRAIN.md", content, "setup wizard seed")`.
+6. **Claude Desktop integration.** Detect via `brain mcp status` (new helper tool wrapping Plan 04 integration module OR just checking the config file exists). Offer "Install MCP" button → calls `brain mcp install` equivalent (again, Plan 04 shipped this as a CLI verb; Plan 07 may need a `brain_mcp_install` tool that wraps `brain_core.integrations.claude_desktop.install`).
+
+**Plan 04 MCP install integration note:** Plan 04 shipped `brain mcp install/uninstall/selftest/status` as CLI verbs. Plan 07's wizard needs to trigger these from the frontend — either:
+- **Option X** — add new tools `brain_mcp_install`, `brain_mcp_uninstall`, `brain_mcp_status` to brain_core that wrap `brain_core.integrations.claude_desktop`. Clean; tool surface grows 22 → 25.
+- **Option Y** — Next.js server-side route that execs `brain mcp install` as a subprocess. Ugly; couples frontend to CLI.
+
+**Recommendation: Option X.** Add to Task 4 scope (tool surface growth was 18 → 22 with 4 tools; adding 3 more makes it 25). Document.
+
+### Wizard state
+
+Keep local to `<Wizard />` via `useState` — no need for Zustand persistence. Each step's form state lives in the step component. Next/Back buttons navigate. Final step "Start using brain" closes + sets localStorage flag `brain-setup-done=1` + redirects to `/chat`.
+
+### Step 1 — Failing tests
+
+Unit tests for detect + wizard. E2E scaffolded in Task 23.
+
+### Step 2 — Implement
+
+Port v3 design's `SetupWizard` to TypeScript. Each step is a separate component consuming form props + emitting to parent.
+
+### Step 3 — Run + commit
+
+Expected: **~9 new tests** (4 detect + 5 wizard).
+
+```bash
+git commit -m "feat(web): plan 07 task 13 — setup wizard (6 steps + first-run auto-detect)"
+```
+
+---
+
+**Checkpoint 3 — pause for main-loop review.**
+
+13 tasks landed. Dialog + setup infrastructure:
+- Dialog host mounted once; store-driven single-active-dialog pattern
+- 3 dialog primitives (RejectReason, EditApprove, TypedConfirm) — 4 more land in Group 5 (FileToWiki, Fork, RenameDomain, DocPicker)
+- 5 system overlays (OfflineBanner, BudgetWall, MidTurnToast, DropOverlay, ConnectionIndicator)
+- Toasts with undo + countdown
+- 6-step setup wizard + first-run auto-detect via Server Component
+
+Main loop reviews:
+
+- **Edit-approve flow**: three round trips (reject old + propose new + apply new) per user edit. Acceptable for localhost; document in lessons.
+- **MCP install from frontend**: recommended adding 3 new tools (`brain_mcp_install`/`uninstall`/`status`) to Task 4's scope. Retrocon Task 4 or add as a small Task 13a? Adding to Task 4 is cleaner — tool surface becomes **25 tools**. Confirm.
+- **First-run detection**: uses `access()` + `readToken()` + `pingApi()`. Pinging API for every route hit is wasteful. Cache the status in a module-level variable? Invalidate on SIGHUP? Or accept that SSR re-runs are cheap enough?
+- **Setup step 4 vault seeding**: pick-a-theme seeds index.md via `brain_propose_note`. This goes through the pending queue by default. Should the setup flow auto-apply (since the user just chose it) via `autonomous.ingest=true` temporarily? Or require explicit approval? (Explicit approval is an extra click on setup — friction — but matches the "every write staged" invariant. Lean toward auto-apply during setup, document as an exception.)
+
+Before Task 14, confirm the dialog + system-overlay primitives + setup wizard are stable — Group 4 starts consuming them for Chat.
+
+---
