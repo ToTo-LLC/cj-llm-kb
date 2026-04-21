@@ -3424,3 +3424,903 @@ Expected cumulative test count after Group 4: **~78 frontend tests** (21 + 12 + 
 Before Task 19, confirm the core screen surface is stable — Group 5 fills in Draft / Bulk / specialized dialogs / Settings.
 
 ---
+
+### Group 5 — Specialized flows (Tasks 19–22)
+
+**Pattern:** the less-frequent but still-first-class flows. Draft mode, dialogs that surface from chat actions, bulk import, and all 8 Settings panels. Design reference for each: v3 zip's `src/{draft.jsx, dialogs-v3.jsx, bulk.jsx, settings.jsx}`. Port to TS + shadcn.
+
+**Implicit scope extension acknowledged:** 4 tools surfaced by Groups 3 + 4 (`brain_mcp_install`, `brain_mcp_uninstall`, `brain_mcp_status`, `brain_get_pending_patch`) land as part of Task 25's sweep. Task 4's original 4-tool list grows to 8 by plan close. Tool surface: **18 → 26**.
+
+---
+
+### Task 19 — Draft mode (DocPicker + DocPanel + doc_edit_proposed rendering)
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/components/draft/draft-empty.tsx` — "pick a document / start a blank" prompt
+- Create: `apps/brain_web/src/components/draft/doc-picker-dialog.tsx` — fuzzy-filter list + new-scratch option
+- Create: `apps/brain_web/src/components/draft/doc-panel.tsx` — side panel with reader + pending-edits banner + Apply/Discard
+- Create: `apps/brain_web/src/lib/state/draft-store.ts` — Zustand: activeDoc + pendingEdits
+- Create: `apps/brain_web/src/lib/draft/render-edits.ts` — renders doc body with pending edits as highlighted spans
+- Modify: `apps/brain_web/src/components/chat/chat-screen.tsx` — split view when `mode === "draft"` + activeDoc
+- Modify: `apps/brain_web/src/lib/ws/hooks.ts` — `useChatWebSocket` handles `doc_edit_proposed` events
+- Modify: `apps/brain_web/src/components/dialogs/dialog-host.tsx` — route "doc-picker" kind to DocPickerDialog
+- Create: `apps/brain_web/tests/unit/draft-store.test.ts` — 5 tests (open/close doc, add pending edit, apply clears pending, reject clears pending, scratch doc creates path)
+- Create: `apps/brain_web/tests/unit/doc-picker.test.tsx` — 4 tests (fuzzy filter works, domain chip renders, scratch option creates scratch path, enter opens highlighted)
+- Create: `apps/brain_web/tests/unit/render-edits.test.ts` — 4 tests (insert span, delete span, replace span, no-op preserves body)
+
+**Context for the implementer:**
+
+### Draft store
+
+```typescript
+// apps/brain_web/src/lib/state/draft-store.ts
+export interface ActiveDoc {
+  path: string;
+  domain: string;
+  body: string;          // current doc content (rendered as-is in DocPanel)
+  frontmatter: string;   // raw YAML block rendered dim at top
+  pendingEdits: DocEdit[];  // from doc_edit_proposed WS events
+}
+
+export interface DocEdit {
+  op: "insert" | "delete" | "replace";
+  anchor: { kind: "line" | "text"; value: number | string };
+  text: string;
+}
+
+interface DraftState {
+  activeDoc: ActiveDoc | null;
+
+  openDoc: (doc: ActiveDoc) => void;
+  closeDoc: () => void;
+  appendEdit: (edit: DocEdit) => void;
+  applyPendingEdits: () => void;   // merges pendingEdits into body → triggers brain_apply_patch or autonomous
+  rejectPendingEdits: () => void;  // clears pendingEdits → body unchanged
+}
+```
+
+### DraftEmpty
+
+Rendered in the transcript container when `mode === "draft" && activeDoc === null`. Two actions:
+- **Open from vault** → opens DocPickerDialog
+- **New blank doc** → creates scratch doc at `<activeScope[0]>/scratch/<yyyy-mm-dd>-untitled.md` (remember spec §4 update in Task 5 added `scratch/` convention)
+
+### DocPickerDialog
+
+Fuzzy-filter input + scrollable list of vault docs. Each row: path (dim dir + highlighted slug) + domain chip + word-count + relative mtime. Enter on highlighted row selects. "Start a blank scratch doc" option at the bottom (separated by a divider) with its own scratch-path preview.
+
+Fetches docs via `brain_recent` (Plan 04 tool) — limits to 200 most-recent + filters by `scope`.
+
+### DocPanel
+
+Right side panel when a Draft-mode doc is open. Layout:
+- **Head**: Close button + path breadcrumb (clickable to reopen picker) + Obsidian link
+- **Diff banner** (if `pendingEdits.length > 0`): icon + count + "Review inline, then apply" + Discard + Apply buttons
+- **Toolbar**: Reading / Outline segmented control + word count
+- **Body**: renders doc with pending edits inline as highlighted `<ins>` and `<del>` spans
+- **Foot**: "saved · filename" + Change-doc button
+
+**Apply action:** per Plan 07 decision D4a + config. If `config.autonomous.draft === true`: call `brain_propose_note(path, merged_body, reason)` → auto-apply (the autonomy gate from Task 1 handles the bypass). Else: stage the patch; user reviews in Pending.
+
+### Inline edit rendering
+
+```typescript
+// apps/brain_web/src/lib/draft/render-edits.ts
+export function renderWithEdits(body: string, edits: DocEdit[]): React.ReactNode[] {
+  // Sort edits by anchor position; walk body; insert/delete/replace spans
+  // with <span className="pending-edit"> for inserts, <del> for deletes,
+  // <span className="replace-with">old → <span className="pending-edit">new</span></span> for replacements.
+  // Returns React nodes for the DocPanel body.
+}
+```
+
+Matches v3 design's `⟦+…⟧` / `⟦-…⟧` sentinel approach — but driven by typed events, not prose tokens.
+
+### WS event routing for DOC_EDIT
+
+```typescript
+// useChatWebSocket already handles doc_edit_proposed:
+case "doc_edit_proposed":
+  for (const edit of ev.edits) {
+    draftStore.appendEdit(edit);
+  }
+  break;
+```
+
+### Chat screen split-view
+
+When `mode === "draft" && activeDoc !== null`:
+
+```tsx
+<div className="chat-with-doc grid grid-cols-[1fr_420px] h-full">
+  <div className="chat-column">{/* Transcript + Composer */}</div>
+  <DocPanel />
+</div>
+```
+
+Right rail (Pending) hidden during Draft split-view (see app-shell logic from Task 10: `showRail = state.railOpen && railContent && !state.activeDoc`).
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~13 new tests**.
+
+```bash
+git commit -m "feat(web): plan 07 task 19 — Draft mode (DocPicker + DocPanel + doc_edit_proposed rendering)"
+```
+
+---
+
+### Task 20 — FileToWiki + Fork + RenameDomain dialogs
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/components/dialogs/file-to-wiki-dialog.tsx` — note-type picker + path builder + collision detection + preview
+- Create: `apps/brain_web/src/components/dialogs/fork-dialog.tsx` — source summary + mode + scope + carry + title
+- Create: `apps/brain_web/src/components/dialogs/rename-domain-dialog.tsx` — slug input + rewrite-frontmatter checkbox + warning
+- Modify: `apps/brain_web/src/components/dialogs/dialog-host.tsx` — register three new kinds
+- Modify: `apps/brain_web/src/lib/state/dialogs-store.ts` — typed payloads for each new dialog
+- Create: `apps/brain_web/src/lib/vault/path-builder.ts` — `buildPath(domain, type, slug)`, `checkCollision(path)` helpers
+- Create: `apps/brain_web/tests/unit/file-to-wiki.test.tsx` — 5 tests (note type switches subdir, slug kebab-coerced, collision detected, preview renders frontmatter + body, submit calls brain_propose_note)
+- Create: `apps/brain_web/tests/unit/fork-dialog.test.tsx` — 5 tests (carry toggles between 3 options, mode picker, scope toggle, title pre-filled, submit calls ChatSession.fork_from endpoint)
+- Create: `apps/brain_web/tests/unit/rename-domain.test.tsx` — 4 tests (slug validation, rewrite-frontmatter checkbox, warn about N files, submit calls brain_rename_domain)
+
+**Context for the implementer:**
+
+### FileToWiki dialog
+
+Triggered from chat message actions. Payload: `{msg, thread}`.
+
+Flow per design-delta §M2 + v3 design:
+1. **Note type picker** — 4 cards: Source / Concept / Entity / Synthesis (v3 used "Person" — switch to "Entity" to match vault convention `entities/` — covered by delta-v2 V1 fix)
+2. **Path builder** — domain selector (defaults to thread's primary domain) + subdir (auto from type) + optional date prefix (source + synthesis) + slug (editable, kebab-coerced) + `.md` suffix
+3. **Collision detection** — `checkCollision(path)` hits `brain_read_note({path})` with a 404-tolerant wrapper; collision surfaces as inline warning "A note already exists at this path. Change the slug or it'll be staged as an append."
+4. **Preview** — rendered frontmatter + body snippet (first 3 paragraphs)
+5. **Submit** — stages a patch via `brain_propose_note`
+
+### ForkDialog
+
+Payload: `{thread, turnIndex, msg}`.
+
+Per D3a (pinned): 3 carry modes. Calls a new `brain_fork_thread` tool at submit — wait, no, `ChatSession.fork_from` is in Task 5 as brain_core code but no MCP/API tool exposes it yet. **Surface a new tool at plan close:** `brain_fork_thread({source_id, turn_index, carry, mode, title_hint})` wrapping `ChatSession.fork_from`. Returns `{new_thread_id}`.
+
+**Tool count update (cumulative through Group 5):** **18 → 26 + 1 = 27 tools** including `brain_fork_thread`. Plus future `brain_wikilink_status` if Plan 09 lands it.
+
+Submit flow: calls `brain_fork_thread`, gets `new_thread_id`, `router.push("/chat/" + new_thread_id)`.
+
+### RenameDomainDialog
+
+Payload: `{domain: {id, name, count, color}}`.
+
+Per D2a: atomic tool with UndoLog. Dialog has:
+- New slug input (kebab-validated)
+- Rewrite-frontmatter checkbox (default checked)
+- Warning block: "This rewrites N files and every [[wikilink]] that points into `<from>/`. brain stages it as one big patch — you still approve it before anything touches disk. It's reversible via your backup."
+
+**Reversibility note** — the warning copy is slightly wrong: per D2a the rename is atomic via UndoLog, NOT staged as a patch. Update copy: *"brain renames the folder and rewrites references atomically. The operation is reversible via Undo last."*
+
+Submit: calls `brain_rename_domain({from, to, rewrite_frontmatter})`.
+
+### Path builder utility
+
+```typescript
+// apps/brain_web/src/lib/vault/path-builder.ts
+const SUBDIR_BY_TYPE = {
+  source: "sources",
+  concept: "concepts",
+  entity: "entities",      // was "people" in v3 — delta-v2 V1 fix
+  synthesis: "synthesis",
+};
+
+const DATE_PREFIXED_TYPES = new Set(["source", "synthesis"]);
+
+export function buildVaultPath(domain: string, noteType: string, slug: string): string {
+  const subdir = SUBDIR_BY_TYPE[noteType];
+  const today = new Date().toISOString().slice(0, 10);
+  const prefixed = DATE_PREFIXED_TYPES.has(noteType) ? `${today}-${slug}` : slug;
+  return `${domain}/${subdir}/${prefixed}.md`;
+}
+
+export async function checkCollision(path: string): Promise<boolean> {
+  try {
+    await readNote(path);
+    return true;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return false;
+    throw err;
+  }
+}
+```
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~14 new tests**.
+
+```bash
+git commit -m "feat(web): plan 07 task 20 — FileToWiki + Fork + RenameDomain dialogs"
+```
+
+---
+
+### Task 21 — Bulk import 4-step flow
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/bulk/page.tsx`
+- Create: `apps/brain_web/src/components/bulk/bulk-screen.tsx` — stepper + body
+- Create: `apps/brain_web/src/components/bulk/step-pick-folder.tsx`
+- Create: `apps/brain_web/src/components/bulk/step-target-domain.tsx` — auto-classify + per-domain route cards + cap input
+- Create: `apps/brain_web/src/components/bulk/step-dry-run.tsx` — review table with per-file checkbox + route + confidence + notes
+- Create: `apps/brain_web/src/components/bulk/step-apply.tsx` — progress bar + per-file apply state + cancel
+- Create: `apps/brain_web/src/components/bulk/stepper.tsx` — numbered steps with done/active state
+- Create: `apps/brain_web/src/lib/state/bulk-store.ts` — Zustand: step + folder + domain + cap + files + applying + applyIdx + cancelled + done
+- Create: `apps/brain_web/tests/unit/bulk-store.test.ts` — 6 tests (step transitions, cap threshold enforces, toggle-include, route change, progress advances, cancel stops loop)
+- Create: `apps/brain_web/tests/unit/dry-run-table.test.tsx` — 5 tests (renders rows, toggle-include updates count, route dropdown updates, skipped row dim, duplicate warn-chip)
+- Create: `apps/brain_web/tests/unit/bulk-apply.test.ts` — 4 tests (sequential apply, cancel mid-loop, failed items tracked, final summary correct)
+
+**Context for the implementer:**
+
+### Bulk store
+
+```typescript
+// apps/brain_web/src/lib/state/bulk-store.ts
+export interface BulkFile {
+  id: number;
+  name: string;          // from folder walk
+  type: "pdf" | "text" | "doc" | "img" | "email" | "url" | "sys";
+  size: string;
+  classified: string | null;
+  confidence: number | null;
+  include: boolean;
+  duplicate?: boolean;   // from Plan 07 Task 4's BulkPlan.items[].duplicate
+  uncertain?: boolean;   // derived: confidence < 0.7
+  flagged?: "personal";  // derived: classified === "personal"
+  skip?: string;         // reason if unsupported (.DS_Store, images without OCR, etc.)
+}
+
+interface BulkState {
+  step: 1 | 2 | 3 | 4;
+  folder: { path: string; fileCount: number; picked: string } | null;
+  domain: "auto" | string;
+  cap: number;
+  files: BulkFile[];
+  applying: boolean;
+  applyIdx: number;
+  cancelled: boolean;
+  done: boolean;
+  results: { applied: string[]; failed: string[]; quarantined: string[] };
+
+  // actions
+  pickFolder: (path: string, files: BulkFile[]) => void;
+  setDomain: (d: "auto" | string) => void;
+  setCap: (n: number) => void;
+  toggleInclude: (id: number) => void;
+  setRoute: (id: number, dom: string) => void;
+  startApply: () => Promise<void>;  // kicks off serial apply loop
+  cancel: () => void;
+  reset: () => void;
+}
+```
+
+### Step flow
+
+1. **Pick folder** — big CTA. Two options: file-picker (native; Electron wrap in Plan 08; web-only uses `<input type="file" webkitdirectory>` with folder-pick support) + "Use a path" (text input for users who know the path). Dry-run triggered on selection → populates `files` via `brain_bulk_import({folder, dry_run: true})`.
+2. **Target domain** — cards: Auto-classify + one per domain. 20-file cap input appears if folder has >20 files.
+3. **Dry-run review** — the table. Per-file checkbox, route-to dropdown, confidence bar, status notes (`duplicate`, `uncertain`, `personal`). Summary sidebar: count per domain + skipped count. Footer: estimated cost + time.
+4. **Apply** — progress bar + per-file state (queued / running(classifying|summarizing|integrating) / done | applied). Cancel-after-current-file button. Summary on completion.
+
+### Apply loop
+
+Serial `brain_ingest` per file. Honors `cancel` flag. On failure: continue, track in `results.failed`.
+
+```typescript
+async function applyLoop(state: BulkState, dispatch: BulkDispatch): Promise<void> {
+  const queue = state.files.filter(f => f.include && !f.skip);
+  dispatch({ type: "start" });
+  for (let i = 0; i < queue.length; i++) {
+    if (state.cancelled) break;
+    dispatch({ type: "tick", idx: i });
+    try {
+      await ingestFile(queue[i]);
+      dispatch({ type: "file-done", id: queue[i].id, ok: true });
+    } catch (err) {
+      dispatch({ type: "file-done", id: queue[i].id, ok: false });
+    }
+  }
+  dispatch({ type: "apply-complete" });
+}
+```
+
+### 20-file cap UX
+
+Per Plan 04 Task 13: `brain_bulk_import` refuses `dry_run=false` on >20 files without explicit `max_files`. Frontend handles this pre-emptively:
+
+- If folder.fileCount > 20 AND step 2 → show cap input.
+- On dry-run apply: pass `max_files: cap` through to `brain_bulk_import`.
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~15 new tests**.
+
+```bash
+git commit -m "feat(web): plan 07 task 21 — bulk import 4-step flow (Pick → Scope → Dry-run → Apply)"
+```
+
+---
+
+### Task 22 — Settings 8 panels
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/app/settings/page.tsx` — redirects to /settings/general
+- Create: `apps/brain_web/src/app/settings/[tab]/page.tsx` — renders active panel
+- Create: `apps/brain_web/src/components/settings/settings-screen.tsx` — sidebar + content layout
+- Create: `apps/brain_web/src/components/settings/panel-general.tsx` — theme + density + vault location
+- Create: `apps/brain_web/src/components/settings/panel-providers.tsx` — API key + per-stage model table + test connection
+- Create: `apps/brain_web/src/components/settings/panel-budget.tsx` — daily cap + monthly cap + alert threshold
+- Create: `apps/brain_web/src/components/settings/panel-autonomous.tsx` — per-category toggles matching design
+- Create: `apps/brain_web/src/components/settings/panel-integrations.tsx` — Claude Desktop status + copy-snippet for other MCP clients
+- Create: `apps/brain_web/src/components/settings/panel-domains.tsx` — list + add + delete (typed confirm) + rename (dialog) + reorder
+- Create: `apps/brain_web/src/components/settings/panel-brain-md.tsx` — Monaco editor + save-as-patch
+- Create: `apps/brain_web/src/components/settings/panel-backups.tsx` — trigger + list + restore (typed confirm)
+- Create: `apps/brain_web/src/lib/state/settings-store.ts` — Zustand for per-panel form state + dirty tracking
+- Create: `apps/brain_web/tests/unit/settings-providers.test.tsx` — 4 tests (key masked after save, test-connection success/fail, model dropdown per stage)
+- Create: `apps/brain_web/tests/unit/settings-autonomous.test.tsx` — 4 tests (5 toggles render, danger flag on index_rewrites, toggle calls config_set, shared state with Inbox/Pending toggles)
+- Create: `apps/brain_web/tests/unit/settings-domains.test.tsx` — 5 tests (list renders, add domain creates, delete requires typed confirm, rename opens dialog, privacy-railed badge on personal)
+- Create: `apps/brain_web/tests/unit/settings-backups.test.tsx` — 3 tests (trigger creates new row, list displays, restore requires typed confirm)
+
+**Context for the implementer:**
+
+### Settings layout
+
+Two-column: left sidebar with 8 tabs, right content. Routing: `/settings/<tab>` → tab is rendered. Default `/settings` → `/settings/general`.
+
+### General panel
+
+Theme (dark/light), Density (comfortable/compact), Vault location (read-only display; `brain_config_get("vault_path")`).
+
+### LLM Providers panel
+
+- **API key input** — type=password, value masked after save (`"sk-ant-•••••••••••qXf2"` UI).  Save → calls new server-side route `/api/proxy/config/set-secret` (CANNOT use `brain_config_set` directly because it refuses secret-shaped keys per Plan 04). Backend stores in `<vault>/.brain/secrets.env`.
+- **Test button** — pings `brain_ping_llm` tool (new; another Task 25 addition) that makes a 1-token call to verify key + reachability.
+- **Model per stage** — 6 rows (Ask / Brainstorm / Draft / Classify / Summarize / Integrate). Each: dropdown with Haiku/Sonnet/Opus + cost hint. Saves to `ask_model` / `brainstorm_model` / `draft_model` / `classify_model` / `summarize_model` / `integrate_model` config keys.
+
+**More tools needed:** `brain_set_api_key` (special-cased secret write) + `brain_ping_llm` (test connection). Add to Task 25 sweep list. Tool surface: **27 → 29**.
+
+### Budget panel
+
+- Daily cap input (number) → `brain_config_set("budget.daily_usd", n)`
+- Monthly cap input → `brain_config_set("budget.monthly_usd", n)`  — note: Plan 04 doesn't have `monthly_usd` yet; add to Task 1's config schema extension
+- Alert threshold display (% of cap at which warnings fire) — Plan 04 has alert_threshold_pct
+
+### Autonomous panel
+
+Per-category toggles matching design:
+- Source ingest (safe)
+- Entity updates (safe)
+- Concept notes
+- Domain index rewrites (danger)
+- Draft inline edits (new in Plan 07)
+
+Each toggle: `brain_config_set("autonomous.<cat>", bool)`. Reads current value via `brain_config_get`. Shared store with Inbox's "Autonomous ingest" and Pending's global toggle — all three surfaces read + write the same config keys.
+
+### Integrations panel
+
+Claude Desktop integration. Two sections:
+
+1. **Claude Desktop status card** — detected (via `brain_mcp_status` tool; see Task 25 sweep additions). Shows app version + config path + status pill. Actions: Self-test (calls `brain_mcp_selftest`), Regenerate config (calls `brain_mcp_install`), Uninstall (typed-confirm → `brain_mcp_uninstall`).
+2. **Other MCP clients** — code block with the snippet users paste into Cursor/Zed/Continue:
+   ```json
+   "brain": {
+     "command": "python",
+     "args": ["-m", "brain_mcp"],
+     "env": { "BRAIN_VAULT_ROOT": "~/Documents/brain", "BRAIN_ALLOWED_DOMAINS": "research,work" }
+   }
+   ```
+   Copy button + "Open docs" link.
+
+### Domains panel
+
+List of domains with drag-grip (reorder), color swatch, name, count, actions (Rename + Delete). Delete disabled on personal (privacy-railed badge shown). Add-domain form at bottom (name + folder slug + accent picker).
+
+Reorder persists to `domain_order` config key.
+
+### BRAIN.md panel
+
+Full-screen Monaco editor. Read current BRAIN.md via `brain_get_brain_md`. Save triggers `brain_propose_note("BRAIN.md", content, "BRAIN.md edit from Settings")` — stages a patch.
+
+Stats at bottom: line count + estimated token count.
+
+### Backups panel
+
+**Backend gap:** no backup tool in Plan 04 either. **Task 25 sweep addition:** `brain_backup_create`, `brain_backup_list`, `brain_backup_restore`. Tool surface: **29 → 32**.
+
+Listing: date + size + notes count + trigger (manual / daily-auto / pre-bulk-import). Row actions: Reveal (opens vault backup dir), Restore (typed-confirm `RESTORE`).
+
+### Step 1 — Failing tests
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **~16 new tests**.
+
+```bash
+git commit -m "feat(web): plan 07 task 22 — Settings 8 panels (General + Providers + Budget + Autonomous + Integrations + Domains + BRAIN.md + Backups)"
+```
+
+---
+
+**Checkpoint 5 — pause for main-loop review.**
+
+22 tasks landed. Entire app surface live:
+- Draft mode working end-to-end with typed doc_edit_proposed events rendering as inline highlighted regions
+- FileToWiki / Fork / RenameDomain dialogs wired
+- Bulk import with 4-step flow + 20-file cap + per-file routing + cancel
+- All 8 Settings panels with per-panel forms + typed confirms for destructive actions
+
+**Tool surface cumulative:** 18 (Plan 05 baseline) + 4 (Task 4 originals) + 3 (MCP install/uninstall/status from Ck3) + 1 (brain_get_pending_patch from Ck4) + 1 (brain_fork_thread from Task 20) + 2 (brain_set_api_key + brain_ping_llm from Task 22) + 3 (brain_backup_create/list/restore from Task 22) = **32 tools total**.
+
+Task 25 sweep accepts all these additions — they're all thin wrappers over existing brain_core primitives (Plan 04's claude_desktop module, Plan 04's propose_note + applied/mark_applied, Plan 02's ingest classifier for ping, a new tarball helper for backups).
+
+Main loop reviews:
+
+- **Tool surface growth** from 18 → 32. Is that too much for Plan 07, or is this the right time to add them (each tool is small + backed by existing brain_core primitives)? Recommend accept — all are frontend-demanded and cheap.
+- **Draft mode Apply flow** routes through `brain_propose_note` → `brain_apply_patch` (normal path if `autonomous.draft=false`), OR direct apply (if `autonomous.draft=true` and autonomy gate allows). Per-turn `doc_edit_proposed` events accumulate into `pendingEdits`; Apply button merges + submits.
+- **Backups panel** depends on brand-new backend functionality (no Plan 04 backup tool). Confirm this lands as part of Plan 07 (additive) rather than deferred to Plan 08 (install/packaging may have opinions on backup scheduling).
+- **Monaco for BRAIN.md** reuses the lazy-loaded Monaco from Task 18. Same bundle; lazy-loads on first Browse/Edit or Settings/BRAIN.md entry.
+- **Integration panel self-test** shows response time. Real `brain_mcp_selftest` makes a subprocess round-trip; ~40-100ms. Acceptable for the UI spinner treatment.
+
+Expected cumulative test count after Group 5: **~136 frontend tests** (78 prior + 13 + 14 + 15 + 16). Plus backend. Combined target: **~860 passed + 11 skipped**.
+
+Before Task 23, confirm every flow works via manual clicking — Task 23 automates the 5 primary flows via Playwright.
+
+---
+
+### Group 6 — QA + demo + close (Tasks 23–25)
+
+**Pattern:** standard Plan 04/05 close shape, extended with frontend-specific QA (Playwright e2e, axe-core a11y, Monaco + Next.js production-build cross-platform sweep).
+
+---
+
+### Task 23 — Playwright e2e + axe-core a11y
+
+**Owning subagent:** brain-test-engineer
+
+**Files:**
+- Create: `apps/brain_web/playwright.config.ts` — config for Mac + Windows projects
+- Create: `apps/brain_web/tests/e2e/fixtures.ts` — shared test fixtures (spawn brain_api, seed vault, start Next.js)
+- Create: `apps/brain_web/tests/e2e/setup-wizard.spec.ts` — full 6-step run-through
+- Create: `apps/brain_web/tests/e2e/ingest-drag-drop.spec.ts` — drag a text file → classification → patch → approve
+- Create: `apps/brain_web/tests/e2e/chat-turn.spec.ts` — full turn with tool calls + patch_proposed
+- Create: `apps/brain_web/tests/e2e/patch-approval.spec.ts` — pending list → detail → approve → undo
+- Create: `apps/brain_web/tests/e2e/bulk-import.spec.ts` — 4-step dry-run + apply
+- Create: `apps/brain_web/tests/e2e/a11y.spec.ts` — axe-core against every page (asserts 0 violations at AA)
+- Create: `.github/workflows/frontend-ci.yml` — CI matrix for Mac + Windows running unit + e2e
+- Create: `apps/brain_web/scripts/start-backend-for-e2e.sh` + `.ps1` — helper that spawns uvicorn + brain_api with a seeded temp vault
+
+**Context for the implementer:**
+
+### Playwright config
+
+```typescript
+// apps/brain_web/playwright.config.ts
+import { defineConfig, devices } from "@playwright/test";
+
+export default defineConfig({
+  testDir: "./tests/e2e",
+  timeout: 60_000,
+  fullyParallel: false,  // shared backend state
+  retries: 0,            // don't mask flakes
+  workers: 1,
+  reporter: "list",
+  use: {
+    baseURL: "http://localhost:4316",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    locale: "en-US",
+  },
+  webServer: [
+    {
+      command: "./scripts/start-backend-for-e2e.sh",
+      port: 4317,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+    {
+      command: "pnpm build && pnpm start",
+      port: 4316,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
+  projects: [
+    { name: "chromium", use: devices["Desktop Chrome"] },
+  ],
+});
+```
+
+**Browser matrix:** Chromium only for e2e (WebKit + Firefox deferred — the app is Desktop-first, user's likely browser is Chrome/Arc/Edge, all Chromium-based). Cross-OS matrix covers Mac vs Windows at the CI level.
+
+### Shared fixtures
+
+```typescript
+// apps/brain_web/tests/e2e/fixtures.ts
+import { test as base, Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+
+type BrainFixtures = {
+  seededApp: Page;
+  checkA11y: (page: Page, name: string) => Promise<void>;
+};
+
+export const test = base.extend<BrainFixtures>({
+  seededApp: async ({ page }, use) => {
+    // Navigate to /chat; backend started by webServer config has a seeded temp vault
+    await page.goto("/chat");
+    await use(page);
+  },
+  checkA11y: async ({}, use) => {
+    const run = async (page: Page, name: string) => {
+      const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).analyze();
+      if (results.violations.length > 0) {
+        console.log(`[a11y:${name}] violations:`, JSON.stringify(results.violations, null, 2));
+      }
+      expect(results.violations).toEqual([]);
+    };
+    await use(run);
+  },
+});
+
+export { expect } from "@playwright/test";
+```
+
+### 5 primary flow specs
+
+**`setup-wizard.spec.ts`** — on fresh vault:
+1. App loads → redirects to `/setup`
+2. Click through all 6 steps (skip step 4 and 5 to minimize real LLM calls; step 3 pastes a FakeLLM sentinel key; step 6 skips Claude Desktop install)
+3. Land on `/chat`
+4. Verify NewThreadEmpty renders with "What are we working on?"
+5. `checkA11y(page, "setup-wizard-step-1")` for each step
+
+**`ingest-drag-drop.spec.ts`** —
+1. `/inbox` loads with empty state
+2. Trigger drag-drop via Playwright file upload (`page.locator('input[type="file"]').setInputFiles(...)`)
+3. Wait for source row to appear in "In progress" tab
+4. Wait for status = "done" (FakeLLM should complete quickly)
+5. Navigate to `/pending`, verify patch appeared
+6. `checkA11y` on both pages
+
+**`chat-turn.spec.ts`** —
+1. `/chat` (new thread) — type "hello" in composer + Enter
+2. Observe `turn_start`, `delta`*, `turn_end` event sequence via WS inspection (`page.on("websocket", ...)`)
+3. Assistant message renders with text
+4. Send a second turn — verify thread title appears after turn 2 (auto-title)
+5. `checkA11y`
+
+**`patch-approval.spec.ts`** —
+1. Pre-seed vault with a pending patch via backend fixture
+2. Navigate to `/pending`
+3. Click patch card → detail pane renders
+4. Click Approve → patch moves to applied; toast appears with "Undo (5s)"
+5. Click Undo → toast dismisses; file state reverts
+6. `checkA11y`
+
+**`bulk-import.spec.ts`** —
+1. `/bulk` loads with step 1
+2. Click "Use a path" → type `/tmp/seeded-folder` (seeded with 5 text files by fixture)
+3. Step 2: pick "Auto-classify"
+4. Step 3: dry-run table shows 5 rows, all classified
+5. Click "Import 5 files" → step 4 progress advances
+6. Completion summary with "5 applied · 0 failed"
+
+### a11y.spec.ts
+
+Runs `checkA11y` on every top-level page:
+
+```typescript
+const PAGES = ["/chat", "/inbox", "/browse", "/pending", "/bulk", "/settings/general", "/settings/providers", "/settings/domains"];
+for (const path of PAGES) {
+  test(`a11y: ${path}`, async ({ page, checkA11y }) => {
+    await page.goto(path);
+    await page.waitForLoadState("networkidle");
+    await checkA11y(page, path);
+  });
+}
+```
+
+### CI workflow
+
+`.github/workflows/frontend-ci.yml`:
+
+```yaml
+name: frontend-ci
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: corepack enable && corepack prepare pnpm@9 --activate
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: pnpm install
+      - run: cd apps/brain_web && pnpm type-check && pnpm test -- --run
+      - run: cd apps/brain_web && pnpm playwright install chromium
+      - run: cd apps/brain_web && pnpm playwright test
+```
+
+### Step 1 — Failing test
+
+Write skeleton tests that fail on first run (pre-implementation), then let Task 23's implementation fill in the pieces.
+
+### Step 2 — Implement
+
+### Step 3 — Run + commit
+
+Expected: **5 e2e specs + 8 a11y specs = 13 new Playwright tests**. Should run in ~90s on Mac locally.
+
+```bash
+git commit -m "test(web): plan 07 task 23 — Playwright e2e (5 flows) + axe-core a11y gate"
+```
+
+---
+
+### Task 24 — Cross-platform sweep + `scripts/demo-plan-07.py` + manual QA checklist
+
+**Owning subagent:** brain-test-engineer
+
+**Files:**
+- Create: `scripts/demo-plan-07.py` — 14-gate end-to-end demo (brain_api + brain_web in subprocess, Playwright drives)
+- Create: `docs/testing/manual-qa.md` — cross-platform manual checklist
+- Modify: `docs/testing/cross-platform.md` — add Plan 07-specific items (Monaco behavior, Windows drag-drop, Next.js Windows build)
+- Findings-dependent: any fixes surfaced during sweep
+
+**Context for the implementer:**
+
+### 14-gate demo
+
+Mirror Plan 04/05's demo script pattern. Drives the live frontend + backend:
+
+| Gate | Behavior |
+|---|---|
+| 1 | backend starts on :4317, frontend on :4316, both respond to /healthz |
+| 2 | Setup wizard runs through 6 steps and lands on /chat |
+| 3 | Chat turn: send "hello", receive streaming delta, turn_end |
+| 4 | Tool call rendering: query that triggers brain_search, collapsible card + hits |
+| 5 | patch_proposed event arrives, inline card shows + right rail updates |
+| 6 | Approve patch from rail → vault file appears on disk |
+| 7 | Undo last → vault file gone |
+| 8 | Inbox drag-drop text file → classifies → patch stages |
+| 9 | Bulk import dry-run: folder of 5 files → review → apply all |
+| 10 | Browse edit mode: open note, edit, save → patch stages |
+| 11 | Draft mode: open doc → receive `doc_edit_proposed` → Apply merges |
+| 12 | Settings → Domains → Rename research → lab-notes → files move atomically |
+| 13 | Budget override → BudgetWall → Raise cap $5 → override_until set |
+| 14 | Claude Desktop integration → Install from Settings → selftest passes |
+
+Implementation: Python script spawns `uvicorn` + `next start` as subprocesses, seeds a temp vault, uses Playwright (via `playwright` Python bindings — already dev dep) to drive the UI, asserts each gate.
+
+### Cross-platform sweep
+
+9-point checklist (Plan 04/05 pattern):
+
+1. **Paths** — Next.js server-side reads vault via `node:path`/`node:fs`; verify Windows path handling (backslashes).
+2. **Line endings** — `tokens.css`, generated shadcn components, `globals.css` all `newline="\n"` via VCS.
+3. **Drag-drop** — HTML5 drag events behave identically on Mac + Windows in Chromium. Verify via Playwright on both matrix runners.
+4. **Monaco on Windows** — WebAssembly + worker loading; verify no load errors.
+5. **Next.js Windows build** — some webpack loaders fail on Windows paths. `pnpm build` must succeed on both.
+6. **⌘K shortcut on Windows** — should be Ctrl+K. Detect via `navigator.platform`; swap modifier.
+7. **Font loading on Windows** — Roboto `@font-face` from local fonts; verify in Chromium on both.
+8. **Subprocess spawning in demo** — `subprocess.Popen` with `shell=False`; Windows needs `sys.executable -m next` for `next start`.
+9. **Token file permissions** — Plan 05 best-effort on Windows; no change here.
+
+### Manual QA checklist
+
+`docs/testing/manual-qa.md` — ~60 items grouped by screen. Human-runnable on clean Mac + Windows before each release. Example sections:
+
+- **Setup wizard**: fresh install → 6 steps complete → no console errors
+- **Chat**: send turn, cancel mid-stream, switch mode between turns, fork thread, file to wiki
+- **Pending**: approve, edit-then-approve (3-roundtrip), reject with reason, approve-all, undo last
+- **Browse**: navigate tree, open note, edit, save, ⌘K search, wikilink hover, Obsidian link
+- **Draft**: pick doc, receive edits, apply, reject, change doc
+- **Inbox**: drag PDF, drag URL, paste URL, paste text, retry failed
+- **Bulk**: pick folder, cap override, dry-run review, per-file route override, apply with cancel
+- **Settings**: each of 8 panels exercised
+- **A11y**: tab through every screen keyboard-only; axe-core 0 violations; reduced-motion respected
+- **Dark + light theme** verified on every screen
+- **1024px minimum width** — shell collapses cleanly; right rail hides if needed
+
+### Step 1 — Write the demo + checklist
+
+### Step 2 — Run sweep + fix findings
+
+### Step 3 — Commit
+
+Expected: 0-3 findings per precedent (Plan 04 had 1, Plan 05 had 1). Each finding → fix + regression test + focused commit.
+
+```bash
+git commit -m "test(plan-07): task 24 — demo-plan-07.py (14 gates) + cross-platform sweep + manual QA"
+```
+
+---
+
+### Task 25 — Hardening sweep + coverage + tag `plan-07-frontend`
+
+**Owning subagent:** brain-test-engineer + brain-frontend-engineer
+
+**Files:**
+- Various — Batch A behavior fixes
+- Various — Batch B comments + TODOs
+- Create: 4 new backend tools surfaced during Groups 3–5 work — `brain_get_pending_patch`, `brain_mcp_install/uninstall/status`, `brain_fork_thread`, `brain_set_api_key`, `brain_ping_llm`, `brain_backup_{create,list,restore}` (10 total new tools surfaced beyond the original 4 — tool count **18 → 32**)
+- Modify: `tasks/todo.md` — mark Plan 07 ✅ with date + tag + demoable artifact summary
+- Modify: `tasks/lessons.md` — add Plan 07 completion section
+- Modify: `tasks/plans/07-frontend.md` — append Review section with final stats
+
+**Context for the implementer:**
+
+### Step 1 — Coverage pass
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv run pytest packages/brain_core packages/brain_cli packages/brain_mcp packages/brain_api -q \
+    --cov=brain_core --cov=brain_cli --cov=brain_mcp --cov=brain_api --cov-report=term-missing 2>&1 | tail -100
+cd apps/brain_web && pnpm test -- --run --coverage 2>&1 | tail -50
+```
+
+**Coverage targets:**
+- `brain_core` total ≥ 91% (must not regress from Plan 05)
+- `brain_mcp` ≥ 90%
+- `brain_api` ≥ 90%
+- `brain_web` components + lib ≥ 75% (e2e covers the gaps)
+
+### Step 2 — Accepted scope expansions (batched)
+
+This task formally lands the 8 tools surfaced across Groups 3–5:
+
+| Tool | Surfaced by | Wraps |
+|---|---|---|
+| `brain_get_pending_patch` | Task 16 (Pending detail) | `PendingPatchStore.get(patch_id)` |
+| `brain_mcp_install` | Task 13 (Setup wizard) | `brain_core.integrations.claude_desktop.install` |
+| `brain_mcp_uninstall` | Task 22 (Settings) | `brain_core.integrations.claude_desktop.uninstall` |
+| `brain_mcp_status` | Tasks 13 + 22 | `brain_core.integrations.claude_desktop.verify` |
+| `brain_fork_thread` | Task 20 (Fork dialog) | `brain_core.chat.fork.fork_from` |
+| `brain_set_api_key` | Task 22 (Providers panel) | special-cased secret write to `.brain/secrets.env` |
+| `brain_ping_llm` | Task 22 (test-connection) | 1-token LLM call via configured provider |
+| `brain_backup_create` | Task 22 (Backups panel) | new `brain_core.backup.create_snapshot` |
+| `brain_backup_list` | Task 22 | `brain_core.backup.list_snapshots` |
+| `brain_backup_restore` | Task 22 | `brain_core.backup.restore_from_snapshot` + typed-confirm |
+
+Each: module at `brain_core/tools/<name>.py` + 7-line shim at `brain_mcp/tools/<name>.py` + brain_api works automatically (dispatcher registry). Smoke test per tool.
+
+**Final tool surface: 18 (Plan 05) + 4 (Task 4) + 10 (Task 25 sweep) = 32 tools.** Document in the close commit + update spec §7's tool count.
+
+### Step 3 — Mini hardening sweep
+
+Batch A (behavior fixes): findings from Groups 2–5 Checkpoints. Examples:
+- ⌘K → Ctrl+K on Windows (Task 24 finding)
+- Monaco prefetch on Edit-button hover (Task 18 Checkpoint 4 item)
+- Bulk-import cost estimate phrasing ("Based on file size + Sonnet token rates") (delta-v2 C3)
+- Broken-wikilink detection deferred to Plan 09 (track in lessons)
+
+Batch B (comments + TODOs): inline `// TODO(Plan 08)` / `// TODO(Plan 09)` markers for each deferral.
+
+Batch C (defer-only): lessons entries only.
+
+### Step 4 — Final gates
+
+```bash
+# Python
+cd packages/brain_core && uv run mypy src tests
+cd packages/brain_cli && uv run mypy src tests
+cd packages/brain_mcp && uv run mypy src tests
+cd packages/brain_api && uv run mypy src tests
+uv run ruff check . && uv run ruff format --check .
+find .venv -name "* [0-9].py" | wc -l
+
+# Frontend
+cd apps/brain_web && pnpm type-check
+cd apps/brain_web && pnpm lint
+cd apps/brain_web && pnpm test -- --run
+cd apps/brain_web && pnpm playwright test
+```
+
+All clean. 0 ghost files. 0 mypy errors. 0 eslint errors. 0 Playwright failures. 0 axe-core violations.
+
+### Step 5 — Final demo + artifact capture
+
+```bash
+uv run python scripts/demo-plan-07.py 2>&1 | tee /tmp/plan-07-demo-receipt.txt
+```
+
+Must end with `PLAN 07 DEMO OK` + exit 0.
+
+### Step 6 — Update `tasks/todo.md`
+
+```markdown
+| 07 | [Frontend](./plans/07-frontend.md) | ✅ Complete (2026-MM-DD, tag `plan-07-frontend`) | brain_web Next.js 15 web app with all 6 screens + setup wizard + 22 dialogs/overlays + Playwright e2e (5 flows) + axe-core AA; 14-gate demo passing (`PLAN 07 DEMO OK`); tool surface 18→32 | brain-frontend-engineer, brain-core-engineer, brain-test-engineer |
+```
+
+### Step 7 — Update `tasks/lessons.md`
+
+Append `### Plan 07 — Frontend` section. Cover:
+- Completion stats (dates, test counts, coverage, commits since `plan-05-api`, demo receipt snapshot)
+- Subagent-driven-development retrospective (Next.js + shadcn + Zustand + React Query + Playwright + axe-core all-new stack)
+- 8 scope-expanded tools surfaced during frontend work — why they were deferred to sweep rather than blocking
+- Handoff to Plan 08 (install/packaging): brain_web's production build is `pnpm build` → `.next/` directory; `next start` runs it on any free port; Plan 08 wraps the launch
+- Handoff to Plan 09 (ship): manual QA checklist in `docs/testing/manual-qa.md`; WCAG 2.2 AA gate enforced by axe-core
+- Cross-platform surprises (Task 24 findings)
+- Deferred items (broken-wikilink detection, PDF upload, thread-list tool if needed, embeddings forever)
+
+### Step 8 — Append Review to `tasks/plans/07-frontend.md`
+
+```markdown
+## Review
+
+**Plan 07 — Frontend: complete.**
+
+- **Tag:** `plan-07-frontend`
+- **Completed:** 2026-MM-DD
+- **Task count:** 25 planned / 25 actual
+- **Commits since `plan-05-api`:** <count>
+- **Test counts:** brain_core (X) + brain_cli (Y) + brain_mcp (Z) + brain_api (W) + brain_web (V) = **total** passed + skipped
+- **Coverage:** brain_core N% · brain_cli N% · brain_mcp N% · brain_api N% · brain_web N%
+- **Gates:** mypy strict clean, ruff + format clean, pnpm type-check clean, eslint clean, Playwright + axe-core AA clean, ghost-file 0
+- **Tool surface:** 32 tools (up from 18 at Plan 05)
+- **Demo receipt:**
+
+```
+<paste the 14-gate demo output>
+```
+
+- **Handoff to Plan 08:** `pnpm build` produces a production Next.js bundle in `apps/brain_web/.next/`. Plan 08's `brain start` launches `uvicorn brain_api:app --port 4317` + `pnpm --filter brain_web start` (port 4316) as subprocesses. User's browser opens localhost:4316. Token file discovery works identically to Plan 07.
+```
+
+### Step 9 — Tag + close commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && git tag plan-07-frontend
+git add tasks/todo.md tasks/lessons.md tasks/plans/07-frontend.md && git commit -m "docs: close plan 07 (frontend) — tag plan-07-frontend"
+```
+
+Main loop pushes `main` + tag after review.
+
+### Report format
+
+**DONE** / **DONE_WITH_CONCERNS** / **NEEDS_CONTEXT** / **BLOCKED**. Include:
+- Close commit SHA + all Batch A/B sweep commit SHAs
+- Final test counts (5 packages + e2e)
+- Coverage stats
+- Demo receipt (full 14-gate output)
+- Final tool surface count (32)
+- Confirmation `plan-07-frontend` tag exists locally
+- Any findings during coverage pass that surprised you
+
+Main loop pushes `main` + tag after reviewing the close commit.
+
+---
+
+## Review
+
+*Intentionally unfilled until Plan 07 completes. Captured at Task 25.*
