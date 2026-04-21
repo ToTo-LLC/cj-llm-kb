@@ -375,4 +375,732 @@ Five review pause points:
 
 ## Detailed per-task steps
 
-*Intentionally unfilled. After the outline, decisions, and file structure are approved, I will fill in per-task bite-sized steps (test-first, exact code, exact commands, expected output) group-by-group following Plans 04/05's rhythm.*
+### Group 1 — Backend extensions (Tasks 1–5)
+
+**Pattern:** every task in Group 1 is strictly additive to Plans 01–05. Hard gate at Checkpoint 1: all prior tests (brain_core ~427, brain_cli 30, brain_mcp 99, brain_api 129 = 685 passed + 11 skipped as of `plan-05-api`) stay green. New tests land alongside new code.
+
+---
+
+### Task 1 — `PatchSet.category` + autonomy gate + 5 config keys
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/vault/types.py` — add `PatchCategory` `StrEnum` + `PatchSet.category: PatchCategory = PatchCategory.OTHER` field
+- Create: `packages/brain_core/src/brain_core/autonomy.py` — `should_auto_apply(patchset, config) -> bool`
+- Modify: `packages/brain_core/src/brain_core/tools/apply_patch.py` — consult `should_auto_apply` gate before staging
+- Modify: `packages/brain_core/src/brain_core/tools/config_set.py` — add 5 `autonomous.*` entries to `_SETTABLE_KEYS`
+- Modify: `packages/brain_core/src/brain_core/tools/ingest.py` — set `patchset.category = PatchCategory.INGEST` before return
+- Modify: `packages/brain_core/src/brain_core/tools/propose_note.py` — derive category from target path (`<dom>/entities/*` → ENTITIES, `<dom>/concepts/*` → CONCEPTS, `<dom>/index.md` → INDEX_REWRITES, else OTHER)
+- Modify: `packages/brain_core/src/brain_core/config/schema.py` — add `autonomous: AutonomousConfig` nested model with 5 bool fields (default False each)
+- Create: `packages/brain_core/tests/test_autonomy.py` — 6 tests (gate honors each category, missing category defaults to False, `brain_apply_patch` skips staging when gate True, skips if disabled, full flow via MCP shim preserves Plan 04 inline-JSON on rate-limit)
+- Create: `packages/brain_core/tests/tools/test_patch_category.py` — 2 tests (propose_note derives category from path; ingest sets INGEST)
+
+**Context for the implementer:**
+
+The autonomy gate is the single architectural piece that lets design's 4 autonomy toggles work. Shape:
+
+```python
+# brain_core/vault/types.py
+from enum import StrEnum
+
+class PatchCategory(StrEnum):
+    INGEST = "ingest"
+    ENTITIES = "entities"
+    CONCEPTS = "concepts"
+    INDEX_REWRITES = "index_rewrites"
+    DRAFT = "draft"
+    OTHER = "other"
+
+
+class PatchSet(BaseModel):
+    # ... existing fields ...
+    category: PatchCategory = PatchCategory.OTHER  # NEW, defaults to OTHER so Plan 04 call-sites don't regress
+```
+
+```python
+# brain_core/autonomy.py
+"""Autonomy gate — consulted by brain_apply_patch before staging.
+
+Returns True if the given patchset should apply directly without going
+through the Pending queue. Plan 04 default: always False (all patches stage).
+Plan 07 extends: per-category config key can enable auto-apply.
+"""
+
+from __future__ import annotations
+
+from brain_core.config.schema import Config
+from brain_core.vault.types import PatchCategory, PatchSet
+
+
+def should_auto_apply(patchset: PatchSet, config: Config) -> bool:
+    """Consult config.autonomous.<category> for the patch's category.
+
+    Returns False if the config key is unset or False. Returns False for
+    PatchCategory.OTHER (never auto-apply uncategorized patches — safety).
+    """
+    if patchset.category == PatchCategory.OTHER:
+        return False
+    key = patchset.category.value  # "ingest" / "entities" / ...
+    return bool(getattr(config.autonomous, key, False))
+```
+
+```python
+# brain_core/config/schema.py — add alongside existing BudgetConfig
+class AutonomousConfig(BaseModel):
+    ingest: bool = False
+    entities: bool = False
+    concepts: bool = False
+    index_rewrites: bool = False
+    draft: bool = False
+
+class Config(BaseModel):
+    # ... existing ...
+    autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
+```
+
+**`brain_apply_patch` wiring:**
+
+```python
+# brain_core/tools/apply_patch.py
+# Before staging via ctx.pending_store.put(...):
+from brain_core.autonomy import should_auto_apply
+from brain_core.config.loader import load_config  # or however the tool currently resolves config
+
+config = load_config(vault_root=ctx.vault_root)
+if should_auto_apply(envelope.patchset, config):
+    receipt = ctx.writer.apply(envelope.patchset, allowed_domains=(domain,))
+    ctx.pending_store.mark_applied(envelope.patch_id)
+    return ToolResult(
+        text=f"auto-applied patch {envelope.patch_id} → {len(receipt.applied_files)} file(s)",
+        data={
+            "status": "auto_applied",
+            "patch_id": envelope.patch_id,
+            "undo_id": receipt.undo_id,
+            "applied_files": [p.as_posix() for p in receipt.applied_files],
+        },
+    )
+# else: existing stage-via-pending-store path (Plan 04 unchanged)
+```
+
+**`brain_propose_note` category derivation:**
+
+```python
+# brain_core/tools/propose_note.py
+from brain_core.vault.types import PatchCategory, PatchSet, NewFile
+
+def _category_for_path(path: Path) -> PatchCategory:
+    parts = path.parts
+    if len(parts) < 2:
+        return PatchCategory.OTHER
+    # <domain>/<subdir>/<slug>.md — parts[1] is the subdir
+    subdir = parts[1]
+    if subdir == "entities":
+        return PatchCategory.ENTITIES
+    if subdir == "concepts":
+        return PatchCategory.CONCEPTS
+    if path.name == "index.md":
+        return PatchCategory.INDEX_REWRITES
+    return PatchCategory.OTHER
+
+# Inside handle():
+patchset = PatchSet(
+    new_files=[NewFile(path=p, content=content)],
+    reason=reason,
+    category=_category_for_path(p),
+)
+```
+
+### Step 1 — Failing test
+
+Create `packages/brain_core/tests/test_autonomy.py`:
+
+```python
+"""Tests for brain_core.autonomy.should_auto_apply."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from brain_core.autonomy import should_auto_apply
+from brain_core.config.schema import AutonomousConfig, Config
+from brain_core.vault.types import NewFile, PatchCategory, PatchSet
+
+
+def _patchset(category: PatchCategory = PatchCategory.OTHER) -> PatchSet:
+    return PatchSet(
+        new_files=[NewFile(path=Path("research/notes/x.md"), content="x")],
+        reason="test",
+        category=category,
+    )
+
+
+def _config(**autonomy) -> Config:
+    return Config(
+        vault_path=Path("/tmp/vault"),
+        autonomous=AutonomousConfig(**autonomy),
+    )
+
+
+def test_other_category_never_auto_applies() -> None:
+    """OTHER is the safe default — even if caller sets autonomous.other it wouldn't apply."""
+    assert should_auto_apply(_patchset(PatchCategory.OTHER), _config(ingest=True, entities=True)) is False
+
+
+def test_ingest_category_applies_when_enabled() -> None:
+    assert should_auto_apply(_patchset(PatchCategory.INGEST), _config(ingest=True)) is True
+
+
+def test_ingest_category_does_not_apply_when_disabled() -> None:
+    assert should_auto_apply(_patchset(PatchCategory.INGEST), _config(ingest=False)) is False
+
+
+def test_each_category_honors_own_flag() -> None:
+    for cat in (PatchCategory.ENTITIES, PatchCategory.CONCEPTS, PatchCategory.INDEX_REWRITES, PatchCategory.DRAFT):
+        key = cat.value
+        assert should_auto_apply(_patchset(cat), _config(**{key: True})) is True
+        assert should_auto_apply(_patchset(cat), _config(**{key: False})) is False
+
+
+def test_disabled_categories_do_not_cross_enable() -> None:
+    """Turning on ingest autonomy doesn't affect entities."""
+    assert should_auto_apply(_patchset(PatchCategory.ENTITIES), _config(ingest=True)) is False
+
+
+def test_default_config_everything_false() -> None:
+    """Out-of-the-box config auto-applies nothing."""
+    cfg = Config(vault_path=Path("/tmp/vault"))
+    for cat in PatchCategory:
+        assert should_auto_apply(_patchset(cat), cfg) is False
+```
+
+Create `packages/brain_core/tests/tools/test_patch_category.py`:
+
+```python
+"""Verify tool handlers stamp the right PatchCategory on emitted PatchSets."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from brain_core.tools.propose_note import _category_for_path
+from brain_core.vault.types import PatchCategory
+
+
+def test_propose_note_entities_path() -> None:
+    assert _category_for_path(Path("research/entities/person.md")) == PatchCategory.ENTITIES
+
+
+def test_propose_note_concepts_path() -> None:
+    assert _category_for_path(Path("research/concepts/tactical-empathy.md")) == PatchCategory.CONCEPTS
+
+
+def test_propose_note_index_rewrites() -> None:
+    assert _category_for_path(Path("research/index.md")) == PatchCategory.INDEX_REWRITES
+
+
+def test_propose_note_synthesis_is_other() -> None:
+    assert _category_for_path(Path("research/synthesis/foo.md")) == PatchCategory.OTHER
+
+
+def test_propose_note_notes_is_other() -> None:
+    assert _category_for_path(Path("research/notes/foo.md")) == PatchCategory.OTHER
+```
+
+### Step 2 — Implement
+
+Apply the code sketches above. For `config_set._SETTABLE_KEYS`, add:
+
+```python
+_SETTABLE_KEYS: frozenset[str] = frozenset({
+    "budget.daily_usd",
+    "log_llm_payloads",
+    # NEW:
+    "autonomous.ingest",
+    "autonomous.entities",
+    "autonomous.concepts",
+    "autonomous.index_rewrites",
+    "autonomous.draft",
+})
+```
+
+### Step 3 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && uv sync --reinstall-package brain_core --reinstall-package brain_mcp
+uv run pytest packages/brain_core packages/brain_cli packages/brain_mcp packages/brain_api -q
+```
+
+Expected: **685 prior + 13 new = 698 passed + 11 skipped** (6 autonomy + 5 patch-category + 2 apply-patch-gate tests).
+
+Gates (mypy strict, ruff, ghost files). Commit:
+
+```bash
+git commit -m "feat(core): plan 07 task 1 — PatchSet.category + autonomy gate + 5 config keys"
+```
+
+---
+
+### Task 2 — Per-mode chat models + `DocEditChatEvent` + Draft-mode emission
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/chat/session.py` — `ChatSessionConfig.{ask,brainstorm,draft}_model: str | None = None`; `ChatSession.turn` selects model by mode
+- Modify: `packages/brain_core/src/brain_core/chat/types.py` — add `ChatEventKind.DOC_EDIT` enum member
+- Modify: `ChatSession.turn` Draft-mode path — detect structured edit output (schema TBD: assistant emits JSON block with `edits: [{op, anchor, text}]`) → emit one `DOC_EDIT` event per item
+- Modify: `packages/brain_core/src/brain_core/tools/config_set.py` — add 3 `*_model` entries
+- Create: `packages/brain_core/tests/chat/test_per_mode_models.py` — 3 tests (ask uses ask_model, brainstorm uses brainstorm_model, fallback to default)
+- Create: `packages/brain_core/tests/chat/test_doc_edit_emission.py` — 2 tests (Draft-mode turn emits DOC_EDIT, Ask-mode does not)
+
+**Context for the implementer:**
+
+**Per-mode model selection** is a two-line change in `ChatSession.turn`:
+
+```python
+# brain_core/chat/session.py — inside turn(user_message):
+mode_model_attr = f"{self.mode.value}_model"  # "ask_model" / "brainstorm_model" / "draft_model"
+model = getattr(self._config, mode_model_attr, None) or self._config.model
+# ... use `model` in the LLMRequest below ...
+```
+
+**Draft-mode DOC_EDIT emission.** The assistant in Draft mode should emit structured edits when it wants to modify the open doc. Wire via a system-prompt addition + response parsing:
+
+1. Draft-mode system prompt (in `brain_core/prompts/chat-draft.md`) gets a section: "When you want to edit the open document, emit a fenced json block tagged `edits`. Shape: `{"edits": [{"op": "insert"|"delete"|"replace", "anchor": {"kind": "line", "value": N} | {"kind": "text", "value": "..."}, "text": "..."}]}`."
+2. After the turn's stream ends, `ChatSession.turn` scans the assistant message for `\`\`\`edits\n{...}\n\`\`\`` fences; for each edit object, yields a `ChatEvent(kind=ChatEventKind.DOC_EDIT, data=edit_dict)`.
+3. The edit block stays in the assistant message (rendered as a normal markdown code block in non-Draft surfaces); the events are additional structured signal for Draft-mode WS clients.
+
+Note: this is the backend-side contract. The WS-layer `doc_edit_proposed` event (Task 5) maps each `DOC_EDIT` ChatEvent to a typed WS frame.
+
+### Step 1 — Failing tests
+
+```python
+# packages/brain_core/tests/chat/test_per_mode_models.py
+async def test_ask_mode_uses_ask_model(...) -> None:
+    config = ChatSessionConfig(model="default-model", ask_model="ask-specific-model", ...)
+    # Assert LLMProvider.complete gets called with model="ask-specific-model"
+
+async def test_fallback_to_default_when_mode_model_unset(...) -> None:
+    config = ChatSessionConfig(model="default-model", ask_model=None, ...)
+    # Assert LLMProvider.complete gets model="default-model"
+```
+
+```python
+# packages/brain_core/tests/chat/test_doc_edit_emission.py
+async def test_draft_mode_emits_doc_edit_events(...) -> None:
+    # Queue a FakeLLM response containing:
+    #   ```edits
+    #   [{"op": "insert", "anchor": {"kind": "line", "value": 3}, "text": "new line"}]
+    #   ```
+    # Run a Draft-mode turn; collect events.
+    # Assert: one event with kind=DOC_EDIT, data matches the edit dict.
+
+async def test_ask_mode_does_not_emit_doc_edit(...) -> None:
+    # Same LLM response; Ask mode.
+    # Assert: zero DOC_EDIT events (the fence is parsed as plain markdown in Ask).
+```
+
+### Step 2 — Implement
+
+1. Add `ask_model`, `brainstorm_model`, `draft_model` to `ChatSessionConfig`. Re-run Plan 03 regression tests — they default to None and fall back to `model`, so no change.
+2. Modify `ChatSession.turn` to select model per step 1 above.
+3. Add `ChatEventKind.DOC_EDIT` to the enum.
+4. Add the edit-fence parser. Parse once at end of stream (after final `delta`), yield a `DOC_EDIT` event for each edit object. Only in Draft mode (`if self.mode == ChatMode.DRAFT`).
+5. Update the `chat-draft.md` prompt to document the `\`\`\`edits` fence convention.
+
+### Step 3 — Run + commit
+
+Expected: **698 + 5 = 703 passed + 11 skipped**.
+
+```bash
+git commit -m "feat(core): plan 07 task 2 — per-mode chat models + DocEditChatEvent + Draft-mode edit fence"
+```
+
+---
+
+### Task 3 — Cost ledger mode/stage tagging + `cumulative_tokens_in`
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/cost/ledger.py` — `CostEntry.{mode,stage}: str | None = None`; `CostSummary.by_mode: dict[str, float]`
+- Modify: `packages/brain_core/src/brain_core/chat/session.py` — pass `mode=self.mode.value` in cost-record calls
+- Modify: `packages/brain_core/src/brain_core/ingest/pipeline.py` — pass `stage=` in `_classify` / `_summarize` / `_integrate` cost records
+- Modify: `packages/brain_api/src/brain_api/chat/events.py` — `CostUpdateEvent.cumulative_tokens_in: int = 0` (new field; default keeps existing tests passing)
+- Modify: `packages/brain_api/src/brain_api/chat/session_runner.py` — track cumulative tokens in SessionRunner state; include in emitted `CostUpdateEvent`
+- Modify: `packages/brain_core/tests/cost/test_ledger.py` — add 3 tests for mode/stage tagging + by_mode summary
+- Modify: `packages/brain_api/tests/test_chat_events.py` + `test_ws_chat_turn.py` — verify cumulative_tokens_in surfaces correctly
+
+**Context for the implementer:**
+
+**`CostEntry` additions are optional** — default None preserves all Plan 02–05 call sites.
+
+```python
+# brain_core/cost/ledger.py
+@dataclass(frozen=True)
+class CostEntry:
+    timestamp: datetime
+    operation: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    domain: str
+    mode: str | None = None   # NEW — "ask" / "brainstorm" / "draft" / None
+    stage: str | None = None  # NEW — "classify" / "summarize" / "integrate" / None
+
+
+@dataclass(frozen=True)
+class CostSummary:
+    today_usd: float
+    month_usd: float
+    by_domain: dict[str, float]
+    by_mode: dict[str, float]   # NEW — e.g. {"ask": 0.12, "brainstorm": 0.03, "draft": 0.08, "": 0.04}
+
+# CostLedger.summary aggregates mode from entries; None mode becomes empty-string key
+```
+
+**`cumulative_tokens_in` on WS event:**
+
+`SessionRunner` already gets `CostUpdateChatEvent` from brain_core (per-turn deltas). Add a running total:
+
+```python
+# brain_api/chat/session_runner.py
+class SessionRunner:
+    def __init__(self, ...) -> None:
+        # existing fields
+        self._cumulative_tokens_in = 0
+
+    def _convert_chat_event(self, e):
+        if isinstance(e, CostUpdateChatEvent):
+            self._cumulative_tokens_in += e.tokens_in
+            return CostUpdateEvent(
+                tokens_in=e.tokens_in,
+                tokens_out=e.tokens_out,
+                cost_usd=e.cost_usd,
+                cumulative_usd=e.cumulative_usd,
+                cumulative_tokens_in=self._cumulative_tokens_in,  # NEW
+            )
+        # ... other cases ...
+```
+
+### Step 1 — Failing tests
+
+```python
+# brain_core/tests/cost/test_ledger.py
+def test_cost_entry_accepts_mode_and_stage() -> None:
+    entry = CostEntry(..., mode="ask", stage=None)
+    assert entry.mode == "ask"
+    assert entry.stage is None
+
+def test_summary_returns_by_mode_breakdown(tmp_path) -> None:
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    ledger.record(CostEntry(..., mode="ask", cost_usd=0.05))
+    ledger.record(CostEntry(..., mode="brainstorm", cost_usd=0.03))
+    ledger.record(CostEntry(..., mode=None, stage="classify", cost_usd=0.01))
+    s = ledger.summary(today=..., month=(2026, 4))
+    assert s.by_mode == {"ask": pytest.approx(0.05), "brainstorm": pytest.approx(0.03), "": pytest.approx(0.01)}
+
+def test_chat_turn_records_mode(...) -> None:
+    # Run a real ChatSession Ask-mode turn; assert a CostEntry was recorded with mode="ask"
+```
+
+```python
+# brain_api/tests/test_ws_chat_turn.py
+async def test_cost_update_includes_cumulative_tokens_in(...) -> None:
+    # Queue FakeLLM to report tokens_in=1500 on the turn
+    # Open WS, send turn_start, drain events
+    # Assert the cost_update frame has cumulative_tokens_in >= 1500
+```
+
+### Step 2 — Implement
+
+See sketches above. Keep `CostEntry`'s `mode`/`stage` kwargs optional so Plan 02–05 call sites compile without change.
+
+### Step 3 — Run + commit
+
+Expected: **703 + 4 = 707 passed + 11 skipped**. The existing `test_cost_report` and BudgetWall tests pin `by_domain` — verify the new `by_mode` field doesn't break them (add to the envelope but don't remove anything).
+
+```bash
+git commit -m "feat(core,api): plan 07 task 3 — cost ledger mode/stage tagging + cumulative_tokens_in"
+```
+
+---
+
+### Task 4 — 4 new tools + `BulkPlan.duplicate` + 12 `_SETTABLE_KEYS`
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/tools/recent_ingests.py` + shim at `packages/brain_mcp/src/brain_mcp/tools/recent_ingests.py` + smoke test
+- Create: `packages/brain_core/src/brain_core/tools/create_domain.py` + shim + smoke test
+- Create: `packages/brain_core/src/brain_core/tools/rename_domain.py` + shim + smoke test (ATOMIC — uses UndoLog)
+- Create: `packages/brain_core/src/brain_core/tools/budget_override.py` + shim + smoke test
+- Modify: `packages/brain_core/src/brain_core/ingest/bulk.py` — `BulkItem.duplicate: bool = False`; `BulkImporter.plan()` sets it via `IngestPipeline._already_ingested` check per file
+- Modify: `packages/brain_core/src/brain_core/cost/ledger.py` — `is_over_budget(config, today)` consults `config.budget.override_until` + `override_delta_usd`
+- Modify: `packages/brain_core/src/brain_core/config/schema.py` — `BudgetConfig.override_until: datetime | None` + `override_delta_usd: float = 0.0`
+- Modify: `packages/brain_core/src/brain_core/state/migrations/` — add `0003_ingest_history.sql` if needed (for `recent_ingests`)
+- Modify: `packages/brain_core/src/brain_core/tools/config_set.py` — `_SETTABLE_KEYS` gains: `ask_model`, `brainstorm_model`, `draft_model`, `domain_order`, `budget.override_until`, `budget.override_delta_usd` (6 new keys on top of the 5 autonomy keys from Task 1 = 11 total; 12th is `BulkImporter.plan`-surfaced `duplicate` which isn't a config key — 11 total `_SETTABLE_KEYS` entries added across Tasks 1 + 4)
+
+**Context for the implementer:**
+
+### `brain_recent_ingests`
+
+**Purpose:** power Inbox "Recent" / "In progress" / "Needs attention" tabs.
+
+**Input:** `{limit?: int = 20}`. **Output:** `{ingests: [{source, domain, source_type, status, patch_id?, classified_at, cost_usd, error?}]}`.
+
+**Implementation:** reads from a new `ingest_history` table in `state.sqlite`. Plan 02 already stores content-hash records for idempotency in a `sources` table; extend with a history view:
+
+```sql
+-- 0003_ingest_history.sql
+CREATE TABLE IF NOT EXISTS ingest_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  source_type TEXT,
+  domain TEXT,
+  status TEXT NOT NULL,  -- 'ok' / 'quarantined' / 'failed' / 'skipped_duplicate'
+  patch_id TEXT,
+  classified_at TEXT NOT NULL,  -- ISO timestamp
+  cost_usd REAL DEFAULT 0.0,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_history_classified_at ON ingest_history(classified_at DESC);
+```
+
+`IngestPipeline.ingest()` INSERTs a row after every run (success or failure). `brain_recent_ingests` SELECTs with `LIMIT`.
+
+### `brain_create_domain`
+
+**Input:** `{slug: str, name: str, accent_color?: str = "#888"}`. **Output:** `{status: "created", domain: {slug, name, accent_color}}`. Fails if slug already exists or fails `^[a-z][a-z0-9-]{1,24}$` regex.
+
+**Implementation:** `<vault>/<slug>/{index.md, log.md}` created with seed content; `config.domain_order` list gets the new slug appended via `brain_config_set`.
+
+### `brain_rename_domain` (D2a — ATOMIC, not a PatchSet)
+
+**Input:** `{from: str, to: str, rewrite_frontmatter: bool = True}`. **Output:** `{status: "renamed", from, to, files_updated: int, wikilinks_rewritten: int, undo_id: str}`.
+
+**Implementation:**
+1. Validate `to` doesn't exist; both slugs match the regex.
+2. Iterate `<vault>/<from>/**/*.md` — for each file, rewrite `domain: <from>` in frontmatter (if flag set), write atomically.
+3. Iterate every other vault file — find `[[<slug>]]` wikilinks where the target resolves into `<from>/` and rewrite to point into `<to>/`. (Most wikilinks are slug-only, not path-qualified, so this is usually a no-op unless the vault uses `[[<dir>/<slug>]]` style.)
+4. Atomic `os.rename(<vault>/<from>, <vault>/<to>)`.
+5. Update `config.domain_order`: replace `from` → `to` in-place.
+6. Write a single UndoLog record with `kind=rename_domain, from, to, files_touched: [...]` so `brain_undo_last` can revert.
+
+### `brain_budget_override`
+
+**Input:** `{amount_usd: float, duration_hours: int = 24}`. **Output:** `{status: "override_set", override_until: ISO, override_delta_usd}`. Sets `config.budget.override_until = now + duration_hours` and `config.budget.override_delta_usd = amount_usd`.
+
+### `BulkPlan.duplicate` flag
+
+`BulkImporter.plan()` already runs `_already_ingested(content_hash)` as a side-effect of classification. Store the flag on each `BulkItem`:
+
+```python
+@dataclass(frozen=True)
+class BulkItem:
+    spec: Path
+    slug: str
+    classified_domain: str | None
+    confidence: float | None
+    duplicate: bool = False  # NEW
+```
+
+Frontend uses the flag in the bulk-import dry-run table (design's `dup` warn-chip).
+
+### Step 1 — Failing tests
+
+One smoke test per tool (4 tests) + one `BulkPlan.duplicate` test + one `is_over_budget` override test = 6 tests.
+
+### Step 2 — Implement
+
+Apply sketches above. For `rename_domain`, pay careful attention to atomicity — the `os.rename` is the commit point; do frontmatter rewrites FIRST (so a crash mid-way leaves `<from>/` still mostly intact), the folder-rename LAST.
+
+### Step 3 — Run + commit
+
+Expected: **707 + 6 smoke + 4 × 1 shim preservation = 717 passed + 11 skipped**. Also update all 4 new tool INPUT_SCHEMAs in brain_core.tools registry; `GET /api/tools` now returns 22 tools, not 18 — update `test_lists_eighteen_tools_after_extraction` to 22.
+
+```bash
+git commit -m "feat(core): plan 07 task 4 — 4 new tools (recent_ingests, create/rename_domain, budget_override) + BulkPlan.duplicate"
+```
+
+---
+
+### Task 5 — `ChatSession.fork_from` + `doc_edit_proposed` WS event + `SCHEMA_VERSION = "2"`
+
+**Owning subagent:** brain-core-engineer
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/chat/fork.py` — `fork_from(source_id, turn_index, *, carry, mode, vault_root, ...) -> ChatSession` + `summarize_turns(turns, llm) -> str` helper
+- Modify: `packages/brain_api/src/brain_api/chat/events.py` — add `DocEditProposedEvent`; bump `SCHEMA_VERSION = "2"`
+- Modify: `packages/brain_api/src/brain_api/chat/session_runner.py` — `_convert_chat_event` maps `ChatEventKind.DOC_EDIT` → `DocEditProposedEvent`
+- Modify: ALL Plan 05 tests that pinned `SCHEMA_VERSION == "1"` — flip to `"2"` (expect ~3 tests across `test_chat_events.py`, `test_ws_chat_handshake.py`, `scripts/demo-plan-05.py`)
+- Create: `packages/brain_core/tests/chat/test_fork.py` — 4 tests (full carry copies N turns; none carry starts empty; summary carry runs an LLM call; invalid turn_index raises)
+
+**Context for the implementer:**
+
+### `ChatSession.fork_from`
+
+Classmethod on `ChatSession` (or free function in `brain_core.chat.fork`). Signature:
+
+```python
+def fork_from(
+    source_thread_id: str,
+    turn_index: int,
+    *,
+    vault_root: Path,
+    allowed_domains: tuple[str, ...],
+    llm: LLMProvider,
+    # ... other ChatSession kwargs that would flow from AppContext ...
+    mode: ChatMode | None = None,   # None → inherit from source thread
+    carry: Literal["full", "none", "summary"] = "full",
+    title_hint: str | None = None,
+) -> ChatSession:
+    """Create a new thread with turns 0..turn_index of source thread as initial context."""
+    source = ChatSession.load(source_thread_id, vault_root, ...)
+    turns_to_carry = source.turns[:turn_index + 1]
+
+    if carry == "none":
+        initial_turns = []
+    elif carry == "full":
+        initial_turns = list(turns_to_carry)
+    elif carry == "summary":
+        summary = summarize_turns(turns_to_carry, llm)
+        initial_turns = [ChatTurn.system(summary)]
+    else:
+        raise ValueError(f"unknown carry mode: {carry!r}")
+
+    new_thread_id = _new_thread_id(title_hint)
+    return ChatSession(
+        thread_id=new_thread_id,
+        initial_turns=initial_turns,
+        mode=mode or source.mode,
+        vault_root=vault_root,
+        ...
+    )
+
+
+def summarize_turns(turns: list[ChatTurn], llm: LLMProvider, model: str = "claude-haiku-4-5-20251001") -> str:
+    """Cheap Haiku-powered summary of N turns. ~400 tokens target."""
+    transcript_text = "\n\n".join(f"{t.role}: {t.body}" for t in turns)
+    response = await llm.complete(
+        LLMRequest(
+            model=model,
+            system="Summarize the following chat transcript in ~4 sentences, preserving the key factual claims and the open question the user was working on.",
+            messages=[LLMMessage(role="user", content=transcript_text)],
+            max_tokens=600,
+        )
+    )
+    return response.content.strip()
+```
+
+### `SCHEMA_VERSION = "2"` — breaking change
+
+Plan 05 pinned `"1"`. Adding a new event type `doc_edit_proposed` is technically backwards-compatible (clients that don't know it can ignore), but we bump to `"2"` to make the addition explicit and let the frontend opt in on handshake. The frontend's WS client (Task 9) expects `schema_version: "2"` and logs a warning if it sees `"1"` (graceful — still works if only missing DOC_EDIT).
+
+### `DocEditProposedEvent`
+
+```python
+# brain_api/chat/events.py
+class DocEditProposedEvent(BaseModel):
+    type: Literal["doc_edit_proposed"] = "doc_edit_proposed"
+    edits: list[dict[str, Any]]  # each item: {op, anchor: {kind, value}, text}
+```
+
+Add to the `ServerEvent` union + `serialize_server_event` pathway.
+
+### `_convert_chat_event` mapping
+
+```python
+# session_runner.py
+if isinstance(e, ChatEvent) and e.kind == ChatEventKind.DOC_EDIT:
+    # Per Task 2, Draft-mode may emit multiple DOC_EDIT events per turn (one per edit).
+    # We batch them into a single DocEditProposedEvent? Or emit one event per edit?
+    # Choice: one WS event per DOC_EDIT ChatEvent — simpler, frontend can batch UI.
+    return DocEditProposedEvent(edits=[e.data])
+```
+
+### Step 1 — Failing tests
+
+```python
+# brain_core/tests/chat/test_fork.py
+@pytest.mark.asyncio
+async def test_fork_full_carry_copies_turns(...) -> None:
+    source = _make_source_with_turns(5)
+    forked = await fork_from(source.thread_id, 3, carry="full", llm=FakeLLMProvider(), ...)
+    assert len(forked._turns) == 4  # turns 0..3
+
+@pytest.mark.asyncio
+async def test_fork_none_carry_empty(...) -> None:
+    forked = await fork_from(..., carry="none", ...)
+    assert forked._turns == []
+
+@pytest.mark.asyncio
+async def test_fork_summary_carry_runs_llm(...) -> None:
+    fake = FakeLLMProvider()
+    fake.queue("Summary text.")
+    forked = await fork_from(..., carry="summary", llm=fake, ...)
+    assert len(forked._turns) == 1
+    assert "Summary text" in forked._turns[0].body
+
+@pytest.mark.asyncio
+async def test_fork_invalid_turn_index_raises(...) -> None:
+    source = _make_source_with_turns(3)
+    with pytest.raises(IndexError):
+        await fork_from(source.thread_id, 99, carry="full", ...)
+```
+
+```python
+# brain_api/tests/test_chat_events.py
+def test_schema_version_is_2() -> None:
+    from brain_api.chat.events import SCHEMA_VERSION
+    assert SCHEMA_VERSION == "2"
+
+def test_doc_edit_proposed_serializes() -> None:
+    ev = DocEditProposedEvent(edits=[{"op": "insert", "anchor": {"kind": "line", "value": 3}, "text": "hello"}])
+    out = serialize_server_event(ev)
+    assert out["type"] == "doc_edit_proposed"
+```
+
+### Step 2 — Implement
+
+See sketches. Update Plan 05 tests that pinned `SCHEMA_VERSION == "1"`.
+
+### Step 3 — Run + commit
+
+Expected: **717 + 4 fork + 2 event + ~3 flipped schema_version tests = ~726 passed + 11 skipped**.
+
+```bash
+git commit -m "feat(core,api): plan 07 task 5 — ChatSession.fork_from + doc_edit_proposed WS event + SCHEMA_VERSION=2"
+```
+
+---
+
+**Checkpoint 1 — pause for main-loop review.**
+
+5 backend-extension tasks landed. Summary:
+- **Autonomy gate** — `PatchSet.category` + 5 autonomy config keys. `brain_apply_patch` auto-applies when gate returns True.
+- **Per-mode chat models** — `ChatSessionConfig.{ask,brainstorm,draft}_model` optional, fallback to default.
+- **DocEditChatEvent** — Draft-mode assistant responses with `\`\`\`edits` fence emit structured events.
+- **Cost ledger mode/stage tagging** — `CostEntry.{mode,stage}` + `CostSummary.by_mode`.
+- **`cumulative_tokens_in` WS field** — for context-fill meter.
+- **4 new tools** — `brain_recent_ingests`, `brain_create_domain`, `brain_rename_domain` (atomic), `brain_budget_override`.
+- **`BulkPlan.duplicate`** — surfaces dry-run duplicate detection.
+- **12 new `_SETTABLE_KEYS`** — config schema supports every frontend-touchable setting.
+- **`ChatSession.fork_from` + summarize_turns helper** — supports ForkDialog's 3 carry modes.
+- **`SCHEMA_VERSION = "2"`** + `doc_edit_proposed` WS event — frontend WS client pins v2.
+
+Expected combined test count: **~726 passed + 11 skipped** (up from 685 + 11). Tool surface: **22 tools** (up from 18). Hard gate: brain_mcp tests unchanged at 99; brain_cli unchanged at 30.
+
+Main loop reviews:
+
+- Does the `PatchCategory` enum cover every real patchset shape, or are there cases falling into `OTHER` that shouldn't? (Filesystem edits from `brain_propose_note` to `<domain>/sources/` become OTHER — correct: source edits should stage, not auto-apply. Edits to `<domain>/synthesis/` also OTHER — user-curated territory.)
+- Is the `\`\`\`edits` fence convention for Draft-mode structured edits the right shape? LLM emits JSON inside a fenced code block; frontend doesn't see the fence (it's parsed out by `ChatSession`). Alternative: separate sidecar message? Cleaner but more LLM surface to specify.
+- `rename_domain` via UndoLog is atomic but non-standard. Document clearly as an exception to "every vault write through VaultWriter/PatchSet."
+- SCHEMA_VERSION bump — frontend MUST pin `"2"`. If a v1-only client connects during the transition, what happens? Backend always sends v2; a v1-expecting client warns in its handshake check but continues. Document.
+
+Before Task 6, confirm the backend surface is stable — frontend construction depends on `apiFetch<T>` types derived from OpenAPI + typed WS events from `brain_api.chat.events`.
+
+---
