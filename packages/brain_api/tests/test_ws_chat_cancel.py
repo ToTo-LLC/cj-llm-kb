@@ -40,6 +40,8 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from _ws_helpers import get_app_ctx, get_app_token
+
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
 
@@ -67,7 +69,7 @@ def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch) -> None:
     monkeypatch.setattr(session_mod.ChatSession, "turn", slow_turn)
 
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with fresh.websocket_connect(
             f"/ws/chat/t-cancel?token={token}", headers=_LOOPBACK_HEADERS
         ) as ws:
@@ -110,7 +112,7 @@ def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch) -> None:
 def test_cancel_without_active_turn_emits_error(app: FastAPI) -> None:
     """``cancel_turn`` with no turn in flight is an ``invalid_state`` error."""
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with fresh.websocket_connect(
             f"/ws/chat/t-nocancel?token={token}", headers=_LOOPBACK_HEADERS
         ) as ws:
@@ -137,8 +139,8 @@ def test_switch_mode_between_turns(app: FastAPI) -> None:
     the switch didn't break the receive loop or trigger an error frame.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        fresh.app.state.ctx.tool_ctx.llm.queue("ok")
-        token = fresh.app.state.ctx.token
+        get_app_ctx(fresh).tool_ctx.llm.queue("ok")
+        token = get_app_token(fresh)
         with fresh.websocket_connect(
             f"/ws/chat/t-switch?token={token}", headers=_LOOPBACK_HEADERS
         ) as ws:
@@ -193,7 +195,7 @@ def test_switch_mode_mid_turn_rejected(app: FastAPI, monkeypatch) -> None:
     monkeypatch.setattr(session_mod.ChatSession, "turn", slow_turn)
 
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with fresh.websocket_connect(
             f"/ws/chat/t-midswitch?token={token}", headers=_LOOPBACK_HEADERS
         ) as ws:

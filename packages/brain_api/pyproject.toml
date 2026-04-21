@@ -25,6 +25,12 @@ packages = ["src/brain_api"]
 # tests/prompts/). Tracked for Task 25 sweep — a rootdir-level pytest import
 # mode change would let us drop this special case.
 explicit_package_bases = true
+# Plan 05 Task 25 — tests/_ws_helpers.py imported by test_ws_chat_*.py via
+# its bare module name (pytest adds the tests dir to sys.path under
+# rootdir discovery). Point mypy at the same dir so the import resolves
+# under ``mypy src tests`` without a tests/__init__.py (which would break
+# the rationale above).
+mypy_path = "tests"
 
 [tool.uv.sources]
 brain_core = { workspace = true }

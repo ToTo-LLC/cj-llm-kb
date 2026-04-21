@@ -23,6 +23,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from _ws_helpers import get_app_ctx, get_app_token
+
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
 
@@ -31,8 +33,8 @@ def test_turn_emits_ordered_events(app: FastAPI) -> None:
     with TestClient(app, base_url="http://localhost") as fresh:
         # Queue BEFORE opening the WS so the FakeLLM has a response ready
         # when the background turn fires.
-        fresh.app.state.ctx.tool_ctx.llm.queue("Hello there.")
-        token = fresh.app.state.ctx.token
+        get_app_ctx(fresh).tool_ctx.llm.queue("Hello there.")
+        token = get_app_token(fresh)
 
         with fresh.websocket_connect(f"/ws/chat/t1?token={token}", headers=_LOOPBACK_HEADERS) as ws:
             # Drain the two handshake frames.
@@ -79,7 +81,7 @@ def test_turn_error_emits_error_event_keeps_connection_open(app: FastAPI, monkey
     monkeypatch.setattr(session_mod.ChatSession, "turn", boom)
 
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with fresh.websocket_connect(f"/ws/chat/t2?token={token}", headers=_LOOPBACK_HEADERS) as ws:
             ws.receive_json()  # schema_version
             ws.receive_json()  # thread_loaded

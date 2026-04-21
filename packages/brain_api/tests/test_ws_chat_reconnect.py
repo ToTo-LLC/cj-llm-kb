@@ -36,6 +36,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from _ws_helpers import get_app_ctx, get_app_token
+
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
 
@@ -65,8 +67,8 @@ def test_thread_persisted_on_clean_disconnect(app: FastAPI, seeded_vault: Path) 
     user's message.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        fresh.app.state.ctx.tool_ctx.llm.queue("assistant response")
-        token = fresh.app.state.ctx.token
+        get_app_ctx(fresh).tool_ctx.llm.queue("assistant response")
+        token = get_app_token(fresh)
 
         with fresh.websocket_connect(
             f"/ws/chat/persist-me?token={token}", headers=_LOOPBACK_HEADERS
@@ -108,8 +110,8 @@ def test_reconnect_reports_real_turn_count(app: FastAPI, seeded_vault: Path) -> 
     * ``SessionRunner.turn_count`` forwards from the loaded session.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        fresh.app.state.ctx.tool_ctx.llm.queue("first reply")
-        token = fresh.app.state.ctx.token
+        get_app_ctx(fresh).tool_ctx.llm.queue("first reply")
+        token = get_app_token(fresh)
 
         # --- Connection A: run one turn then close cleanly.
         with fresh.websocket_connect(
@@ -157,8 +159,8 @@ def test_unclean_disconnect_still_persists(app: FastAPI, seeded_vault: Path) -> 
     ``except WebSocketDisconnect`` + ``finally`` take over.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        fresh.app.state.ctx.tool_ctx.llm.queue("assistant reply")
-        token = fresh.app.state.ctx.token
+        get_app_ctx(fresh).tool_ctx.llm.queue("assistant reply")
+        token = get_app_token(fresh)
 
         with (
             pytest.raises(RuntimeError, match="simulated client crash"),

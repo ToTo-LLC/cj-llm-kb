@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from _ws_helpers import get_app_token
+
 # TestClient.websocket_connect hard-codes a ``ws://testserver`` base URL
 # (see ``starlette.testclient.TestClient.websocket_connect``), so every
 # WS handshake leaves the client with ``Host: testserver`` regardless of
@@ -58,7 +60,7 @@ def test_handshake_wrong_token_rejected(app: FastAPI) -> None:
 def test_handshake_valid_token_accepted(app: FastAPI) -> None:
     """Valid token -> accept + schema_version + thread_loaded frames."""
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with fresh.websocket_connect(
             f"/ws/chat/test-thread?token={token}", headers=_LOOPBACK_HEADERS
         ) as ws:
@@ -83,7 +85,7 @@ def test_handshake_rejects_bad_thread_id(app: FastAPI) -> None:
     past the router when a slash is present.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with (
             pytest.raises(WebSocketDisconnect),
             fresh.websocket_connect(f"/ws/chat/bad/slash?token={token}", headers=_LOOPBACK_HEADERS),
@@ -120,7 +122,7 @@ def test_handshake_rejects_windows_reserved_thread_id(app: FastAPI, reserved_nam
     Windows runner to reproduce the failure mode.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with (
             pytest.raises(WebSocketDisconnect),
             fresh.websocket_connect(
@@ -139,7 +141,7 @@ def test_handshake_rejects_evil_origin(app: FastAPI) -> None:
     (Host mismatch), which wouldn't prove the Origin check runs on WS.
     """
     with TestClient(app, base_url="http://localhost") as fresh:
-        token = fresh.app.state.ctx.token
+        token = get_app_token(fresh)
         with (
             pytest.raises(WebSocketDisconnect),
             fresh.websocket_connect(
