@@ -17,5 +17,14 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/brain_api"]
 
+[tool.mypy]
+# Plan 05 Task 22 — tests/prompts/ intentionally has no __init__.py so pytest
+# does not treat it as a duplicate top-level `prompts` package alongside
+# brain_mcp/tests/prompts/. explicit_package_bases keeps mypy happy with the
+# resulting namespace-style layout (same conftest filename in tests/ and
+# tests/prompts/). Tracked for Task 25 sweep — a rootdir-level pytest import
+# mode change would let us drop this special case.
+explicit_package_bases = true
+
 [tool.uv.sources]
 brain_core = { workspace = true }

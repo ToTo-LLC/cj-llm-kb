@@ -154,3 +154,24 @@ Then for each contract test:
    ledger entry, etc.).
 3. Commit the new cassette under
    `packages/brain_mcp/tests/prompts/cassettes/`.
+
+## Plan 05 — API chat cassettes
+
+Three contract tests live in `packages/brain_api/tests/prompts/`, one per chat mode:
+
+- `test_chat_ask_contract.py` — Ask-mode search + citation
+- `test_chat_brainstorm_contract.py` — Brainstorm-mode patch proposal
+- `test_chat_draft_contract.py` — Draft-mode open-doc edit stream
+
+All three are skipped by default (`@pytest.mark.skipif(True, ...)` + `raise NotImplementedError(...)`). Recording recipe:
+
+```bash
+ANTHROPIC_API_KEY=sk-... RUN_LIVE_LLM_TESTS=1 uv run pytest \
+    -k chat_<mode>_contract packages/brain_api/tests/prompts -v
+```
+
+Two-step un-skip:
+1. Remove `@pytest.mark.skipif(True, ...)` decorator.
+2. Replace `raise NotImplementedError(...)` with real assertions against the recorded response.
+
+These tests are NOT a merge gate. They run in a CI job gated on `ANTHROPIC_API_KEY`; PRs don't block on them.
