@@ -56,3 +56,29 @@ body {
 /* Base element resets for consistent rendering across Mac + Windows */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+
+/* ---------- App shell grid (Task 10) ----------
+   Topbar spans the full width; left nav + right rail flank the main area.
+   Row heights / column widths intentionally live here (not Tailwind) so the
+   semantic layout is declared once and kept consistent across screens.
+*/
+.app-grid {
+  display: grid;
+  grid-template-rows: 48px 1fr;
+  grid-template-columns: 240px 1fr 320px;
+  grid-template-areas:
+    "topbar topbar topbar"
+    "leftnav main rail";
+  height: 100vh;
+}
+.app-grid[data-rail-open="false"] {
+  grid-template-columns: 240px 1fr 0;
+}
+.app-grid[data-rail-open="false"] .rail {
+  overflow: hidden;
+  visibility: hidden;
+}
+.topbar  { grid-area: topbar;  height: 48px; }
+.leftnav { grid-area: leftnav; overflow-y: auto; }
+.main    { grid-area: main;    overflow-y: auto; }
+.rail    { grid-area: rail;    overflow-y: auto; }
