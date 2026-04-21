@@ -343,10 +343,10 @@ Same 12-point discipline as Plan 02/03/04. Repeated here for convenience.
 - [ ] **Task 21 — Disconnect flush + reconnect rebuild** (on disconnect: persist thread via `ChatSession.persist`; on reconnect: load from vault + state.sqlite, resume from last USER turn)
 
 ### Group 7 — Contract + cross-platform + demo + close (Tasks 22–25)
-- [ ] **Task 22 — VCR contract test infrastructure** (mirrors Plan 04 Task 22; 1 skipped test per ingest-chat-scenario deferred per D9a analog — "same D-deferral pattern as Plan 04")
-- [ ] **Task 23 — Cross-platform sweep** (walk every new `brain_api` module + the `brain_core.tools.*` moves; verify pathlib, LF newlines, token-file permissions, no POSIX-only APIs in WS code)
-- [ ] **Task 24 — `scripts/demo-plan-05.py`** (14-gate demo per D12a)
-- [ ] **Task 25 — Hardening sweep + coverage + tag `plan-05-api`**
+- [x] **Task 22 — VCR contract test infrastructure** (mirrors Plan 04 Task 22; 1 skipped test per ingest-chat-scenario deferred per D9a analog — "same D-deferral pattern as Plan 04")
+- [x] **Task 23 — Cross-platform sweep** (walk every new `brain_api` module + the `brain_core.tools.*` moves; verify pathlib, LF newlines, token-file permissions, no POSIX-only APIs in WS code)
+- [x] **Task 24 — `scripts/demo-plan-05.py`** (14-gate demo per D12a)
+- [x] **Task 25 — Hardening sweep + coverage + tag `plan-05-api`**
 
 ---
 
@@ -6199,3 +6199,77 @@ git add tasks/todo.md tasks/lessons.md tasks/plans/05-api.md && git commit -m "d
 - Confirmation that `plan-05-api` tag exists locally
 
 Main loop pushes `main` + tag to `origin` after reviewing the close commit.
+
+## Review
+
+**Plan 05 — API: complete.**
+
+- **Tag:** `plan-05-api`
+- **Completed:** 2026-04-21
+- **Task count:** 25 planned / 25 actual
+- **Commits since `plan-04-mcp`:** 38 (25 execution + 8 authoring checkpoints + 5 Task 25 sweep)
+- **Test counts:** brain_core (427) + brain_cli (30) + brain_mcp (99) + brain_api (129) = **685 passed + 11 skipped**
+- **Coverage:** brain_core 91% · brain_cli 75% · brain_mcp 90% · brain_api 94% (aggregate 92%)
+- **Per-module targets (all met):** brain_api.app 100% (≥85%), brain_api.auth 96% (≥90%), brain_api.errors 100% (≥95%), brain_api.routes.tools 100% (≥90%), brain_api.routes.chat 89% (≥80%), brain_api.chat.session_runner 86% (≥80%), brain_core.rate_limit 100% (≥95%)
+- **Gates:** mypy strict clean (4 packages, 0 errors after Batch A typed WS helper — was 18 pre-Task-25), ruff + format clean (300 files), ghost-file check 0
+- **Demo receipt:**
+
+```
+[gate 1] /healthz
+  OK  /healthz -> 200 ok
+[gate 2] GET /api/tools
+  OK  /api/tools -> 200 (got 200)
+  OK  18 tools listed (got 18)
+  OK  all tool names start with brain_
+[gate 3] POST brain_list_domains (authed)
+  OK  200 (got 200)
+  OK  research domain listed
+[gate 4] POST without token -> 403
+  OK  403 (got 403)
+  OK  error=refused
+[gate 5] POST with evil origin -> 403
+  OK  403 (got 403)
+  OK  error=refused
+[gate 6] brain_search scope held
+  OK  200 (got 200)
+  OK  non-empty hits (got 2)
+  OK  all hits inside research/
+[gate 7] brain_read_note
+  OK  200 (got 200)
+  OK  expected body content returned
+[gate 8] brain_propose_note stages patch
+  OK  200 (got 200)
+  OK  patch_id present
+  OK  target file NOT on disk yet
+[gate 9] brain_apply_patch
+  OK  200 (got 200)
+  OK  status=applied (got 'applied')
+  OK  undo_id present
+  OK  target file now on disk
+[gate 10] brain_read_note on personal/ -> 403 scope
+  OK  403 (got 403)
+  OK  error=scope
+[gate 11] brain_ingest rate-limited -> 429 + Retry-After
+  OK  429 (got 429)
+  OK  Retry-After header present + numeric
+  OK  detail.bucket=patches (got 'patches')
+[gate 12] WS handshake (schema_version + thread_loaded)
+  OK  schema_version first
+  OK  version=1 (got '1')
+  OK  thread_loaded second
+  OK  fresh thread turn_count=0 (got 0)
+  OK  thread_id echoed (got 'demo-thread')
+[gate 13] WS turn round-trip (turn_start -> delta+ -> turn_end)
+  OK  turn_start first (got 'turn_start')
+  OK  at least one delta (saw ['turn_start', 'delta', 'delta', 'delta', 'delta', 'delta', 'delta', 'delta', 'delta', 'delta', 'delta', 'delta', 'cost_update', 'turn_end'])
+  OK  turn_end last (got 'turn_end')
+[gate 14] WS reconnect shows turn_count >= 1
+  OK  schema_version on reconnect
+  OK  thread_loaded on reconnect
+  OK  thread_id echoed (got 'demo-thread')
+  OK  turn_count >= 1 on reconnect (got 1)
+
+PLAN 05 DEMO OK
+```
+
+- **Handoff to Plan 06:** the frontend's contract lives in two places — `GET /api/tools` (discovery + `INPUT_SCHEMA` for every tool, with `minimum` / `maximum` / `enum` now honoured at the dispatcher edge per Task 25 Batch A) and `brain_api.chat.events` (WS event wire format, pinned by `SCHEMA_VERSION = "1"`). Plan 06's mockups reference both. Every error the frontend shows must parse `{"error", "message", "detail"}` (three keys, `detail` may be `null`) — Task 25 aligned middleware + route + 500 handlers to that shape. The frontend reads the filesystem token server-side (Next.js SSR route → `.brain/run/api-secret.txt`), never exposing it to the browser. 429 responses include a `Retry-After: <seconds>` header; the frontend should respect it before re-issuing. Concurrent WS per thread uses last-writer-wins; Plan 07 UI enforces single-tab-per-thread.
