@@ -97,10 +97,13 @@ def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch) -> None:
                     assert frame["turn_number"] == 1
                     break
                 # delta or other pre-cancel frames are acceptable.
-                assert frame["type"] in {"delta", "tool_call", "tool_result",
-                                         "cost_update", "patch_proposed"}, (
-                    f"unexpected frame during cancel drain: {frame}"
-                )
+                assert frame["type"] in {
+                    "delta",
+                    "tool_call",
+                    "tool_result",
+                    "cost_update",
+                    "patch_proposed",
+                }, f"unexpected frame during cancel drain: {frame}"
             assert saw_cancelled, "expected a cancelled event after cancel_turn"
 
 
@@ -216,10 +219,13 @@ def test_switch_mode_mid_turn_rejected(app: FastAPI, monkeypatch) -> None:
                     # mid-turn switch) holds in that branch trivially.
                     break
                 # delta / tool_call etc. pre-error are fine.
-                assert frame["type"] in {"delta", "tool_call", "tool_result",
-                                         "cost_update", "patch_proposed"}, (
-                    f"unexpected frame during switch_mode race: {frame}"
-                )
+                assert frame["type"] in {
+                    "delta",
+                    "tool_call",
+                    "tool_result",
+                    "cost_update",
+                    "patch_proposed",
+                }, f"unexpected frame during switch_mode race: {frame}"
 
             assert saw_error, (
                 "switch_mode mid-turn must emit invalid_state — got no error "

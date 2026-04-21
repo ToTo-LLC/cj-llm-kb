@@ -33,11 +33,15 @@ irrelevant; Plan 03 is cleanly Case A.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, cast
 
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.modes import MODES
+from brain_core.chat.persistence import ThreadPersistence
 from brain_core.chat.session import ChatSession
 from brain_core.chat.tools.base import ToolRegistry
 from brain_core.chat.tools.edit_open_doc import EditOpenDocTool
@@ -133,13 +137,48 @@ class SessionRunner:
         """
         return self._turn_number
 
+    @property
+    def turn_count(self) -> int:
+        """Count of USER turns in the underlying ``ChatSession``.
+
+        Surfaced in the WS ``thread_loaded`` handshake frame so a
+        reconnecting client knows how many user messages already live in
+        the thread. ``0`` when the session hasn't been built yet (the
+        route handler calls ``_ensure_session`` eagerly so the count is
+        accurate before the frame goes out).
+        """
+        if self._session is None:
+            return 0
+        return self._session.turn_count
+
     def _ensure_session(self) -> ChatSession:
         """Build the ``ChatSession`` on first use; return the cached one after.
+
+        Plan 05 Task 21: on first construction, we check whether the
+        thread's canonical markdown file exists in the vault
+        (``<domain>/chats/<thread_id>.md``). If it does, we rehydrate
+        turns via ``ThreadPersistence.read(path)`` and pass them into
+        ``ChatSession(initial_turns=...)`` so the compiled context
+        preserves history across reconnects.
+
+        ``ThreadPersistence`` is also injected so ``ChatSession.turn``
+        persists after each successful turn (belt-and-braces; the WS
+        ``finally`` block also calls ``runner.persist()`` to cover
+        mid-turn unclean disconnects).
 
         Uses ``ChatMode(self.mode)`` to coerce the string mode (which
         arrives from the wire as ``"ask" | "brainstorm" | "draft"``)
         into the ``StrEnum``. Invalid values raise ``ValueError`` here,
         which ``run_turn`` catches and surfaces as an ``ErrorEvent``.
+
+        If the stored thread's mode differs from ``self.mode`` (e.g.,
+        the file says ``brainstorm`` but the client connected with
+        ``ask``), the CONFIG mode wins — the client-supplied mode is
+        treated as an implicit switch-on-reconnect. That matches
+        Plan 03's philosophy (mode lives on the thread; the client is
+        just asserting it). A future Plan 07 UX refinement can surface
+        the drift before accepting a turn, but Plan 05 backend takes
+        the client at its word.
         """
         if self._session is not None:
             return self._session
@@ -153,6 +192,33 @@ class SessionRunner:
             mode=mode_enum,
             domains=self.ctx.allowed_domains,
         )
+
+        # Build ThreadPersistence so ChatSession.turn persists each turn.
+        # state_db is required by ThreadPersistence for chat_threads
+        # upserts; writer is required for the atomic VaultWriter patch.
+        persistence: ThreadPersistence | None = None
+        initial_turns = None
+        if self.ctx.tool_ctx.state_db is not None and self.ctx.tool_ctx.writer is not None:
+            persistence = ThreadPersistence(
+                vault_root=self.ctx.vault_root,
+                writer=self.ctx.tool_ctx.writer,
+                db=self.ctx.tool_ctx.state_db,
+            )
+            thread_path = self.ctx.vault_root / persistence.thread_path(self.thread_id, config)
+            if thread_path.exists():
+                try:
+                    loaded = persistence.read(thread_path)
+                    initial_turns = loaded.turns
+                except Exception:
+                    # A malformed on-disk thread must not block a new
+                    # connection — log and fall through to fresh session.
+                    # Plan 07 UX can surface a "thread file damaged"
+                    # warning via a separate channel.
+                    logger.exception(
+                        "failed to load thread_id=%s; starting fresh",
+                        self.thread_id,
+                    )
+
         self._session = ChatSession(
             config=config,
             llm=self.ctx.tool_ctx.llm,
@@ -163,10 +229,49 @@ class SessionRunner:
             state_db=self.ctx.tool_ctx.state_db,
             vault_root=self.ctx.vault_root,
             thread_id=self.thread_id,
-            # persistence / autotitler / vault_writer: deferred to
-            # Task 21, which wires persistence end-to-end.
+            persistence=persistence,
+            initial_turns=initial_turns,
+            # autotitler / vault_writer: deferred — autotitle is a
+            # draft-mode concern that Plan 07 wires end-to-end (requires
+            # a rename + WS thread_id update protocol).
         )
         return self._session
+
+    async def persist(self) -> None:
+        """Flush the current session to vault + state.sqlite.
+
+        Belt-and-braces for unclean disconnect: ``ChatSession.turn``
+        already persists at the end of every successful turn. This path
+        covers the case where the WS closes BETWEEN turns — no-op —
+        and documents the contract so the WS ``finally`` block can call
+        it unconditionally.
+
+        Never raises. A failure here must not propagate into the WS
+        close path (which is already closing). Logged and swallowed.
+
+        No-op when:
+        - the session was never built (``_ensure_session`` not called),
+        - there are no turns to persist (fresh thread + no messages),
+        - ``ThreadPersistence`` is missing (no state_db or writer).
+        """
+        if self._session is None:
+            return
+        if not self._session._turns:
+            # No turns to write — would create an empty thread file
+            # otherwise, which is semantically wrong (a thread with no
+            # content shouldn't appear in the list_chats tool output).
+            return
+        persistence = self._session.persistence
+        if persistence is None:
+            return
+        try:
+            persistence.write(
+                thread_id=self._session.thread_id,
+                config=self._session.config,
+                turns=self._session._turns,
+            )
+        except Exception:
+            logger.exception("persist failed for thread_id=%s", self.thread_id)
 
     async def run_turn(self, content: str, websocket: WebSocket) -> None:
         """Run one turn; stream events to the websocket.
@@ -191,9 +296,27 @@ class SessionRunner:
             serialize_server_event(TurnStartEvent(turn_number=self._turn_number))
         )
 
+        session = self._ensure_session()
+        # Plan 05 Task 21: hold the async generator explicitly so we can
+        # ``aclose()`` it deterministically in the ``finally`` below.
+        # Without this, a client crash mid-stream (send_json raises,
+        # ``async for`` exits without ever calling ``athrow`` on the
+        # generator) leaves ``ChatSession.turn``'s ``finally`` block
+        # unexecuted until asyncio's async-gen-finalize hook eventually
+        # schedules it — which can be AFTER ``runner.persist()`` runs in
+        # the route's ``finally``, so ``_turns`` is still empty at
+        # persist time. Explicit aclose forces the finally to run before
+        # this function returns, guaranteeing ``_turns`` is populated
+        # by the time persist() is called.
+        # ``session.turn`` is declared ``AsyncIterator[ChatEvent]`` for
+        # consumer ergonomics (``async for ev in session.turn(...)``),
+        # but at runtime it's always an ``AsyncGenerator`` (async-def
+        # with yield). We need ``.aclose`` here, which only the richer
+        # protocol exposes — the cast is safe because ``ChatSession``
+        # never returns anything else.
+        turn_gen = cast(AsyncGenerator[ChatEvent, None], session.turn(content))
         try:
-            session = self._ensure_session()
-            async for chat_event in session.turn(content):
+            async for chat_event in turn_gen:
                 ws_event = _convert_chat_event(chat_event)
                 if ws_event is not None:
                     await websocket.send_json(serialize_server_event(ws_event))
@@ -218,11 +341,46 @@ class SessionRunner:
                 self.thread_id,
                 self._turn_number,
             )
-            await websocket.send_json(
-                serialize_server_event(
-                    ErrorEvent(code="internal", message=str(exc), recoverable=True)
+            # best-effort notify — if the socket is gone (the usual
+            # trigger for Exception here is a closed socket), the inner
+            # send_json raises too; swallow it so we fall through to
+            # aclose+persist rather than escaping with a double fault.
+            with contextlib.suppress(Exception):
+                await websocket.send_json(
+                    serialize_server_event(
+                        ErrorEvent(code="internal", message=str(exc), recoverable=True)
+                    )
                 )
-            )
+        finally:
+            # Deterministically flush ``ChatSession.turn``'s finally
+            # block. ``aclose()`` throws ``GeneratorExit`` at the suspended
+            # yield inside the generator, which triggers the try/finally
+            # that appends USER + ASSISTANT turns to ``_turns``. Without
+            # this explicit aclose, asyncio's async-gen finalizer may
+            # run AFTER the route's finally-block persist(), in which
+            # case ``_turns`` is still empty when we write.
+            #
+            # We wrap in ``asyncio.shield`` because ``run_turn`` may be
+            # running under a ``CancelledError`` unwind (the route's
+            # ``finally`` cancels the turn_task on WS disconnect). A
+            # plain ``await turn_gen.aclose()`` under active cancellation
+            # can be interrupted before the generator's finally executes,
+            # leaving ``_turns`` empty. ``shield`` detaches aclose from
+            # the outer cancellation so it runs to completion.
+            # ``aclose`` is idempotent — calling it on an already-closed
+            # generator is a no-op.
+            try:
+                await asyncio.shield(turn_gen.aclose())
+            except asyncio.CancelledError:
+                # Re-raise the outer cancel AFTER aclose completed.
+                # The shield propagates CancelledError to the outer
+                # awaiter without cancelling the shielded task. We let
+                # the cancel continue to unwind the runner normally.
+                raise
+            except Exception:
+                # A misbehaving finally inside ChatSession.turn should
+                # not escape the runner; log + swallow.
+                logger.exception("turn_gen.aclose raised")
 
 
 def _convert_chat_event(e: ChatEvent) -> ServerEvent | None:

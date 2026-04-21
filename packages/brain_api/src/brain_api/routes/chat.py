@@ -120,7 +120,18 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     # 4. Accept the upgrade.
     await websocket.accept()
 
-    # 5. Send handshake events. Two frames, in order: schema version
+    # 5. Build the SessionRunner and eagerly load any existing thread
+    # from the vault BEFORE sending the ``thread_loaded`` frame, so the
+    # reported ``turn_count`` reflects the actual on-disk state. Task 17
+    # shipped with a hardcoded ``turn_count = 0``; Task 21 swaps that for
+    # a real load-from-vault + state.sqlite. A fresh thread still reports
+    # ``0``; a reconnected thread reports the number of user turns
+    # already persisted.
+    mode = "ask"
+    runner = SessionRunner(ctx=ctx, thread_id=thread_id, mode=mode)
+    runner._ensure_session()
+
+    # 6. Send handshake events. Two frames, in order: schema version
     # first (so a pinned client can disconnect before processing any
     # content if the major version has changed), then thread metadata.
     # Both go through ``serialize_server_event`` so the wire shape is
@@ -128,22 +139,15 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     # shape that can drift from the typed contract.
     await websocket.send_json(serialize_server_event(SchemaVersionEvent(version=SCHEMA_VERSION)))
 
-    # Thread metadata — Task 21 will load from vault + state.sqlite;
-    # for now we emit defaults so the handshake shape is locked.
-    turn_count = 0  # TODO(Task 21): load from vault + state.sqlite
-    mode = "ask"
     await websocket.send_json(
         serialize_server_event(
             ThreadLoadedEvent(
                 thread_id=thread_id,
                 mode=mode,
-                turn_count=turn_count,
+                turn_count=runner.turn_count,
             )
         )
     )
-
-    # 6. Build the SessionRunner — one per WS connection.
-    runner = SessionRunner(ctx=ctx, thread_id=thread_id, mode=mode)
 
     # 7. Concurrent receive/turn loop. Two asyncio tasks coexist:
     #   - ``recv_task``: re-created every loop iteration; awaits the
@@ -166,9 +170,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             if turn_task is not None and not turn_task.done():
                 wait_set.add(turn_task)
 
-            done, _pending = await asyncio.wait(
-                wait_set, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _pending = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
 
             # --- Handle turn_task completion FIRST so the dispatch
             # below sees ``turn_task = None`` if the turn ended in the
@@ -179,9 +181,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             if turn_task is not None and turn_task in done:
                 exc = turn_task.exception()
                 if exc is not None and not isinstance(exc, asyncio.CancelledError):
-                    logger.exception(
-                        "turn_task escaped run_turn's Exception handler: %r", exc
-                    )
+                    logger.exception("turn_task escaped run_turn's Exception handler: %r", exc)
                 turn_task = None
 
             # --- Handle inbound frame dispatch.
@@ -211,16 +211,28 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
 
     except WebSocketDisconnect:
         logger.info("chat WS disconnected: thread_id=%s", thread_id)
-        # Task 21 will persist here — for Task 20 we just unwind the
-        # turn task so it doesn't leak past the connection.
     finally:
-        # Always cancel a lingering turn_task on exit (disconnect, or
-        # any exception that escapes the receive loop). ``await`` with
-        # a broad except so cleanup cannot itself raise.
+        # Task 21 — belt-and-braces flush. ORDER MATTERS:
+        # 1. Cancel the in-flight turn_task first. ``ChatSession.turn``
+        #    has a ``finally`` block that appends the USER + ASSISTANT
+        #    turns to ``_turns`` even on ``CancelledError``, so after
+        #    awaiting the cancelled task the session's turn list is
+        #    consistent (the partial assistant reply is captured).
+        # 2. THEN call persist(). The ``ChatSession.turn`` code path
+        #    that ran ``persistence.write`` lived AFTER the yield of
+        #    ``turn_end`` — cancelled or exception-interrupted turns
+        #    never reach it. persist() writes the session state we
+        #    just assembled.
+        # On a clean between-turn disconnect the turn_task is already
+        # None and persist() either writes identical bytes (harmless,
+        # atomic) or is a no-op if _turns is empty. persist() never
+        # raises (see its docstring), so it cannot mask an interesting
+        # exception escaping the receive loop.
         if turn_task is not None and not turn_task.done():
             turn_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await turn_task
+        await runner.persist()
 
 
 async def _dispatch_client_frame(
