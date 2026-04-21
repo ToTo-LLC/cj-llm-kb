@@ -32,6 +32,25 @@ class TestHostValidation:
         body = response.json()
         assert body["error"] == "refused"
 
+    def test_host_refusal_envelope_has_error_message_and_detail_null(
+        self, client: TestClient
+    ) -> None:
+        """Plan 05 Task 25 — middleware refusals share the global envelope shape.
+
+        Every 4xx body returned by the app must parse as
+        ``{"error": str, "message": str, "detail": dict | None}`` so the
+        frontend error boundary has one branch, not two. Before Task 25 the
+        middleware emitted only ``{error, message}`` and callers that asserted
+        on ``body.keys()`` diverged between middleware and route rejections.
+        """
+        response = client.get("/healthz", headers={"Host": "evil.example"})
+        assert response.status_code == 403
+        body = response.json()
+        assert set(body.keys()) == {"error", "message", "detail"}
+        assert body["error"] == "refused"
+        assert isinstance(body["message"], str) and body["message"]
+        assert body["detail"] is None
+
     def test_rejects_public_ip_host(self, client: TestClient) -> None:
         response = client.get("/healthz", headers={"Host": "203.0.113.10:4317"})
         assert response.status_code == 403
@@ -62,6 +81,9 @@ class TestOriginValidation:
         body = response.json()
         assert body["error"] == "refused"
         assert "origin" in body["message"].lower()
+        # Task 25 shape parity — origin refusal also includes detail=null.
+        assert body.get("detail") is None
+        assert set(body.keys()) == {"error", "message", "detail"}
 
     def test_post_with_localhost_origin_allowed_through_middleware(self, app: FastAPI) -> None:
         """Localhost Origin passes the middleware; downstream handlers take over.

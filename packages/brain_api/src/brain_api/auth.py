@@ -180,14 +180,21 @@ class OriginHostMiddleware:
 async def _send_refusal(scope_type: str, send: Send, *, message: str) -> None:
     """Emit a 403 JSON envelope for HTTP or a 1008 close frame for WebSocket.
 
-    Mirrors the old ``BaseHTTPMiddleware`` JSONResponse payload so HTTP
-    clients see the unchanged ``{"error": "refused", "message": ...}``
-    body. WebSocket clients cannot receive a JSON body before accept, so
-    we encode the same message in the ``reason`` field of the close
-    frame (truncated to 123 bytes per RFC 6455 §5.5.1).
+    Plan 05 Task 25 aligned the HTTP envelope with the global error handler
+    in :mod:`brain_api.errors` — every 4xx/5xx response now carries
+    ``{"error", "message", "detail"}`` with ``detail = null`` when there's
+    no structured payload. Frontend error boundaries parse a single shape
+    regardless of whether the refusal came from a middleware short-circuit
+    or a route-level ``ApiError``.
+
+    WebSocket clients cannot receive a JSON body before accept, so we encode
+    the same message in the ``reason`` field of the close frame (truncated
+    to 123 bytes per RFC 6455 §5.5.1).
     """
     if scope_type == "http":
-        body = json.dumps({"error": "refused", "message": message}).encode("utf-8")
+        body = json.dumps(
+            {"error": "refused", "message": message, "detail": None}
+        ).encode("utf-8")
         await send(
             {
                 "type": "http.response.start",
