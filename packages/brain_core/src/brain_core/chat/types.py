@@ -29,6 +29,10 @@ class ChatEventKind(StrEnum):
     TURN_END = "turn_end"
     COST_UPDATE = "cost_update"
     PATCH_PROPOSED = "patch_proposed"
+    # Plan 07 Task 2: Draft-mode structured-edit signal. Emitted once per
+    # entry inside a ``\`\`\`edits`` JSON fence in the assistant reply.
+    # Draft-only; Ask/Brainstorm never emit this even if the fence appears.
+    DOC_EDIT = "doc_edit"
     ERROR = "error"
 
 
@@ -60,6 +64,13 @@ class ChatSessionConfig(BaseModel):
     open_doc_path: Path | None = None
     context_cap_tokens: int = 150_000
     model: str = "claude-sonnet-4-6"
+    # Plan 07 Task 2: optional per-mode model overrides. When set, the
+    # matching mode's turn uses this string as ``LLMRequest.model``;
+    # when ``None``, ``model`` (above) is used. Defaulting to None
+    # preserves Plan 03 single-model semantics for every existing caller.
+    ask_model: str | None = None
+    brainstorm_model: str | None = None
+    draft_model: str | None = None
 
     @field_validator("domains")
     @classmethod

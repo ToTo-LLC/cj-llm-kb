@@ -100,6 +100,8 @@ class TestChatEvent:
             ChatEventKind.TURN_END,
             ChatEventKind.COST_UPDATE,
             ChatEventKind.PATCH_PROPOSED,
+            # Plan 07 Task 2: Draft-mode structured-edit signal.
+            ChatEventKind.DOC_EDIT,
             ChatEventKind.ERROR,
         }
 

@@ -12,6 +12,8 @@ tool registry so the next turn uses the right toolset.
 from __future__ import annotations
 
 import json
+import logging
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +46,15 @@ from brain_core.llm.types import (
 )
 from brain_core.state.db import StateDB
 from brain_core.vault.writer import VaultWriter
+
+logger = logging.getLogger(__name__)
+
+# Plan 07 Task 2: Draft-mode structured-edit fence. The assistant may
+# append one or more ``\`\`\`edits\n{...}\n\`\`\`` blocks to its reply.
+# Each block's JSON body is ``{"edits": [ {op, anchor, text?}, ... ]}``.
+# ``re.DOTALL`` so the body may contain newlines; non-greedy so
+# adjacent fences don't collapse into one match.
+_EDITS_FENCE_RE = re.compile(r"```edits\s*\n(.+?)\n```", re.DOTALL)
 
 
 class ChatSession:
@@ -182,6 +193,15 @@ class ChatSession:
         messages: list[LLMMessage] = [LLMMessage(**m) for m in compiled.messages]
         final_text_parts: list[str] = []
 
+        # Plan 07 Task 2: per-mode model override. ``ChatSessionConfig``
+        # exposes ``ask_model`` / ``brainstorm_model`` / ``draft_model``;
+        # when the active mode's field is set it wins, otherwise we fall
+        # back to ``config.model`` (Plan 03 default-model semantics).
+        # Auto-titling at the end of the turn keeps using ``config.model``
+        # (see ``AutoTitler`` wiring); auto-title is mode-independent.
+        mode_model_attr = f"{self.config.mode.value}_model"
+        turn_model = getattr(self.config, mode_model_attr, None) or self.config.model
+
         try:
             # Rounds 0..MAX-1 do real work; round MAX is the sentinel cap
             # check that bails out with "max tool rounds exceeded".
@@ -198,7 +218,7 @@ class ChatSession:
                     return
 
                 request = LLMRequest(
-                    model=self.config.model,
+                    model=turn_model,
                     system=compiled.system,
                     messages=messages,
                     temperature=MODES[self.config.mode].temperature,
@@ -387,6 +407,36 @@ class ChatSession:
                     )
 
                 messages.append(LLMMessage(role="user", content=tool_result_blocks))
+
+            # Plan 07 Task 2: Draft-mode ``\`\`\`edits`` fence → DOC_EDIT events.
+            # Scan the assembled assistant message AFTER the stream has
+            # finished. Non-Draft modes skip this entirely — the fence is
+            # just text in their transcripts. Malformed JSON is logged and
+            # skipped so a bad model response never breaks the turn.
+            if self.config.mode == ChatMode.DRAFT:
+                assistant_text = "".join(final_text_parts)
+                for match in _EDITS_FENCE_RE.finditer(assistant_text):
+                    body = match.group(1)
+                    try:
+                        parsed = json.loads(body)
+                    except json.JSONDecodeError as exc:
+                        logger.warning("draft edits fence has invalid JSON: %s", exc)
+                        continue
+                    if not isinstance(parsed, dict):
+                        logger.warning("draft edits fence JSON is not an object: %r", type(parsed))
+                        continue
+                    edits = parsed.get("edits")
+                    if not isinstance(edits, list):
+                        logger.warning("draft edits fence missing 'edits' list: %r", parsed)
+                        continue
+                    for edit in edits:
+                        if not isinstance(edit, dict):
+                            logger.warning("draft edits entry is not an object: %r", edit)
+                            continue
+                        yield ChatEvent(
+                            kind=ChatEventKind.DOC_EDIT,
+                            data=dict(edit),
+                        )
 
             yield ChatEvent(
                 kind=ChatEventKind.TURN_END,

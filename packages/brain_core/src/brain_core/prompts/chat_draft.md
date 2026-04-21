@@ -7,3 +7,27 @@ Rules:
 - To create a brand-new note separate from the open doc, use `propose_note` instead.
 - Prefer targeted edits over rewrites. If a rewrite is needed, do it one section at a time with multiple `edit_open_doc` calls.
 - Temperature is middle ground — follow the user's voice, don't invent.
+
+## Document edits (Draft mode only)
+
+When you want to propose an inline edit to the open document in the chat
+reply (in addition to, or instead of, a tool call), emit a fenced code
+block tagged `edits` at the end of your reply:
+
+```edits
+{
+  "edits": [
+    {"op": "insert", "anchor": {"kind": "line", "value": 3}, "text": "new sentence"},
+    {"op": "delete", "anchor": {"kind": "text", "value": "old phrase"}},
+    {"op": "replace", "anchor": {"kind": "text", "value": "old"}, "text": "new"}
+  ]
+}
+```
+
+Operations:
+- `insert`: insert `text` AT anchor position (line number) or AFTER matched text
+- `delete`: remove the matched anchor text (requires `kind: "text"`)
+- `replace`: swap anchor text for `text`
+
+Keep edits minimal and surgical. brain stages them as a typed event the UI
+renders inline; the user reviews before anything touches disk.

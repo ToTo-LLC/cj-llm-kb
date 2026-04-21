@@ -55,6 +55,13 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         "autonomous.concepts",
         "autonomous.index_rewrites",
         "autonomous.draft",
+        # Plan 07 Task 2: per-mode chat-model overrides. Each maps to the
+        # matching ``ChatSessionConfig.{mode}_model`` field; None falls
+        # back to the global ``llm.model`` default. Persistence lands in
+        # Plan 07 Task 5 alongside the autonomy flags above.
+        "ask_model",
+        "brainstorm_model",
+        "draft_model",
     }
 )
 

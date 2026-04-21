@@ -38,6 +38,7 @@ def test_settable_keys_match_plan_07_task_1() -> None:
 
     Plan 04 baseline: ``budget.daily_usd`` + ``log_llm_payloads``.
     Plan 07 Task 1: adds the 5 ``autonomous.<category>`` flags.
+    Plan 07 Task 2: adds the 3 per-mode ``{mode}_model`` overrides.
     """
     assert (
         frozenset(
@@ -49,6 +50,9 @@ def test_settable_keys_match_plan_07_task_1() -> None:
                 "autonomous.concepts",
                 "autonomous.index_rewrites",
                 "autonomous.draft",
+                "ask_model",
+                "brainstorm_model",
+                "draft_model",
             }
         )
         == _SETTABLE_KEYS
