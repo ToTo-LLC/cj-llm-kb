@@ -27,6 +27,10 @@ _TOKEN_FILENAME = "api-secret.txt"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Accepted hostnames for Host header (any port) and Origin parsing.
+# TODO(Plan 08): add ``"::1"`` once uvicorn's ``--host`` config exposes IPv6
+# on any default port. Current tests + demo run IPv4 only, and production
+# defaults to ``127.0.0.1:4317``; adding ``"::1"`` preemptively is harmless
+# but would create a false sense that IPv6 was tested in Plan 05.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 

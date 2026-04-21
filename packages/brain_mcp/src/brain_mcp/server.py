@@ -139,6 +139,14 @@ def create_server(
 
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+        # O(n) linear scan over 18 tools per call. Plan 04 Task 25 flagged a
+        # ``_TOOL_BY_NAME`` dict lookup as a perf / readability improvement;
+        # Plan 05 Task 10 implemented the same pattern for brain_api in
+        # ``brain_api.context.AppContext.tool_by_name`` (built once in
+        # ``build_app_context``). The brain_mcp equivalent is a one-line
+        # change here but was deferred to avoid touching an MCP server that
+        # has been stable since Plan 04. Task 25 re-captures the deferral so
+        # the next sweep can unify both dispatchers.
         ctx = _build_ctx()
         for m in _TOOL_MODULES:
             if name == m.NAME:

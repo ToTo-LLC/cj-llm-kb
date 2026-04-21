@@ -49,6 +49,19 @@ frame is the single authoritative "turn is over" signal after a cancel.
 Middleware (``OriginHostMiddleware``) catches non-loopback Origin on
 the upgrade handshake before we even enter this function, so the
 endpoint doesn't re-check Origin itself.
+
+Concurrent-connection semantics (Plan 05 Task 25 note for Plan 07):
+nothing here prevents TWO WebSockets from opening on the same
+``thread_id`` — the route handler is stateless across calls and the
+``SessionRunner`` is constructed fresh per connection. Each runner
+loads the on-disk thread independently; each writes independently on
+disconnect. Interleaved turns from two tabs therefore exhibit
+last-writer-wins semantics: the second disconnect's ``persist`` call
+overwrites whatever the first disconnect just wrote. Plan 07's UI is
+expected to enforce single-tab-per-thread (either by disabling the
+"open another tab" affordance or by closing the old WS on new-tab
+focus); a backend-side lock would require a global coordination layer
+this project has not needed yet.
 """
 
 from __future__ import annotations

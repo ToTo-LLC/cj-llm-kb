@@ -163,5 +163,11 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _catch_all(request: Request, exc: Exception) -> JSONResponse:
         # Log the traceback server-side (where it belongs); return a generic
         # body so exception type / arguments never leak to callers.
+        # TODO(Plan 07): add request-id correlation to the 500 body so the
+        # frontend error boundary can surface the ID to the user and the
+        # server log line becomes joinable. Requires a request-id middleware
+        # that stashes the ID on ``request.state`` plus a header on every
+        # response (``X-Request-ID``); the generic 500 body grows a ``detail
+        # = {"request_id": ...}`` key while the message stays generic.
         logger.exception("Unhandled exception in %s %s", request.method, request.url.path)
         return _envelope(code="internal", message="unexpected error", status=500)

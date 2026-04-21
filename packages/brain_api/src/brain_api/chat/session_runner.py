@@ -107,6 +107,25 @@ class SessionRunner:
     ``ChatSession`` is built lazily on the first turn (Task 21 will
     swap this for a ``load_or_create`` path that reads prior turns from
     the vault transcript).
+
+    Partial-content-on-cancel semantics (Plan 05 Task 25 note for Plan 07):
+    when a client sends ``cancel_turn`` mid-stream, the async-gen ``aclose``
+    in ``run_turn.finally`` runs ``ChatSession.turn``'s own finally block,
+    which appends BOTH the USER turn and whatever ASSISTANT text had been
+    streamed so far into ``_turns``. The next ``persistence.write`` (called
+    by the WS route's outer finally on disconnect) therefore persists the
+    partial assistant reply alongside the user message. Plan 07 UX may
+    decide to drop the partial reply entirely ("cancelling means nothing
+    happened"); flipping that requires a new pre-persist hook, NOT a change
+    to the session runner.
+
+    FakeLLM queueing contract (Plan 05 Task 25 note): WS tests queue
+    responses via ``ctx.tool_ctx.llm.queue(...)`` before opening the WS.
+    ``FakeLLMProvider`` pops one queued response per turn and tokenizes it
+    into ``DELTA`` events; an empty queue yields a default greeting string.
+    The demo script relies on this to drive a whole conversation without a
+    network call; it is therefore part of the ``brain_core.llm.fake``
+    contract, not an implementation detail.
     """
 
     def __init__(self, ctx: AppContext, thread_id: str, mode: str = "ask") -> None:
