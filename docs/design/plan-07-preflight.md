@@ -190,35 +190,49 @@ Per the Plan 07 workflow: spec updates land in the SAME commit as the correspond
 
 ---
 
-## 7. Open decisions (need your sign-off before Plan 07 authoring)
+## 7. Decisions pinned (2026-04-21)
 
-Five forks where the plan doesn't pin a direction. Recommendations marked **(rec)**.
+Five forks locked in before Plan 07 authoring. Chosen options marked ✅.
 
-### D1. Draft-mode inline edit emission — event shape
+### D1. Draft-mode inline edit emission — event shape ✅ D1a
 
-- **(rec) D1a** — new `doc_edit_proposed` WS event (Option A from §1.4). Cleaner separation; Draft mode becomes visually distinct from the normal patch flow.
-- **D1b** — overload `patch_proposed` with `kind="doc_edit"` variant (Option B). Fewer event types; tighter coupling.
+**Choice:** new `doc_edit_proposed` WS event (Option A from §1.4).
 
-### D2. Rename-domain execution
+Cleaner separation; Draft mode becomes visually distinct from the normal patch flow. Plan 07 adds a 12th server-emitted WS event. Bumps `SCHEMA_VERSION` to `"2"` (breaking change — frontend pins).
 
-- **(rec) D2a** — atomic `brain_rename_domain` tool with a single UndoLog entry (§3.3 as written). Bypasses PatchSet machinery for an inherently cross-vault op.
-- **D2b** — giant PatchSet that's staged like any other change. User approves the full rewrite. Preserves the "every vault write is a staged patch" invariant but produces massive patches (thousands of lines for a large vault).
+*(Not chosen: D1b overload `patch_proposed` with `kind="doc_edit"` — rejected as too tightly coupled.)*
 
-### D3. ForkDialog "carry: summary" option
+### D2. Rename-domain execution ✅ D2a
 
-- **D3a** — ship all three (summary/full/none). Requires a cheap Haiku-powered summary step on fork.
-- **(rec) D3b** — ship only full/none for Plan 07. "Summary" becomes a Plan 09 enhancement. Simpler, no latency cost on fork.
+**Choice:** atomic `brain_rename_domain` tool with a single UndoLog entry (§3.3 as written).
 
-### D4. Ephemeral budget override mechanism
+Bypasses PatchSet machinery for an inherently cross-vault op. Reversible via `brain_undo_last`. Documented as an architectural exception alongside the existing `brain_undo_last` pattern.
 
-- **(rec) D4a** — `budget.override_until` + `budget.override_delta_usd` pair (§2.3). Resets at expiry. Reversible.
-- **D4b** — permanent cap raise (what v3 currently implements). Rename the button to "Raise cap by $5". Simpler implementation; worse UX.
+*(Not chosen: D2b giant PatchSet — rejected because thousand-file patches break the Pending UI.)*
 
-### D5. Context-fill metric
+### D3. ForkDialog "carry context" option ✅ D3a
 
-- **(rec) D5a** — add `cumulative_tokens_in` to `CostUpdateEvent`. Frontend derives ratio. Cleanest.
-- **D5b** — add `context_pct_used` directly. Ties brain_api to model-specific window sizes.
-- **D5c** — drop the meter entirely. Design shows "≈18%" right now — can be hidden until cheap to compute.
+**Choice:** ship all three — summary / full / none.
+
+"Summary" adds a Haiku-cheap ~400-token recap step to `ChatSession.fork_from`. Adds one LLM call + latency on fork, but provides the best continuity/cost tradeoff for long threads. Plan 07 wires a `brain_core.chat.fork.summarize_turns(turns, llm) -> str` helper.
+
+*(Not chosen: D3b full/none only — rejected; user wants all three options even with the LLM-call cost.)*
+
+### D4. Ephemeral budget override mechanism ✅ D4a
+
+**Choice:** `budget.override_until: datetime | null` + `budget.override_delta_usd: float` config keys paired with a new `brain_budget_override(amount_usd, duration_hours=24)` tool.
+
+Override auto-clears on reads after expiry — no scheduled task. `CostLedger.is_over_budget(config, today)` consults the override window. Reversible by doing nothing.
+
+*(Not chosen: D4b permanent cap raise — rejected as cap-drift UX failure.)*
+
+### D5. Context-fill metric ✅ D5a
+
+**Choice:** add `cumulative_tokens_in: int` to `CostUpdateEvent`.
+
+Frontend divides by its own model→max-context table (Sonnet 200k, Haiku 200k, Opus 200k). Displayed as "≈N%". No backend-side model awareness needed.
+
+*(Not chosen: D5b `context_pct_used` — rejected; couples brain_api to model-specific constants. D5c drop meter — rejected; long-session signal is genuinely useful.)*
 
 ---
 
@@ -268,8 +282,19 @@ Explicit non-goals to keep scope tight:
 
 ---
 
-## Decision request
+## Ready for Plan 07 authoring
 
-Before I author Plan 07, I need answers to D1–D5 in §7. Once those are pinned, the task outline writes itself from §1–§5.
+All decisions pinned (§7). Plan 07 can now be drafted. The task outline follows Phase A/B/C ordering from §8.
 
-Recommended defaults (if you just want to ship): **D1a, D2a, D3b, D4a, D5a.** Say "recommended defaults" and I'll roll with those.
+**Summary of commitments:**
+- **D1a** — new `doc_edit_proposed` WS event; `SCHEMA_VERSION` bumps to `"2"`
+- **D2a** — atomic `brain_rename_domain` tool
+- **D3a** — all three fork carry-context modes (summary requires Haiku-cheap summarizer helper)
+- **D4a** — ephemeral budget override via `override_until` + `override_delta_usd` + `brain_budget_override` tool
+- **D5a** — `cumulative_tokens_in` on `CostUpdateEvent`
+
+**Tool surface grows:** 18 → **22 tools** (new: `brain_recent_ingests`, `brain_create_domain`, `brain_rename_domain`, `brain_budget_override`). Plus `brain_wikilink_status` optional (§3.5).
+
+**Config schema grows:** 12 new `_SETTABLE_KEYS` entries (§4).
+
+**WS schema bumps to v2** — frontend pins `SCHEMA_VERSION = "2"` and rejects v1 servers (handshake frame).
