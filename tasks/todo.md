@@ -15,8 +15,8 @@
 | 03 | [Chat](./plans/03-chat.md) | ✅ Complete (2026-04-15, tag `plan-03-chat`) | `brain chat` Ask/Brainstorm/Draft modes working in terminal with 366 tests across brain_core + brain_cli; 7-gate demo passing (`PLAN 03 DEMO OK`); VCR chat cassettes deferred per D7a | brain-core-engineer, brain-prompt-engineer |
 | 04 | [MCP](./plans/04-mcp.md) | ✅ Complete (2026-04-17, tag `plan-04-mcp`) | brain_mcp stdio server with 18 tools + 3 resource URIs; brain mcp install/uninstall/selftest/status CLI; 14-gate demo passing (`PLAN 04 DEMO OK`); VCR MCP cassettes deferred per D9a | brain-mcp-engineer, brain-core-engineer |
 | 05 | [API](./plans/05-api.md) | ✅ Complete (2026-04-21, tag `plan-05-api`) | brain_api FastAPI REST (18 tool endpoints) + WebSocket chat (ChatSession-bridged, schema_version=1); Origin/Host/token auth; 14-gate demo passing (`PLAN 05 DEMO OK`); VCR chat cassettes deferred per D9a | brain-api-engineer (brain-mcp-engineer role-overloaded), brain-core-engineer |
-| 06 | UI Design | ⏸ Not yet written | Approved design artifacts at `docs/design/` (hard gate) | brain-ui-designer |
-| 07 | Frontend | ⏸ Not yet written, **blocked on #06** | Full web app on localhost | brain-frontend-engineer |
+| 06 | UI Design | ✅ Complete (2026-04-21, external design tool) | Design brief + 3 delta passes + v3 design artifacts at `docs/design/` (design-brief.md, design-delta.md, design-delta-v2.md, CJ Knowledge LLM v3 zip); 5 pre-flight backend decisions pinned at `docs/design/plan-07-preflight.md` (D1a/D2a/D3a/D4a/D5a) | external (brain-ui-designer replaced with Claude design tool) |
+| 07 | Frontend | ⏸ Not yet written | Full web app on localhost (Next.js 15 + Tailwind + shadcn/ui, 22-tool surface, WS schema_version=2) | brain-frontend-engineer |
 | 08 | Install + Packaging | ⏸ Not yet written | One-command install on clean Mac + Windows VMs | brain-installer-engineer |
 | 09 | Ship | ⏸ Not yet written | v0.1.0 tagged, documented, manual-QA green | brain-test-engineer |
 
