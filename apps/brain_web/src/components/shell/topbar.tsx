@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConnectionIndicator } from "@/components/system/connection-indicator";
 
 // Stub domains; Task 14 replaces this with a live `listDomains()` query.
 const STUB_DOMAINS = [
@@ -155,6 +156,9 @@ export function Topbar() {
       )}
 
       <div className="flex-1" />
+
+      {/* Connection pip — hidden when WS is "ok" (Plan 07 Task 12). */}
+      <ConnectionIndicator />
 
       {/* Theme toggle */}
       <Button
