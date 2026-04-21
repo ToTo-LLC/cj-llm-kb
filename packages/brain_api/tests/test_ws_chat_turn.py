@@ -20,10 +20,9 @@ hard-codes ``Host: testserver`` on WS connects, which Task 8's
 
 from __future__ import annotations
 
+from _ws_helpers import get_app_ctx, get_app_token
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from _ws_helpers import get_app_ctx, get_app_token
 
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 

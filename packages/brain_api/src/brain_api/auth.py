@@ -196,9 +196,7 @@ async def _send_refusal(scope_type: str, send: Send, *, message: str) -> None:
     to 123 bytes per RFC 6455 §5.5.1).
     """
     if scope_type == "http":
-        body = json.dumps(
-            {"error": "refused", "message": message, "detail": None}
-        ).encode("utf-8")
+        body = json.dumps({"error": "refused", "message": message, "detail": None}).encode("utf-8")
         await send(
             {
                 "type": "http.response.start",

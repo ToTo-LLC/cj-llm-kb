@@ -8,11 +8,10 @@ ChatSession wiring, cancel, and reconnect.
 from __future__ import annotations
 
 import pytest
+from _ws_helpers import get_app_token
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-
-from _ws_helpers import get_app_token
 
 # TestClient.websocket_connect hard-codes a ``ws://testserver`` base URL
 # (see ``starlette.testclient.TestClient.websocket_connect``), so every

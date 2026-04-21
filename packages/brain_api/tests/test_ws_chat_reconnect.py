@@ -33,10 +33,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _ws_helpers import get_app_ctx, get_app_token
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from _ws_helpers import get_app_ctx, get_app_token
 
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
