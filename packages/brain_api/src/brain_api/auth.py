@@ -7,17 +7,15 @@ Task 9 adds the FastAPI dependency that enforces X-Brain-Token on write routes.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import secrets
 import sys
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, Request, WebSocket
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse, Response
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from brain_api.context import AppContext, get_ctx
 from brain_api.errors import ApiError
@@ -96,7 +94,21 @@ def _is_loopback_origin(origin: str) -> bool:
     return parsed.hostname in _LOOPBACK_HOSTS
 
 
-class OriginHostMiddleware(BaseHTTPMiddleware):
+def _header_value(scope: Scope, name: str) -> str:
+    """Return the raw value of header ``name`` from an ASGI scope, or ``""``.
+
+    ASGI delivers headers as a list of ``(name_bytes, value_bytes)``
+    tuples with lowercased names. We compare bytes to avoid a per-scope
+    decode of every header.
+    """
+    needle = name.encode("latin-1").lower()
+    for key, value in scope.get("headers", []):
+        if key == needle:
+            return value.decode("latin-1")
+    return ""
+
+
+class OriginHostMiddleware:
     """Reject non-loopback ``Host`` and cross-origin state-changing requests.
 
     Defends against two distinct attacks on the local-only API:
@@ -114,50 +126,83 @@ class OriginHostMiddleware(BaseHTTPMiddleware):
        changing methods (and on WebSocket upgrades, which share the CSRF
        shape via the handshake GET).
 
-    Runs at the ASGI layer, so both HTTP and WebSocket connections go
-    through it. Safe methods (GET/HEAD/OPTIONS) bypass the Origin check
-    unless the request is a WebSocket upgrade handshake.
+    Implemented as a pure ASGI middleware (rather than
+    :class:`starlette.middleware.base.BaseHTTPMiddleware`) so it runs on
+    BOTH ``http`` and ``websocket`` scopes. ``BaseHTTPMiddleware`` short-
+    circuits non-http scopes, which would silently skip WebSocket
+    upgrades — a real CSRF hole. On an ``http`` refusal we send a 403
+    JSON envelope; on a ``websocket`` refusal we send ``websocket.close``
+    with code 1008 (Policy Violation) and reason ``refused``.
     """
 
     def __init__(self, app: ASGIApp) -> None:
-        super().__init__(app)
+        self.app = app
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        scope_type = scope.get("type")
+        if scope_type not in ("http", "websocket"):
+            # lifespan and other ASGI scopes pass straight through.
+            await self.app(scope, receive, send)
+            return
+
         # --- Host header check (always) ---------------------------------
-        host = request.headers.get("host", "")
+        host = _header_value(scope, "host")
         hostname = host.split(":", 1)[0] if host else ""
         if hostname not in _LOOPBACK_HOSTS:
-            return JSONResponse(
-                {
-                    "error": "refused",
-                    "message": f"host {host!r} is not a loopback address",
-                },
-                status_code=403,
+            await _send_refusal(
+                scope_type,
+                send,
+                message=f"host {host!r} is not a loopback address",
             )
+            return
 
-        # --- Origin header check (state-changing methods + WS upgrades) --
-        # WebSocket handshakes are GET at the HTTP layer but carry
-        # ``Upgrade: websocket``; treat them as state-changing for CSRF
-        # purposes.
-        is_ws_upgrade = "websocket" in request.headers.get("upgrade", "").lower()
-        is_state_changing = request.method not in _SAFE_METHODS
+        # --- Origin header check -----------------------------------------
+        # HTTP: check on state-changing methods. WebSocket: always check —
+        # the handshake IS the state-changing request for CSRF purposes,
+        # and the ASGI scope doesn't carry an Upgrade header on the
+        # websocket scope (starlette has already parsed it).
+        origin = _header_value(scope, "origin")
+        needs_origin_check = scope_type == "websocket" or (
+            scope_type == "http" and scope.get("method", "GET") not in _SAFE_METHODS
+        )
 
-        if is_state_changing or is_ws_upgrade:
-            origin = request.headers.get("origin")
-            if origin is not None and not _is_loopback_origin(origin):
-                return JSONResponse(
-                    {
-                        "error": "refused",
-                        "message": f"origin {origin!r} is not a loopback address",
-                    },
-                    status_code=403,
-                )
+        if needs_origin_check and origin and not _is_loopback_origin(origin):
+            await _send_refusal(
+                scope_type,
+                send,
+                message=f"origin {origin!r} is not a loopback address",
+            )
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
+
+
+async def _send_refusal(scope_type: str, send: Send, *, message: str) -> None:
+    """Emit a 403 JSON envelope for HTTP or a 1008 close frame for WebSocket.
+
+    Mirrors the old ``BaseHTTPMiddleware`` JSONResponse payload so HTTP
+    clients see the unchanged ``{"error": "refused", "message": ...}``
+    body. WebSocket clients cannot receive a JSON body before accept, so
+    we encode the same message in the ``reason`` field of the close
+    frame (truncated to 123 bytes per RFC 6455 §5.5.1).
+    """
+    if scope_type == "http":
+        body = json.dumps({"error": "refused", "message": message}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("latin-1")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+    else:  # websocket
+        # Close frame reason is UTF-8, max 123 bytes (125 - 2 for code).
+        reason = message.encode("utf-8")[:123].decode("utf-8", errors="ignore")
+        await send({"type": "websocket.close", "code": 1008, "reason": reason})
 
 
 def require_token(
