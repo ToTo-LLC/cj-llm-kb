@@ -1104,3 +1104,1111 @@ Main loop reviews:
 Before Task 6, confirm the backend surface is stable — frontend construction depends on `apiFetch<T>` types derived from OpenAPI + typed WS events from `brain_api.chat.events`.
 
 ---
+
+### Group 2 — Frontend foundation (Tasks 6–10)
+
+**Pattern:** every task in Group 2 lands a different layer of the Next.js app. Tasks build bottom-up: package skeleton → design tokens → auth proxy → typed clients → shell. Each checkpoint-worthy substrate is testable in isolation.
+
+**Node workspace setup note:** `apps/brain_web/` gets its own `package.json`. A root `package.json` at `/Users/chrisjohnson/Code/cj-llm-kb/package.json` declares the workspace (`"workspaces": ["apps/*"]`). Use **pnpm** as the package manager — strict dep resolution, fast cold installs, good Next.js compatibility. If the user already has npm/yarn preferences, adapt in Task 6 but document.
+
+**Node + tooling versions** (pinned to avoid drift):
+- Node 20.x LTS (minimum)
+- pnpm 9.x (`corepack enable` + `corepack prepare pnpm@latest --activate`)
+- Next.js 15.0+
+- React 18.3+
+- TypeScript 5.5+
+- Tailwind CSS 3.4+
+
+---
+
+### Task 6 — `apps/brain_web/` Next.js 15 package skeleton
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: root `package.json` — workspace declaration
+- Create: `apps/brain_web/package.json`
+- Create: `apps/brain_web/tsconfig.json`
+- Create: `apps/brain_web/next.config.mjs`
+- Create: `apps/brain_web/tailwind.config.ts`
+- Create: `apps/brain_web/postcss.config.mjs`
+- Create: `apps/brain_web/.eslintrc.json`
+- Create: `apps/brain_web/.gitignore` (standard Next.js)
+- Create: `apps/brain_web/README.md` — "how to run dev mode"
+- Create: `apps/brain_web/src/app/layout.tsx` — minimal root layout
+- Create: `apps/brain_web/src/app/page.tsx` — redirects to `/chat`
+- Create: `apps/brain_web/src/app/chat/page.tsx` — placeholder "Chat (Task 14)"
+- Create: `apps/brain_web/src/styles/globals.css` — Tailwind directives only
+- Create: `apps/brain_web/tests/unit/app.test.tsx` — smoke test for layout + page rendering
+
+**Context for the implementer:**
+
+Task 6 lands the absolute minimum to run `pnpm dev` and see a page. No design tokens yet, no shadcn, no auth — pure Next.js 15 App Router skeleton. Goal: prove the workspace wiring works + smoke test via `pnpm test`.
+
+**Key pyproject interaction:** do NOT add `brain_web` to the root Python `pyproject.toml`'s `[project].dependencies` — it's a Node package, not a Python package. The `pyproject.toml`'s workspace glob stays `["packages/*"]`. Node workspace is a parallel universe.
+
+**Root `package.json`:**
+
+```json
+{
+  "name": "cj-llm-kb",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "pnpm --filter brain_web dev",
+    "build": "pnpm --filter brain_web build",
+    "test": "pnpm --filter brain_web test"
+  }
+}
+```
+
+**`apps/brain_web/package.json`:**
+
+```json
+{
+  "name": "brain_web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 4316",
+    "build": "next build",
+    "start": "next start --port 4316",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "next": "15.0.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^18.3",
+    "@types/react-dom": "^18.3",
+    "typescript": "^5.5",
+    "eslint": "^9",
+    "eslint-config-next": "15.0.3",
+    "vitest": "^2",
+    "@testing-library/react": "^16",
+    "@testing-library/jest-dom": "^6",
+    "@vitejs/plugin-react": "^4",
+    "jsdom": "^25",
+    "@playwright/test": "^1.48",
+    "axe-core": "^4.10",
+    "@axe-core/playwright": "^4.10"
+  }
+}
+```
+
+Tailwind, shadcn, Zustand, React Query are LATER tasks — keep Task 6 minimal.
+
+**`apps/brain_web/next.config.mjs`:**
+
+```javascript
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  // Dev origin for browser; matches brain_api's CSRF-acceptable loopback.
+  experimental: {
+    // Placeholder for future config.
+  },
+};
+
+export default nextConfig;
+```
+
+**`apps/brain_web/tsconfig.json`:**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+```
+
+**`apps/brain_web/src/app/layout.tsx`:**
+
+```tsx
+import type { Metadata } from "next";
+import "@/styles/globals.css";
+
+export const metadata: Metadata = {
+  title: "brain",
+  description: "Your LLM-maintained personal knowledge base.",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" data-theme="dark">
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+**`apps/brain_web/src/app/page.tsx`:**
+
+```tsx
+import { redirect } from "next/navigation";
+
+export default function RootPage() {
+  redirect("/chat");
+}
+```
+
+**`apps/brain_web/src/app/chat/page.tsx`:**
+
+```tsx
+export default function ChatPage() {
+  return (
+    <main style={{ padding: "2rem" }}>
+      <h1>Chat</h1>
+      <p>Placeholder — Task 14 fills in the real chat surface.</p>
+    </main>
+  );
+}
+```
+
+**`apps/brain_web/src/styles/globals.css`:**
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+(Tailwind directives only; Task 7 adds the token layer.)
+
+### Step 1 — Failing test
+
+`apps/brain_web/tests/unit/app.test.tsx`:
+
+```tsx
+import { describe, expect, test } from "vitest";
+import { render, screen } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+
+import ChatPage from "@/app/chat/page";
+
+describe("ChatPage", () => {
+  test("renders the placeholder heading", () => {
+    render(<ChatPage />);
+    expect(screen.getByRole("heading", { name: /chat/i })).toBeInTheDocument();
+  });
+});
+```
+
+Vitest config — `apps/brain_web/vitest.config.ts`:
+
+```typescript
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+import { resolve } from "path";
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./tests/unit/setup.ts"],
+  },
+  resolve: {
+    alias: { "@": resolve(__dirname, "./src") },
+  },
+});
+```
+
+`apps/brain_web/tests/unit/setup.ts`:
+
+```typescript
+import "@testing-library/jest-dom/vitest";
+```
+
+### Step 2 — Run + commit
+
+```bash
+cd /Users/chrisjohnson/Code/cj-llm-kb && pnpm install
+cd apps/brain_web && pnpm type-check
+pnpm test -- --run
+pnpm build  # sanity — production build succeeds
+pnpm dev    # manual: open http://localhost:4316 → /chat loads
+```
+
+Expected: smoke test passes; type-check clean; production build succeeds; `http://localhost:4316/chat` renders the placeholder.
+
+```bash
+git commit -m "feat(web): plan 07 task 6 — brain_web Next.js 15 package skeleton"
+```
+
+---
+
+### Task 7 — Design tokens + theme + shadcn/ui install
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Copy: v3 design zip's `fonts/Roboto-*.ttf` → `apps/brain_web/public/fonts/`
+- Copy: v3 design zip's `assets/{color-orbs.png, logo-color.png, logo-white.png}` → `apps/brain_web/public/assets/`
+- Create: `apps/brain_web/src/styles/tokens.css` — TT color palette + semantic tokens (based on v3 design zip's `tt-tokens.css`)
+- Modify: `apps/brain_web/src/styles/globals.css` — import tokens, add font-face declarations, base element styles
+- Modify: `apps/brain_web/tailwind.config.ts` — extend with TT colors + custom spacing/radius/font scales
+- Create: `apps/brain_web/components.json` — shadcn/ui config
+- Run: `pnpm dlx shadcn@latest init` (one-time) + `pnpm dlx shadcn@latest add button dialog popover select toggle-group tabs input textarea checkbox switch separator`
+- Create: `apps/brain_web/src/lib/utils.ts` — shadcn's `cn()` utility (generated by shadcn)
+- Create: `apps/brain_web/src/components/theme-provider.tsx` — theme switching via `data-theme` attribute
+- Create: `apps/brain_web/tests/unit/theme.test.tsx` — 3 tests (theme default, theme toggle, density toggle)
+
+**Context for the implementer:**
+
+Task 7 lands the visual foundation. Design tokens come from the v3 design zip's `assets/tt-tokens.css` — copy verbatim, then add semantic aliases for shadcn.
+
+**Why shadcn over raw Radix:** shadcn generates source-level components into `src/components/ui/` so you can modify them. Radix primitives stay as deps (`@radix-ui/react-*`) but shadcn's styling + composition layer is ours to edit.
+
+**Key tokens from v3 zip's `tt-tokens.css`:**
+
+Brand palette (`--tt-cream`, `--tt-teal`, `--tt-cyan`, `--tt-orange`, `--tt-sage`, plus their light/dark variants). Domain accents: `--dom-research` (cyan), `--dom-work` (sage), `--dom-personal` (orange). Neutrals: `--surface-0` through `--surface-5`, `--text`, `--text-muted`, `--text-dim`, `--hairline`.
+
+**Theme switching:** v3 uses `document.documentElement.dataset.theme = 'dark'|'light'`. Matches. Density via `data-density='comfortable'|'compact'`. Tokens define variants for both axes.
+
+**Root layout change:**
+
+```tsx
+// apps/brain_web/src/app/layout.tsx
+import "@/styles/tokens.css";  // NEW
+import "@/styles/globals.css";
+import { ThemeProvider } from "@/components/theme-provider";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+**`ThemeProvider`:** client component that reads `localStorage.getItem("brain-theme")` on mount, applies `data-theme` to `<html>`, exposes a context for `useTheme()` hook. SSR-safe: no window access during render; `suppressHydrationWarning` on `<html>` tolerates the FOUC-less hydration flash.
+
+**`components.json` (shadcn config):**
+
+```json
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "tailwind.config.ts",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  }
+}
+```
+
+**Tailwind config extension:**
+
+```typescript
+// apps/brain_web/tailwind.config.ts
+import type { Config } from "tailwindcss";
+
+export default {
+  darkMode: ["class", "[data-theme='dark']"],
+  content: ["./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        "tt-cream": "var(--tt-cream)",
+        "tt-teal": "var(--tt-teal)",
+        "tt-cyan": "var(--tt-cyan)",
+        "tt-orange": "var(--tt-orange)",
+        "tt-sage": "var(--tt-sage)",
+        "dom-research": "var(--dom-research)",
+        "dom-work": "var(--dom-work)",
+        "dom-personal": "var(--dom-personal)",
+        surface: {
+          0: "var(--surface-0)",
+          1: "var(--surface-1)",
+          2: "var(--surface-2)",
+          3: "var(--surface-3)",
+          4: "var(--surface-4)",
+          5: "var(--surface-5)",
+        },
+        hairline: "var(--hairline)",
+        text: {
+          DEFAULT: "var(--text)",
+          muted: "var(--text-muted)",
+          dim: "var(--text-dim)",
+        },
+      },
+      fontFamily: {
+        sans: ["Roboto", "system-ui", "sans-serif"],
+        mono: ['"Roboto Mono"', "SF Mono", "monospace"],
+      },
+      borderRadius: {
+        sm: "4px",
+        DEFAULT: "6px",
+        md: "8px",
+        lg: "12px",
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config;
+```
+
+### Step 1 — Failing tests
+
+`apps/brain_web/tests/unit/theme.test.tsx`:
+
+```tsx
+import { describe, expect, test } from "vitest";
+import { render, act } from "@testing-library/react";
+
+import { ThemeProvider, useTheme } from "@/components/theme-provider";
+
+function ThemeTestHarness({ onMount }: { onMount: (ctx: ReturnType<typeof useTheme>) => void }) {
+  const ctx = useTheme();
+  onMount(ctx);
+  return null;
+}
+
+describe("ThemeProvider", () => {
+  test("defaults to dark theme when localStorage empty", () => {
+    localStorage.clear();
+    render(<ThemeProvider><ThemeTestHarness onMount={(ctx) => {
+      expect(ctx.theme).toBe("dark");
+    }} /></ThemeProvider>);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  test("toggles to light", () => {
+    let setThemeRef: ((t: "dark" | "light") => void) | null = null;
+    render(<ThemeProvider><ThemeTestHarness onMount={(ctx) => {
+      setThemeRef = ctx.setTheme;
+    }} /></ThemeProvider>);
+    act(() => setThemeRef!("light"));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(localStorage.getItem("brain-theme")).toBe("light");
+  });
+
+  test("density toggles independently", () => {
+    let setDensityRef: ((d: "comfortable" | "compact") => void) | null = null;
+    render(<ThemeProvider><ThemeTestHarness onMount={(ctx) => {
+      setDensityRef = ctx.setDensity;
+    }} /></ThemeProvider>);
+    act(() => setDensityRef!("compact"));
+    expect(document.documentElement.dataset.density).toBe("compact");
+  });
+});
+```
+
+### Step 2 — Implement
+
+1. Copy fonts + assets from v3 design zip.
+2. Port `tt-tokens.css` verbatim → `apps/brain_web/src/styles/tokens.css`. Adapt font-face paths to `/fonts/Roboto-Regular.ttf` (relative to public/).
+3. Extend `globals.css` — add `@font-face` blocks, `body { font-family: var(--sans); background: var(--surface-0); color: var(--text); }`, reset defaults.
+4. Run `pnpm dlx shadcn@latest init` — accepts components.json above.
+5. Run `pnpm dlx shadcn@latest add button dialog popover select toggle-group tabs input textarea checkbox switch separator scroll-area tooltip dropdown-menu` — generates components into `src/components/ui/`.
+6. Create `theme-provider.tsx` as a client component with context.
+7. Wire into `layout.tsx`.
+
+### Step 3 — Run + commit
+
+```bash
+pnpm test -- --run   # theme tests + Task 6 smoke
+pnpm build           # production build works
+pnpm dev             # manual: http://localhost:4316 shows Roboto + dark theme
+```
+
+```bash
+git commit -m "feat(web): plan 07 task 7 — design tokens + theme + shadcn/ui primitives"
+```
+
+---
+
+### Task 8 — Auth proxy route (server-side token read)
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/lib/auth/token.ts` — server-only token reader
+- Create: `apps/brain_web/src/app/api/proxy/[...path]/route.ts` — HTTP proxy for REST calls
+- Create: `apps/brain_web/tests/unit/auth-token.test.ts` — 4 tests (token read success, missing file returns null, malformed handled, cache invalidation)
+- Create: `apps/brain_web/tests/unit/proxy-route.test.ts` — 4 tests (proxy forwards token, rejects when token missing, strips sensitive headers, handles 5xx)
+
+**Context for the implementer:**
+
+**The security property:** the browser never sees `X-Brain-Token` raw. The token lives at `<vault>/.brain/run/api-secret.txt` (mode 0600). The Next.js server process reads it, attaches it server-side to outbound requests to `http://127.0.0.1:4317` (brain_api), and returns the response to the browser stripped of the token header.
+
+**Browser-side JS** makes all API calls to `/api/proxy/api/tools/brain_search` etc. — the Next.js server intercepts via the catch-all route, reads the token once per server process (cached), forwards, returns.
+
+**Token location resolution:**
+- Env var `BRAIN_VAULT_ROOT` is the primary source (matches brain_api's Plan 05 convention). Defaults to `~/Documents/brain` if unset.
+- Token at `<vault_root>/.brain/run/api-secret.txt`.
+
+**Token read implementation:**
+
+```typescript
+// apps/brain_web/src/lib/auth/token.ts
+// Server-only — never imported in Client Components.
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
+// Module-level cache. Invalidated on SIGHUP or process restart.
+let cachedToken: string | null = null;
+let cacheMiss = false;
+
+export async function readToken(): Promise<string | null> {
+  if (cachedToken) return cachedToken;
+  if (cacheMiss) return null;
+
+  const vaultRoot = process.env.BRAIN_VAULT_ROOT || join(homedir(), "Documents", "brain");
+  const tokenPath = join(vaultRoot, ".brain", "run", "api-secret.txt");
+
+  try {
+    const token = (await readFile(tokenPath, "utf-8")).trim();
+    if (!token) {
+      cacheMiss = true;
+      return null;
+    }
+    cachedToken = token;
+    return token;
+  } catch (err: unknown) {
+    // ENOENT is expected pre-backend-boot — not an error state.
+    cacheMiss = true;
+    return null;
+  }
+}
+
+export function invalidateTokenCache() {
+  cachedToken = null;
+  cacheMiss = false;
+}
+```
+
+**Proxy route:**
+
+```typescript
+// apps/brain_web/src/app/api/proxy/[...path]/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { readToken } from "@/lib/auth/token";
+
+const API_BASE = process.env.BRAIN_API_URL || "http://127.0.0.1:4317";
+
+// Strip these on response — never leak server-internal headers to the browser.
+const STRIPPED_RESPONSE_HEADERS = new Set([
+  "x-brain-token",
+  "server",
+]);
+
+async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  const token = await readToken();
+  if (!token) {
+    return NextResponse.json(
+      { error: "setup_required", message: "brain_api token not found. Is brain_api running?" },
+      { status: 503 },
+    );
+  }
+
+  const urlSuffix = "/" + path.join("/") + (req.nextUrl.search || "");
+  const targetUrl = API_BASE + urlSuffix;
+
+  const headers = new Headers(req.headers);
+  headers.set("X-Brain-Token", token);
+  headers.set("Origin", `http://localhost:4316`);  // brain_api expects loopback Origin
+  headers.delete("host");  // don't forward the frontend's Host
+
+  const body = ["GET", "HEAD"].includes(req.method) ? undefined : await req.arrayBuffer();
+
+  const upstream = await fetch(targetUrl, {
+    method: req.method,
+    headers,
+    body,
+    redirect: "manual",
+  });
+
+  const outHeaders = new Headers();
+  for (const [k, v] of upstream.headers) {
+    if (!STRIPPED_RESPONSE_HEADERS.has(k.toLowerCase())) outHeaders.set(k, v);
+  }
+
+  return new NextResponse(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: outHeaders,
+  });
+}
+
+export { proxy as GET, proxy as POST, proxy as PUT, proxy as DELETE, proxy as PATCH };
+```
+
+### Step 1 — Failing tests
+
+```typescript
+// apps/brain_web/tests/unit/auth-token.test.ts
+import { describe, test, expect, beforeEach, vi } from "vitest";
+
+vi.mock("node:fs/promises");
+vi.mock("node:os", () => ({ homedir: () => "/home/test" }));
+
+import { readFile } from "node:fs/promises";
+import { readToken, invalidateTokenCache } from "@/lib/auth/token";
+
+describe("readToken", () => {
+  beforeEach(() => {
+    invalidateTokenCache();
+    vi.resetAllMocks();
+    delete process.env.BRAIN_VAULT_ROOT;
+  });
+
+  test("reads + strips whitespace", async () => {
+    (readFile as any).mockResolvedValue("abc123\n");
+    const token = await readToken();
+    expect(token).toBe("abc123");
+  });
+
+  test("returns null when file missing", async () => {
+    (readFile as any).mockRejectedValue({ code: "ENOENT" });
+    const token = await readToken();
+    expect(token).toBeNull();
+  });
+
+  test("caches after first read", async () => {
+    (readFile as any).mockResolvedValue("abc123");
+    await readToken();
+    await readToken();
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  test("respects BRAIN_VAULT_ROOT env var", async () => {
+    process.env.BRAIN_VAULT_ROOT = "/custom/vault";
+    (readFile as any).mockResolvedValue("xyz");
+    await readToken();
+    expect(readFile).toHaveBeenCalledWith(
+      expect.stringContaining("/custom/vault/.brain/run/api-secret.txt"),
+      "utf-8",
+    );
+  });
+});
+```
+
+```typescript
+// apps/brain_web/tests/unit/proxy-route.test.ts
+// Mock the token reader + global fetch; call route.POST directly.
+// Verify: 503 when no token; correct headers attached on forward; stripped on response.
+```
+
+### Step 2 — Implement
+
+See sketches. Key edge cases: `path` param is an array (catch-all), preserve query string, handle streaming response body (pass-through `upstream.body`).
+
+### Step 3 — Run + commit
+
+Expected: 8 new tests. Pnpm test green; manual smoke — start brain_api via uvicorn, start brain_web via `pnpm dev`, hit `http://localhost:4316/api/proxy/healthz` → `200 {"status": "ok"}`.
+
+```bash
+git commit -m "feat(web): plan 07 task 8 — auth proxy route (server-side token read + HTTP forward)"
+```
+
+---
+
+### Task 9 — Typed API client + WS client (v2-pinned)
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/lib/api/client.ts` — `apiFetch<T>` typed wrapper
+- Create: `apps/brain_web/src/lib/api/tools.ts` — per-tool typed bindings (18 + 4 new = 22 tools)
+- Create: `apps/brain_web/src/lib/api/types.ts` — shared types (`ToolResponse`, `ErrorResponse`, `RateLimitDetail`)
+- Create: `apps/brain_web/src/lib/ws/client.ts` — WS client class with reconnect + event parsing
+- Create: `apps/brain_web/src/lib/ws/events.ts` — typed event discriminated union (mirror `brain_api.chat.events`)
+- Create: `apps/brain_web/src/lib/ws/hooks.ts` — `useWebSocket(threadId)` React hook (P3a: one WS per thread)
+- Create: `apps/brain_web/tests/unit/api-client.test.ts` — 5 tests (success, 4xx error envelope, 429 Retry-After, 5xx, token rejection)
+- Create: `apps/brain_web/tests/unit/ws-events.test.ts` — 6 tests (parse schema_version, parse each client-bound event, reject unknown type, round-trip server event)
+- Create: `apps/brain_web/tests/unit/ws-client.test.ts` — 4 tests (connect, handshake schema v2, reconnect on close, cancel turn request)
+
+**Context for the implementer:**
+
+### `apiFetch<T>` — the typed API primitive
+
+```typescript
+// apps/brain_web/src/lib/api/types.ts
+export interface ToolResponse<D = Record<string, unknown>> {
+  text: string;
+  data: D | null;
+}
+
+export interface ErrorResponse {
+  error: string;
+  message: string;
+  detail: Record<string, unknown> | null;
+}
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    public readonly detail: Record<string, unknown> | null,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+```
+
+```typescript
+// apps/brain_web/src/lib/api/client.ts
+import type { ToolResponse, ErrorResponse } from "./types";
+import { ApiError } from "./types";
+
+export async function apiFetch<D = Record<string, unknown>>(
+  path: string,
+  init?: RequestInit,
+): Promise<ToolResponse<D>> {
+  const response = await fetch("/api/proxy" + path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
+  });
+
+  if (!response.ok) {
+    let body: ErrorResponse;
+    try {
+      body = await response.json();
+    } catch {
+      throw new ApiError(response.status, "unknown", null, response.statusText);
+    }
+    throw new ApiError(response.status, body.error, body.detail, body.message);
+  }
+
+  return response.json();
+}
+```
+
+### Per-tool bindings (22 tools)
+
+```typescript
+// apps/brain_web/src/lib/api/tools.ts
+import { apiFetch } from "./client";
+
+// READ TOOLS
+export const listDomains = () =>
+  apiFetch<{ domains: string[] }>("/api/tools/brain_list_domains", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+
+export const search = (query: string, opts?: { top_k?: number; domains?: string[] }) =>
+  apiFetch<{ hits: Array<{ path: string; title: string; snippet: string; score: number }>; top_k_used: number }>(
+    "/api/tools/brain_search",
+    { method: "POST", body: JSON.stringify({ query, ...opts }) },
+  );
+
+// ... (18 more tools, all shaped alike) ...
+
+// NEW IN PLAN 07
+export const recentIngests = (limit?: number) =>
+  apiFetch<{ ingests: Array<IngestRecord> }>("/api/tools/brain_recent_ingests", {
+    method: "POST",
+    body: JSON.stringify({ limit: limit ?? 20 }),
+  });
+
+export const createDomain = (slug: string, name: string, accentColor?: string) =>
+  apiFetch("/api/tools/brain_create_domain", {
+    method: "POST",
+    body: JSON.stringify({ slug, name, accent_color: accentColor }),
+  });
+
+export const renameDomain = (from: string, to: string, rewriteFrontmatter = true) =>
+  apiFetch("/api/tools/brain_rename_domain", {
+    method: "POST",
+    body: JSON.stringify({ from, to, rewrite_frontmatter: rewriteFrontmatter }),
+  });
+
+export const budgetOverride = (amountUsd: number, durationHours = 24) =>
+  apiFetch("/api/tools/brain_budget_override", {
+    method: "POST",
+    body: JSON.stringify({ amount_usd: amountUsd, duration_hours: durationHours }),
+  });
+```
+
+### WS events — typed discriminated union
+
+```typescript
+// apps/brain_web/src/lib/ws/events.ts
+export const SCHEMA_VERSION = "2" as const;
+
+// Server → client events (12 total after Task 5 adds doc_edit_proposed).
+export type ServerEvent =
+  | { type: "schema_version"; version: string }
+  | { type: "thread_loaded"; thread_id: string; mode: string; turn_count: number }
+  | { type: "turn_start"; turn_number: number }
+  | { type: "delta"; text: string }
+  | { type: "tool_call"; id: string; tool: string; arguments: Record<string, unknown> }
+  | { type: "tool_result"; id: string; data: Record<string, unknown> }
+  | { type: "cost_update"; tokens_in: number; tokens_out: number; cost_usd: number; cumulative_usd: number; cumulative_tokens_in: number }
+  | { type: "patch_proposed"; patch_id: string; target_path: string; reason: string }
+  | { type: "doc_edit_proposed"; edits: Array<{ op: "insert" | "delete" | "replace"; anchor: { kind: "line" | "text"; value: number | string }; text: string }> }
+  | { type: "turn_end"; turn_number: number; title: string | null }
+  | { type: "cancelled"; turn_number: number }
+  | { type: "error"; code: string; message: string; recoverable: boolean };
+
+// Client → server messages.
+export type ClientMessage =
+  | { type: "turn_start"; content: string; mode?: "ask" | "brainstorm" | "draft"; attached_sources?: string[] }
+  | { type: "cancel_turn" }
+  | { type: "switch_mode"; mode: "ask" | "brainstorm" | "draft" }
+  | { type: "set_open_doc"; path: string | null };
+
+export function parseServerEvent(raw: unknown): ServerEvent {
+  if (typeof raw !== "object" || raw === null || !("type" in raw)) {
+    throw new Error("WS event missing 'type' discriminator");
+  }
+  // Pass-through — trusting backend (Pydantic-validated on emit). Narrow via TypeScript.
+  return raw as ServerEvent;
+}
+```
+
+### WS client — connect + reconnect + schema v2 pin
+
+```typescript
+// apps/brain_web/src/lib/ws/client.ts
+import { SCHEMA_VERSION, parseServerEvent, type ServerEvent, type ClientMessage } from "./events";
+
+export interface WebSocketClientOptions {
+  threadId: string;
+  token: string;
+  onEvent: (event: ServerEvent) => void;
+  onClose?: (clean: boolean) => void;
+  onOpen?: () => void;
+  onSchemaVersionMismatch?: (received: string) => void;
+  reconnectBaseMs?: number;
+  reconnectMaxMs?: number;
+}
+
+export class BrainWebSocket {
+  private ws: WebSocket | null = null;
+  private opts: WebSocketClientOptions;
+  private reconnectAttempt = 0;
+  private manualClose = false;
+
+  constructor(opts: WebSocketClientOptions) {
+    this.opts = opts;
+  }
+
+  connect() {
+    const url = `/api/proxy/ws/chat/${this.opts.threadId}?token=${encodeURIComponent(this.opts.token)}`;
+    // Note: ws:// scheme converted by browser from the current page's scheme + host.
+    // Next.js proxy route must handle WS upgrades — see route.ts variant for WS.
+    const wsUrl = (window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + url;
+
+    this.ws = new WebSocket(wsUrl);
+    this.ws.addEventListener("open", () => {
+      this.reconnectAttempt = 0;
+      this.opts.onOpen?.();
+    });
+    this.ws.addEventListener("message", (evt) => {
+      let parsed: ServerEvent;
+      try {
+        parsed = parseServerEvent(JSON.parse(evt.data));
+      } catch (err) {
+        console.error("[brain-ws] failed to parse event", err, evt.data);
+        return;
+      }
+      if (parsed.type === "schema_version" && parsed.version !== SCHEMA_VERSION) {
+        console.warn(`[brain-ws] schema mismatch: expected ${SCHEMA_VERSION}, got ${parsed.version}`);
+        this.opts.onSchemaVersionMismatch?.(parsed.version);
+      }
+      this.opts.onEvent(parsed);
+    });
+    this.ws.addEventListener("close", (evt) => {
+      this.ws = null;
+      this.opts.onClose?.(this.manualClose);
+      if (!this.manualClose && evt.code !== 1008) {  // 1008 = policy violation (bad token)
+        this.scheduleReconnect();
+      }
+    });
+  }
+
+  private scheduleReconnect() {
+    const base = this.opts.reconnectBaseMs ?? 500;
+    const max = this.opts.reconnectMaxMs ?? 30_000;
+    const delay = Math.min(max, base * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt++;
+    setTimeout(() => this.connect(), delay);
+  }
+
+  send(msg: ClientMessage) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn("[brain-ws] send called but socket not open");
+      return;
+    }
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  close() {
+    this.manualClose = true;
+    this.ws?.close(1000, "manual close");
+    this.ws = null;
+  }
+}
+```
+
+**WS proxy via Next.js:** The catch-all `/api/proxy/[...path]` HTTP route from Task 8 does NOT handle WebSocket upgrades — Next.js Route Handlers can't natively proxy WS. Two options:
+
+- **Option A (recommended):** frontend connects DIRECTLY to `ws://localhost:4317/ws/chat/<id>?token=<secret>`. The token is exposed to JS. Breaks the "browser never sees the token" property.
+- **Option B:** custom Node server that handles WS upgrade. More work; breaks Next.js's default server.
+- **Option C (best):** use Next.js middleware + an edge-function WS proxy. Complex; still needs a custom server.
+
+**RESOLVED APPROACH:** read the token server-side in a Server Component, pass it to a Client Component as a prop ONLY for WS handshake. The token is transmitted over the Next.js SSR render (already same-origin), never exposed via a client-side `fetch`. The WS URL includes the token in the query param; WebSocket same-origin restrictions keep it loopback-only. On a token rotation (next `create_app()` call), the Next.js Server Component re-reads and the token refreshes.
+
+This is a pragmatic compromise — the token leaks into JS memory (readable by the extension sandbox in the browser) but stays same-origin + loopback-only. Document as a known constraint; Plan 09 can tighten if needed.
+
+### Step 1 — Failing tests
+
+```typescript
+// apps/brain_web/tests/unit/ws-events.test.ts
+describe("parseServerEvent", () => {
+  test("schema_version passes through", () => {
+    const ev = parseServerEvent({ type: "schema_version", version: "2" });
+    expect(ev.type).toBe("schema_version");
+  });
+
+  test("delta event has text", () => {
+    const ev = parseServerEvent({ type: "delta", text: "hello" });
+    if (ev.type !== "delta") throw new Error("wrong variant");
+    expect(ev.text).toBe("hello");
+  });
+
+  // ... 4 more for tool_call, tool_result, cost_update w/ cumulative_tokens_in,
+  //     patch_proposed, doc_edit_proposed, turn_end, cancelled, error ...
+});
+```
+
+### Step 2 — Implement
+
+All sketches above. WS client uses the exponential-backoff reconnect; bail on 1008 (auth failure) to avoid hammering bad-token connections.
+
+### Step 3 — Run + commit
+
+Expected: 15 new tests (5 api-client + 6 ws-events + 4 ws-client).
+
+```bash
+git commit -m "feat(web): plan 07 task 9 — typed API client + WS client (SCHEMA_VERSION=2 pin, reconnect)"
+```
+
+---
+
+### Task 10 — Global shell + Zustand stores + routing
+
+**Owning subagent:** brain-frontend-engineer
+
+**Files:**
+- Create: `apps/brain_web/src/lib/state/app-store.ts` — Zustand store (theme, mode, scope, view, rail, density)
+- Create: `apps/brain_web/src/components/shell/topbar.tsx` — top bar (scope picker, mode switcher, cost meter, theme toggle, rail toggle, settings gear)
+- Create: `apps/brain_web/src/components/shell/left-nav.tsx` — left nav (new chat, workspace nav, threads, settings)
+- Create: `apps/brain_web/src/components/shell/right-rail.tsx` — right rail (context-sensitive content)
+- Create: `apps/brain_web/src/components/shell/app-shell.tsx` — composition root (grid layout)
+- Modify: `apps/brain_web/src/app/layout.tsx` — wrap children in `AppShell`
+- Create: `apps/brain_web/src/app/{inbox,browse,pending,bulk,settings,setup}/page.tsx` — all placeholder pages
+- Create: `apps/brain_web/tests/unit/app-store.test.ts` — 4 tests (defaults, theme persistence, scope toggle, invalid-state midturn)
+- Create: `apps/brain_web/tests/unit/shell.test.tsx` — 5 tests (topbar renders, nav items clickable, rail toggles, mode switcher only on chat, scope picker opens)
+
+**Context for the implementer:**
+
+### Zustand store
+
+```typescript
+// apps/brain_web/src/lib/state/app-store.ts
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+export type ViewName = "chat" | "inbox" | "browse" | "pending" | "bulk" | "settings" | "setup";
+export type ChatMode = "ask" | "brainstorm" | "draft";
+export type Theme = "dark" | "light";
+export type Density = "comfortable" | "compact";
+
+interface AppState {
+  theme: Theme;
+  density: Density;
+  mode: ChatMode;
+  scope: string[];  // domain slugs
+  view: ViewName;
+  railOpen: boolean;
+  activeThreadId: string | null;
+
+  setTheme: (t: Theme) => void;
+  setDensity: (d: Density) => void;
+  setMode: (m: ChatMode) => void;
+  setScope: (s: string[]) => void;
+  toggleRail: () => void;
+  setActiveThreadId: (id: string | null) => void;
+}
+
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      theme: "dark",
+      density: "comfortable",
+      mode: "ask",
+      scope: ["research", "work"],
+      view: "chat",
+      railOpen: true,
+      activeThreadId: null,
+
+      setTheme: (theme) => {
+        document.documentElement.dataset.theme = theme;
+        set({ theme });
+      },
+      setDensity: (density) => {
+        document.documentElement.dataset.density = density;
+        set({ density });
+      },
+      setMode: (mode) => set({ mode }),
+      setScope: (scope) => set({ scope }),
+      toggleRail: () => set((s) => ({ railOpen: !s.railOpen })),
+      setActiveThreadId: (id) => set({ activeThreadId: id }),
+    }),
+    {
+      name: "brain-app",
+      partialize: (s) => ({
+        theme: s.theme,
+        density: s.density,
+        mode: s.mode,
+        scope: s.scope,
+        railOpen: s.railOpen,
+      }),  // DON'T persist `view` / `activeThreadId` — URL is source of truth
+    },
+  ),
+);
+```
+
+### Shell composition
+
+```tsx
+// apps/brain_web/src/components/shell/app-shell.tsx
+import { Topbar } from "./topbar";
+import { LeftNav } from "./left-nav";
+import { RightRail } from "./right-rail";
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="app-grid">
+      <Topbar />
+      <LeftNav />
+      <main className="main">{children}</main>
+      <RightRail />
+    </div>
+  );
+}
+```
+
+CSS grid in `globals.css`:
+
+```css
+.app-grid {
+  display: grid;
+  grid-template-rows: 48px 1fr;
+  grid-template-columns: 240px 1fr 320px;
+  grid-template-areas:
+    "topbar topbar topbar"
+    "leftnav main rail";
+  height: 100vh;
+}
+.topbar { grid-area: topbar; }
+.leftnav { grid-area: leftnav; }
+.main { grid-area: main; overflow-y: auto; }
+.rail { grid-area: rail; }
+```
+
+**Topbar** reads from `useAppStore` + calls `listDomains()` via React Query for the scope picker's available domains. **LeftNav** reads `view`; threads grouped by date come from `listThreads()` (new helper — TBD which tool backs it; Plan 04 doesn't expose a `list_threads` tool today — consider deriving from filesystem walk OR adding as a small Plan 07 task if needed). **RightRail** is context-sensitive; Task 16 fills in pending-patches for chat view, Task 18 fills in backlinks for browse view.
+
+**Invalid-state mid-turn guards are a store concern:** when streaming is active (Task 15 wires this), `setMode` emits a `MidTurnToast` instead of changing mode.
+
+```typescript
+// Extended app-store:
+setMode: (mode) => {
+  if (get().streaming) {
+    // Emit invalid-state-mode toast via a separate UI-toasts store.
+    return;
+  }
+  set({ mode });
+},
+```
+
+### Step 1 — Failing tests
+
+Tests cover Zustand store defaults, theme application to `<html>`, and shell component rendering.
+
+### Step 2 — Implement
+
+Sketches above. Shell uses CSS grid (not Tailwind utility classes for the full app frame — semantic layout deserves dedicated CSS). Tailwind for component-level styling inside panels.
+
+### Step 3 — Run + commit
+
+Expected: 9 new tests (4 store + 5 shell). All 7 placeholder routes (`/chat`, `/inbox`, `/browse`, `/pending`, `/bulk`, `/settings`, `/setup`) navigate + render empty.
+
+```bash
+git commit -m "feat(web): plan 07 task 10 — global shell + Zustand stores + routing"
+```
+
+---
+
+**Checkpoint 2 — pause for main-loop review.**
+
+10 tasks landed. Frontend foundation:
+- Next.js 15 package skeleton booted at `http://localhost:4316`
+- TT design tokens + Roboto + dark/light theme + density
+- shadcn/ui primitives generated (button, dialog, popover, select, tabs, input, textarea, checkbox, switch, separator, scroll-area, tooltip, dropdown-menu)
+- Server-side auth proxy reads `.brain/run/api-secret.txt` and forwards REST calls; 503 on missing token
+- WS client pinned to `SCHEMA_VERSION = "2"`, auto-reconnects, respects 1008 bail
+- Typed API bindings for all 22 tools
+- Zustand app store with persisted theme/mode/scope/density
+- Global shell (topbar, left nav, right rail) + 7 routes navigable
+
+Main loop reviews:
+
+- Is `pnpm` the right package manager? The user's existing environment uses `uv` for Python; consistent with `pnpm` in the Node ecosystem. If npm is preferred, adapt task-6-time.
+- WS token-in-URL compromise (see Task 9 context): acceptable? The token is same-origin + loopback-only in the browser; leaks to page-level JS. Browser extensions could theoretically read. The tradeoff is alternative requires a custom Next.js server which breaks the `next dev` and `next start` out-of-box flow. Track as Task 25 deferral or confirm now.
+- Does `listThreads()` need a new backend tool, or is filesystem-walk `<vault>/<domain>/chats/*.md` enough? Plan 04 doesn't ship a list-threads tool. Consider adding to Task 4 or deferring to Plan 07 Group 4.
+- The shell's CSS grid is fixed-width left nav (240px) + rail (320px). Does this adapt on 1024px minimum width? Probably tight — confirm via Playwright at 1024.
+- Shadcn theme tokens vs TT custom tokens — any conflicts? Shadcn uses HSL variables by default; our tokens are hex. Both should coexist (shadcn variables have their `--background`, `--foreground`, etc. — we override in `tokens.css` to point at our surface palette).
+
+Before Task 11, confirm the shell + auth + client + store are stable — Groups 3/4/5 all consume these primitives.
+
+---
