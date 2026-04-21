@@ -16,6 +16,15 @@ stays in ``pending/`` so the user can retry or reject it.
 Rate limiter consumes from the ``patches`` bucket (cost=1) BEFORE any other
 work so a refused call is cheap and deterministic (matches the pattern in
 ``brain_propose_note``).
+
+Plan 07 Task 1: the autonomy gate (:func:`brain_core.autonomy.should_auto_apply`)
+is consulted AFTER the scope check. A patch whose category is opted into
+auto-apply in :class:`~brain_core.config.schema.AutonomousConfig` returns
+``status="auto_applied"`` instead of ``"applied"`` so the UI can distinguish
+policy-applied patches from human-approved ones. Both paths call
+``writer.apply`` and ``mark_applied`` identically and record to the undo log,
+so ``brain_undo_last`` can revert either. ``PatchCategory.OTHER`` — the
+default for any PatchSet that doesn't explicitly opt in — never auto-applies.
 """
 
 from __future__ import annotations
@@ -24,6 +33,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from brain_core.autonomy import should_auto_apply
+from brain_core.config.schema import Config
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.paths import ScopeError
 
@@ -66,6 +77,16 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if domain not in ctx.allowed_domains:
         raise ScopeError(f"patch targets domain {domain!r} not in allowed {ctx.allowed_domains}")
 
+    # Autonomy gate — consult config BEFORE the apply so a non-auto patch
+    # still follows the same approval-gated flow (Plan 04 semantics). The
+    # session has no in-flight Config object; ``_resolve_config`` snapshots
+    # defaults and overlays the session vault_root (mirrors
+    # ``brain_config_get``). Plan 07 Task 5 wires persisted config here;
+    # until then, ``_resolve_config`` is the extension point for tests to
+    # monkeypatch a specific ``AutonomousConfig``.
+    config = _resolve_config(ctx)
+    auto_applied = should_auto_apply(envelope.patchset, config)
+
     # Staging tools (brain_propose_note) record vault-relative paths in the
     # envelope for portability. Plan 04 Task 25 fix: VaultWriter.apply now
     # absolutizes vault-relative paths against vault_root before scope_guard,
@@ -78,15 +99,28 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Re-express applied_files as vault-relative POSIX strings so the caller
     # sees a stable, cross-platform representation.
     applied_rel = [_rel_to_vault(p, ctx.vault_root).as_posix() for p in receipt.applied_files]
+    status = "auto_applied" if auto_applied else "applied"
+    prefix = "auto-applied" if auto_applied else "applied"
     return ToolResult(
-        text=f"applied patch {patch_id} → {len(receipt.applied_files)} file(s)",
+        text=f"{prefix} patch {patch_id} → {len(receipt.applied_files)} file(s)",
         data={
-            "status": "applied",
+            "status": status,
             "patch_id": patch_id,
             "undo_id": receipt.undo_id,
             "applied_files": applied_rel,
         },
     )
+
+
+def _resolve_config(ctx: ToolContext) -> Config:
+    """Snapshot a defaults-backed Config with the session vault_root overlaid.
+
+    Mirrors the ``brain_config_get`` approach — no env / config-file read here
+    to keep the handler deterministic under test. Plan 07 Task 5 replaces the
+    body with a real loader call; Task 1 tests monkeypatch this function to
+    supply a custom :class:`AutonomousConfig`.
+    """
+    return Config(vault_path=ctx.vault_root)
 
 
 def _rel_to_vault(p: Path, vault_root: Path) -> Path:

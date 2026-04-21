@@ -46,6 +46,15 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
     {
         "budget.daily_usd",
         "log_llm_payloads",
+        # Plan 07 Task 1: per-category autonomy flags. Each maps 1:1 to a
+        # field on ``AutonomousConfig`` and a value in ``PatchCategory``.
+        # Setting any of these to True opts that category into auto-apply
+        # via ``should_auto_apply``. Persistence lands in Plan 07 Task 5.
+        "autonomous.ingest",
+        "autonomous.entities",
+        "autonomous.concepts",
+        "autonomous.index_rewrites",
+        "autonomous.draft",
     }
 )
 

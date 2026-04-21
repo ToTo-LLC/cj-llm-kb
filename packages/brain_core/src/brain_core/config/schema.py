@@ -27,6 +27,24 @@ class BudgetConfig(BaseModel):
     alert_threshold_pct: int = Field(default=80, ge=0, le=100)
 
 
+class AutonomousConfig(BaseModel):
+    """Per-category auto-apply flags for staged PatchSets.
+
+    Every flag defaults to ``False`` — out-of-the-box brain stages every
+    LLM-authored vault mutation for human approval (CLAUDE.md principle #3).
+    Flipping a flag to ``True`` opts that category into auto-apply via
+    :func:`brain_core.autonomy.should_auto_apply`. The category keys mirror
+    :class:`brain_core.vault.types.PatchCategory` values 1:1.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    ingest: bool = False
+    entities: bool = False
+    concepts: bool = False
+    index_rewrites: bool = False
+    draft: bool = False
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
     vault_path: Path = Field(default_factory=lambda: Path.home() / "Documents" / "brain")
@@ -34,6 +52,7 @@ class Config(BaseModel):
     autonomous_mode: bool = False
     llm: LLMConfig = Field(default_factory=LLMConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
     web_port: int = Field(default=4317, ge=1024, le=65535)
     log_llm_payloads: bool = False
 

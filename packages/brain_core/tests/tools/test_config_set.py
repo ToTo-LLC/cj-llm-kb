@@ -33,9 +33,42 @@ def test_name() -> None:
     assert NAME == "brain_config_set"
 
 
-def test_settable_keys_match_plan_04_task_25() -> None:
-    """Allowlist is deliberately narrow; active_domain is NOT settable."""
-    assert frozenset({"budget.daily_usd", "log_llm_payloads"}) == _SETTABLE_KEYS
+def test_settable_keys_match_plan_07_task_1() -> None:
+    """Allowlist is deliberately narrow; active_domain is NOT settable.
+
+    Plan 04 baseline: ``budget.daily_usd`` + ``log_llm_payloads``.
+    Plan 07 Task 1: adds the 5 ``autonomous.<category>`` flags.
+    """
+    assert (
+        frozenset(
+            {
+                "budget.daily_usd",
+                "log_llm_payloads",
+                "autonomous.ingest",
+                "autonomous.entities",
+                "autonomous.concepts",
+                "autonomous.index_rewrites",
+                "autonomous.draft",
+            }
+        )
+        == _SETTABLE_KEYS
+    )
+
+
+async def test_allows_autonomous_flag(tmp_path: Path) -> None:
+    """Each new autonomy key accepts a bool without secret-refusal or allowlist-refusal."""
+    for key in (
+        "autonomous.ingest",
+        "autonomous.entities",
+        "autonomous.concepts",
+        "autonomous.index_rewrites",
+        "autonomous.draft",
+    ):
+        result = await handle({"key": key, "value": True}, _mk_ctx(tmp_path))
+        assert isinstance(result, ToolResult)
+        assert result.data is not None
+        assert result.data["status"] == "updated"
+        assert result.data["value"] is True
 
 
 async def test_refuses_secret_like_key(tmp_path: Path) -> None:

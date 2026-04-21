@@ -22,7 +22,7 @@ from typing import Any
 
 from brain_core.chat.types import ChatMode
 from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path
-from brain_core.vault.types import NewFile, PatchSet
+from brain_core.vault.types import NewFile, PatchCategory, PatchSet
 
 NAME = "brain_propose_note"
 DESCRIPTION = (
@@ -43,6 +43,28 @@ INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+def _category_for_path(path: Path) -> PatchCategory:
+    """Infer a :class:`PatchCategory` from the target vault path.
+
+    The convention mirrors the vault layout: ``<domain>/entities/...`` notes
+    belong to :attr:`PatchCategory.ENTITIES`, ``<domain>/concepts/...`` to
+    CONCEPTS, a domain ``index.md`` to INDEX_REWRITES. Everything else —
+    synthesis drafts, scratch notes, BRAIN.md edits — stays OTHER so the
+    autonomy gate keeps it staged by default.
+    """
+    parts = path.parts
+    if len(parts) < 2:
+        return PatchCategory.OTHER
+    subdir = parts[1]
+    if subdir == "entities":
+        return PatchCategory.ENTITIES
+    if subdir == "concepts":
+        return PatchCategory.CONCEPTS
+    if path.name == "index.md":
+        return PatchCategory.INDEX_REWRITES
+    return PatchCategory.OTHER
+
+
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Rate-limit check FIRST — a refused call must not reach scope_guard,
     # pending-store IO, or any other side effect. Raises RateLimitError on
@@ -58,6 +80,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     patchset = PatchSet(
         new_files=[NewFile(path=p, content=str(arguments["content"]))],
         reason=str(arguments["reason"]),
+        category=_category_for_path(p),
     )
     envelope = ctx.pending_store.put(
         patchset=patchset,

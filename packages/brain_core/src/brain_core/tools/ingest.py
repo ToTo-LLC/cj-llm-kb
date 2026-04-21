@@ -21,6 +21,7 @@ from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestStatus
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.paths import ScopeError
+from brain_core.vault.types import PatchCategory
 
 NAME = "brain_ingest"
 DESCRIPTION = (
@@ -135,6 +136,12 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     note_path = result.note_path
     assert patchset is not None  # mypy narrowing; apply=False + OK ⇒ patchset set
     assert note_path is not None
+    # Plan 07 Task 1: stamp the INGEST category so the autonomy gate in
+    # brain_apply_patch can opt this patch into auto-apply when the user
+    # has set ``autonomous.ingest = true``. The pipeline itself stays
+    # category-agnostic (default OTHER) — the tool layer is where the
+    # semantic label lives.
+    patchset.category = PatchCategory.INGEST
     target_path = patchset.new_files[0].path if patchset.new_files else note_path
     # Truncate the `source` preview inside the reason so long raw-text blobs
     # don't blow up the envelope JSON.
