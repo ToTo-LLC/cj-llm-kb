@@ -109,8 +109,29 @@ class SessionRunner:
         self.ctx = ctx
         self.thread_id = thread_id
         self.mode = mode
+        # Task 20: ``open_doc`` is stashed on the runner when the client
+        # sends a ``set_open_doc`` frame. It's purely metadata for now —
+        # Task 21+ will thread it into ``ChatSessionConfig.open_doc_path``
+        # so the context compiler can inject the focused note's contents
+        # into the prompt. Stored here (not on the ChatSession) because
+        # the session is lazy-built; the open-doc path can be set before
+        # the first turn, so the stash must live on the runner.
+        self.open_doc: str | None = None
         self._turn_number = 0
         self._session: ChatSession | None = None
+
+    @property
+    def turn_number(self) -> int:
+        """Read-only access to the current 1-indexed turn counter.
+
+        The route-handler cancel path emits ``CancelledEvent(turn_number=
+        runner.turn_number)`` after awaiting the cancelled task — the
+        event carries the turn the cancel landed in, which is the same
+        turn ``run_turn`` incremented on entry. Exposed as a property
+        (not a public field) because mutation is strictly internal to
+        ``run_turn``.
+        """
+        return self._turn_number
 
     def _ensure_session(self) -> ChatSession:
         """Build the ``ChatSession`` on first use; return the cached one after.
