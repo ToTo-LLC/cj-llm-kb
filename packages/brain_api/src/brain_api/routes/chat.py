@@ -41,9 +41,11 @@ from brain_api.chat.events import (
     ErrorEvent,
     SchemaVersionEvent,
     ThreadLoadedEvent,
+    TurnStartMessage,
     parse_client_message,
     serialize_server_event,
 )
+from brain_api.chat.session_runner import SessionRunner
 from brain_api.context import AppContext
 
 router = APIRouter(tags=["chat"])
@@ -108,14 +110,21 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
         )
     )
 
-    # 6. Receive loop — parses every inbound frame into a typed
+    # 6. Build the SessionRunner — one per WS connection. The
+    # underlying ``ChatSession`` is lazy-built on the first turn
+    # (Task 21 will swap the build for a ``load_or_create`` that
+    # rehydrates prior turns from the vault transcript).
+    runner = SessionRunner(ctx=ctx, thread_id=thread_id, mode=mode)
+
+    # 7. Receive loop — parses every inbound frame into a typed
     # ``ClientMessage`` variant. Parse failures surface as a typed
     # ``ErrorEvent`` with ``recoverable=True``; the socket stays open
     # so a confused client can retry without reconnecting.
     #
-    # Task 18 stops at parsing + logging; Task 19 will dispatch by
-    # ``msg.type`` into a ``SessionRunner`` for ``turn_start`` /
-    # ``cancel_turn`` / ``switch_mode`` / ``set_open_doc``.
+    # Task 19 dispatches ``turn_start`` into the runner. Tasks 20-21
+    # add ``cancel_turn`` / ``switch_mode`` / ``set_open_doc``; for
+    # now those land in the ``not_implemented`` branch so clients get
+    # a structured rejection instead of silent no-ops.
     try:
         while True:
             raw = await websocket.receive_json()
@@ -137,8 +146,32 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                     )
                 )
                 continue
-            logger.debug("chat WS parsed: %s", msg.type)
-            # Task 19: dispatch msg into SessionRunner here.
+
+            if isinstance(msg, TurnStartMessage):
+                # ``msg.mode`` is optional — when set it both overrides
+                # the turn's mode AND becomes the thread's new default.
+                # We mutate ``runner.mode`` BEFORE running the turn so
+                # the lazy ChatSession build picks up the right prompt.
+                # After the session is already built, further mode
+                # changes are a Task 20 concern (``switch_mode``
+                # rebuilds the effective tool registry on the session).
+                if msg.mode:
+                    runner.mode = msg.mode
+                await runner.run_turn(msg.content, websocket)
+            else:
+                # cancel_turn / switch_mode / set_open_doc land here
+                # until Task 20/21. We emit a typed ErrorEvent so the
+                # client gets a structured rejection with
+                # recoverable=True (the socket stays open).
+                await websocket.send_json(
+                    serialize_server_event(
+                        ErrorEvent(
+                            code="not_implemented",
+                            message=f"message type {msg.type!r} not handled yet",
+                            recoverable=True,
+                        )
+                    )
+                )
     except WebSocketDisconnect:
         logger.info("chat WS disconnected: thread_id=%s", thread_id)
         # TODO(Task 21): call ``session_runner.persist()`` here so a
