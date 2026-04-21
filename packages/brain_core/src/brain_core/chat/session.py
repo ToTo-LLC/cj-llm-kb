@@ -66,6 +66,7 @@ class ChatSession:
         persistence: ThreadPersistence | None = None,
         autotitler: AutoTitler | None = None,
         vault_writer: VaultWriter | None = None,
+        initial_turns: list[ChatTurn] | None = None,
     ) -> None:
         if autotitler is not None and vault_writer is None:
             raise ValueError("autotitler requires vault_writer")
@@ -81,9 +82,28 @@ class ChatSession:
         self.persistence = persistence
         self.autotitler = autotitler
         self.vault_writer = vault_writer
-        self._turns: list[ChatTurn] = []
+        # ``initial_turns`` rehydrates an existing thread — the list is
+        # copied so mutations during subsequent turns don't leak back to
+        # the caller. Plan 05 Task 21 uses this to reconstruct a chat
+        # session from ``ThreadPersistence.read(path).turns`` on WS
+        # reconnect. ``None`` (the default) starts with an empty history,
+        # preserving the Plan 03 constructor semantics.
+        self._turns: list[ChatTurn] = list(initial_turns) if initial_turns else []
         self._read_notes: dict[Path, str] = {}
         self._effective_registry = self._build_effective_registry()
+
+    @property
+    def turn_count(self) -> int:
+        """Number of user turns in the session (1 per completed turn).
+
+        Plan 05 Task 21 reports this in the WS ``thread_loaded`` frame on
+        reconnect. We count USER-role turns (not total entries) because
+        each completed turn is one user message + one assistant message;
+        the conceptual "turn" in the chat UI maps 1:1 to user messages.
+        SYSTEM entries (mode/scope/open-doc change markers) are excluded
+        so they don't inflate the count surfaced to the client.
+        """
+        return sum(1 for t in self._turns if t.role == TurnRole.USER)
 
     # ----- registry / mutators ------------------------------------------------
 

@@ -294,6 +294,79 @@ class _CombinedChunkProvider:
         )
 
 
+def test_turn_count_zero_for_fresh_session(env: EnvTuple) -> None:
+    """Plan 05 Task 21: ``turn_count`` is 0 when the session has no prior turns.
+
+    Used by the WS ``thread_loaded`` frame to tell the client how many
+    user messages already live in the vault transcript. Fresh = 0.
+    """
+    session = _make_session(env)
+    assert session.turn_count == 0
+
+
+def test_initial_turns_rehydrates_history_and_counts_users(env: EnvTuple) -> None:
+    """Plan 05 Task 21: passing ``initial_turns`` populates ``_turns`` verbatim.
+
+    Counting semantics for ``turn_count``: **user turns only**. The WS
+    client shows "Turn 3 of this thread" — system markers (mode/scope
+    changes) and assistant replies should not inflate that number.
+    """
+    from datetime import UTC, datetime
+
+    from brain_core.chat.types import ChatTurn, TurnRole
+
+    vault, fake, registry, retrieval, pending, db = env
+    compiler = ContextCompiler(vault_root=vault, mode_prompt="MODE PROMPT")
+    cfg = ChatSessionConfig(mode=ChatMode.ASK, domains=("research",))
+    now = datetime(2026, 4, 14, tzinfo=UTC)
+    prior_turns = [
+        ChatTurn(role=TurnRole.USER, content="hi", created_at=now),
+        ChatTurn(role=TurnRole.ASSISTANT, content="hello", created_at=now),
+        ChatTurn(role=TurnRole.SYSTEM, content="mode changed: ask -> brainstorm", created_at=now),
+        ChatTurn(role=TurnRole.USER, content="again", created_at=now),
+        ChatTurn(role=TurnRole.ASSISTANT, content="reply", created_at=now),
+    ]
+    session = ChatSession(
+        config=cfg,
+        llm=fake,
+        compiler=compiler,
+        registry=registry,
+        retrieval=retrieval,
+        pending_store=pending,
+        state_db=db,
+        vault_root=vault,
+        thread_id="2026-04-14-draft-rehydrate",
+        initial_turns=prior_turns,
+    )
+    # Full history preserved; user turns counted; the caller's list is
+    # defensively copied (mutating it should not affect the session).
+    assert len(session._turns) == 5
+    assert session.turn_count == 2
+    prior_turns.append(ChatTurn(role=TurnRole.USER, content="leak?", created_at=now))
+    assert session.turn_count == 2
+
+
+def test_initial_turns_none_equivalent_to_omitting_kwarg(env: EnvTuple) -> None:
+    """Passing ``initial_turns=None`` is identical to omitting the kwarg."""
+    vault, fake, registry, retrieval, pending, db = env
+    compiler = ContextCompiler(vault_root=vault, mode_prompt="MODE PROMPT")
+    cfg = ChatSessionConfig(mode=ChatMode.ASK, domains=("research",))
+    session = ChatSession(
+        config=cfg,
+        llm=fake,
+        compiler=compiler,
+        registry=registry,
+        retrieval=retrieval,
+        pending_store=pending,
+        state_db=db,
+        vault_root=vault,
+        thread_id="2026-04-14-draft-none",
+        initial_turns=None,
+    )
+    assert session._turns == []
+    assert session.turn_count == 0
+
+
 async def test_turn_handles_combined_delta_and_usage_chunk(env: EnvTuple) -> None:
     vault, _fake, registry, retrieval, pending, db = env
     compiler = ContextCompiler(vault_root=vault, mode_prompt="MODE PROMPT")
