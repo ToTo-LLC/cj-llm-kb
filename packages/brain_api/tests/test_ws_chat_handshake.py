@@ -66,7 +66,7 @@ def test_handshake_valid_token_accepted(app: FastAPI) -> None:
             # First frame: schema_version.
             first = ws.receive_json()
             assert first["type"] == "schema_version"
-            assert first["version"] == "1"
+            assert first["version"] == "2"
 
             # Second frame: thread_loaded with defaults.
             second = ws.receive_json()

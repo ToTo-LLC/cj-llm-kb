@@ -5,10 +5,10 @@ acting as the discriminator. Pydantic v2's ``TypeAdapter`` handles
 dispatch for inbound messages; ``model_dump(mode="json")`` handles
 outbound serialization.
 
-Server → client events (11): ``schema_version``, ``thread_loaded``,
+Server → client events (12): ``schema_version``, ``thread_loaded``,
 ``turn_start``, ``delta``, ``tool_call``, ``tool_result``,
-``cost_update``, ``patch_proposed``, ``turn_end``, ``cancelled``,
-``error``.
+``cost_update``, ``patch_proposed``, ``doc_edit_proposed``,
+``turn_end``, ``cancelled``, ``error``.
 
 Client → server messages (4): ``turn_start``, ``cancel_turn``,
 ``switch_mode``, ``set_open_doc``.
@@ -28,7 +28,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+# Plan 07 Task 5 bumped this from ``"1"`` → ``"2"`` to signal the
+# addition of ``doc_edit_proposed``. The new event is technically
+# additive (v1 clients could ignore it), but the bump makes the
+# surface change explicit and lets a pinned client disconnect cleanly
+# rather than silently miss structured-edit frames.
 
 
 # ---------- Server → client ----------
@@ -118,6 +123,26 @@ class PatchProposedEvent(BaseModel):
     reason: str
 
 
+class DocEditProposedEvent(BaseModel):
+    """Draft-mode structured edits travel as their own event.
+
+    Plan 07 Task 5: the Draft-mode ``\\`\\`\\`edits`` fence parser
+    (Task 2) yields one ``ChatEventKind.DOC_EDIT`` per edit entry;
+    the WS layer maps each to a ``DocEditProposedEvent`` with a single
+    edit in ``edits``. Batching multiple edits into one event is left
+    to the frontend — emitting per-edit keeps the event ordering
+    observable for the UI's undo/redo stack.
+
+    Each edit is ``{op, anchor: {kind, value}, text}`` per the Plan 07
+    draft-mode edit contract. The shape is loosely typed (``dict``)
+    here because the frontend owns richer edit-op schemas than the
+    backend needs to validate.
+    """
+
+    type: Literal["doc_edit_proposed"] = "doc_edit_proposed"
+    edits: list[dict[str, Any]]
+
+
 class TurnEndEvent(BaseModel):
     """Signals the end of the turn started by the matching
     ``TurnStartEvent``. ``title`` is an optional short summary the
@@ -155,6 +180,7 @@ ServerEvent = (
     | ToolResultEvent
     | CostUpdateEvent
     | PatchProposedEvent
+    | DocEditProposedEvent
     | TurnEndEvent
     | CancelledEvent
     | ErrorEvent

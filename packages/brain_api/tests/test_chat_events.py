@@ -17,6 +17,7 @@ from brain_api.chat.events import (
     CancelTurnMessage,
     CostUpdateEvent,
     DeltaEvent,
+    DocEditProposedEvent,
     SwitchModeMessage,
     TurnStartMessage,
     parse_client_message,
@@ -25,9 +26,31 @@ from brain_api.chat.events import (
 from pydantic import ValidationError
 
 
-def test_schema_version_is_pinned_to_1() -> None:
-    """Plan 07 frontend pins to this value; bumping is a breaking change."""
-    assert SCHEMA_VERSION == "1"
+def test_schema_version_is_pinned_to_2() -> None:
+    """Plan 07 Task 5 bumped this to ``"2"`` to signal the addition of
+    ``doc_edit_proposed``. Frontend WS client (Task 9) pins ``"2"``.
+    """
+    assert SCHEMA_VERSION == "2"
+
+
+def test_doc_edit_proposed_event_serializes() -> None:
+    """Plan 07 Task 5: Draft-mode structured edits travel as their own
+    WS event type so the frontend can surface them as a distinct
+    review-and-apply UI (separate from staged ``PatchSet`` patches).
+    """
+    ev = DocEditProposedEvent(
+        edits=[
+            {
+                "op": "insert",
+                "anchor": {"kind": "line", "value": 3},
+                "text": "hello",
+            }
+        ]
+    )
+    payload = serialize_server_event(ev)
+    assert payload["type"] == "doc_edit_proposed"
+    assert payload["edits"][0]["op"] == "insert"
+    assert payload["edits"][0]["anchor"]["value"] == 3
 
 
 def test_delta_event_serializes_with_type_discriminator() -> None:

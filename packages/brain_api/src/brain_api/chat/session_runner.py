@@ -60,6 +60,7 @@ from brain_core.chat.types import (
 from brain_api.chat.events import (
     CostUpdateEvent,
     DeltaEvent,
+    DocEditProposedEvent,
     ErrorEvent,
     PatchProposedEvent,
     ServerEvent,
@@ -487,6 +488,14 @@ class SessionRunner:
                 target_path=str(data["target_path"]),
                 reason=f"proposed by {tool_name}",
             )
+
+        if kind is ChatEventKind.DOC_EDIT:
+            # Plan 07 Task 5: Draft-mode fence parser emits one
+            # DOC_EDIT per edit entry. Map each to its own WS event
+            # with a single-element ``edits`` list — the frontend
+            # batches for UI rendering. ``data`` is the raw edit dict
+            # (``{op, anchor, text}``) from the parsed fence JSON.
+            return DocEditProposedEvent(edits=[dict(data)])
 
         # TURN_END and ERROR: WS layer owns these frames (turn_end with
         # the WS-side turn_number, error from the exception path), so we

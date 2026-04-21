@@ -286,7 +286,7 @@ def _run_demo() -> int:
             ) as ws:
                 first = ws.receive_json()
                 _check(first["type"] == "schema_version", "schema_version first")
-                _check(first["version"] == "1", f"version=1 (got {first['version']!r})")
+                _check(first["version"] == "2", f"version=2 (got {first['version']!r})")
                 second = ws.receive_json()
                 _check(second["type"] == "thread_loaded", "thread_loaded second")
                 _check(
