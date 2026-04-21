@@ -52,6 +52,7 @@ async def test_returns_fixed_summary(tmp_path: Path) -> None:
             today_usd=0.1234,
             month_usd=1.2345,
             by_domain={"research": 0.1234},
+            by_mode={"ask": 0.1234},
         )
     )
 

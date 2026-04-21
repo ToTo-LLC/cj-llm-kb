@@ -1,4 +1,12 @@
-"""costs.sqlite — append-only cost ledger with per-day and per-domain aggregation."""
+"""costs.sqlite — append-only cost ledger with per-day and per-domain aggregation.
+
+Plan 07 Task 3: entries now carry optional ``mode`` (chat: ``ask`` /
+``brainstorm`` / ``draft``) and ``stage`` (ingest: ``classify`` /
+``summarize`` / ``integrate``) tags so the frontend can slice spend by
+UX surface. Both default ``None`` so every Plan 02-05 call site
+compiles unchanged; unrecorded-mode rows aggregate into the empty-
+string key in ``CostSummary.by_mode``.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +25,12 @@ class CostEntry:
     output_tokens: int
     cost_usd: float
     domain: str
+    mode: str | None = None
+    """Chat mode tag — ``"ask"`` / ``"brainstorm"`` / ``"draft"`` — or
+    ``None`` for non-chat ops (ingest, tooling, etc.)."""
+    stage: str | None = None
+    """Ingest stage tag — ``"classify"`` / ``"summarize"`` /
+    ``"integrate"`` — or ``None`` for non-ingest ops."""
 
 
 @dataclass(frozen=True)
@@ -26,6 +40,10 @@ class CostSummary:
     today_usd: float
     month_usd: float
     by_domain: dict[str, float]
+    by_mode: dict[str, float]
+    """Today's spend broken down by chat mode. Entries with ``mode=None``
+    aggregate into the empty-string key so the UI can label them
+    ``Other`` (typically ingest rows)."""
 
 
 _SCHEMA = """
@@ -51,6 +69,24 @@ class CostLedger:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            self._apply_plan07_migration(c)
+
+    def _apply_plan07_migration(self, c: sqlite3.Connection) -> None:
+        """Add ``mode`` and ``stage`` columns to ``costs`` in-place.
+
+        Idempotent: checks PRAGMA table_info and only issues ALTER TABLE
+        for missing columns. SQLite ALTER TABLE ADD COLUMN preserves
+        existing rows and seeds the new column with NULL, which matches
+        the ``mode: str | None = None`` / ``stage: str | None = None``
+        default on ``CostEntry``.
+
+        No schema-version bump: this is Plan 07 Task 3, not Task 5.
+        """
+        existing_cols = {row[1] for row in c.execute("PRAGMA table_info(costs)")}
+        if "mode" not in existing_cols:
+            c.execute("ALTER TABLE costs ADD COLUMN mode TEXT")
+        if "stage" not in existing_cols:
+            c.execute("ALTER TABLE costs ADD COLUMN stage TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
@@ -58,8 +94,8 @@ class CostLedger:
     def record(self, entry: CostEntry) -> None:
         with self._conn() as c:
             c.execute(
-                "INSERT INTO costs (ts_utc, day, operation, model, input_tokens, output_tokens, cost_usd, domain) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO costs (ts_utc, day, operation, model, input_tokens, output_tokens, cost_usd, domain, mode, stage) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     entry.timestamp.astimezone(UTC).isoformat(),
                     entry.timestamp.astimezone(UTC).date().isoformat(),
@@ -69,6 +105,8 @@ class CostLedger:
                     entry.output_tokens,
                     entry.cost_usd,
                     entry.domain,
+                    entry.mode,
+                    entry.stage,
                 ),
             )
 
@@ -88,6 +126,17 @@ class CostLedger:
             ).fetchall()
         return {domain: float(total) for domain, total in rows}
 
+    def total_by_mode(self, d: date) -> dict[str, float]:
+        """Today's spend grouped by ``mode`` tag. ``NULL`` mode aggregates
+        into the empty-string key so the dict always has JSON-safe keys.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT COALESCE(mode, ''), COALESCE(SUM(cost_usd), 0.0) FROM costs WHERE day = ? GROUP BY COALESCE(mode, '')",
+                (d.isoformat(),),
+            ).fetchall()
+        return {mode: float(total) for mode, total in rows}
+
     def total_for_month(self, year: int, month: int) -> float:
         prefix = f"{year:04d}-{month:02d}"
         with self._conn() as c:
@@ -99,9 +148,11 @@ class CostLedger:
 
     def summary(self, *, today: date, month: tuple[int, int]) -> CostSummary:
         """Return a typed summary: today's total, this month's total, today's
-        breakdown by domain. Used by the `brain_cost_report` MCP tool."""
+        breakdown by domain AND by mode. Used by the `brain_cost_report`
+        MCP tool and the Plan 07 cost-breakdown UI."""
         return CostSummary(
             today_usd=self.total_for_day(today),
             month_usd=self.total_for_month(month[0], month[1]),
             by_domain=self.total_by_domain(today),
+            by_mode=self.total_by_mode(today),
         )

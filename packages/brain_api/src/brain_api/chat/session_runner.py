@@ -142,6 +142,12 @@ class SessionRunner:
         self.open_doc: str | None = None
         self._turn_number = 0
         self._session: ChatSession | None = None
+        # Plan 07 Task 3: running total of input tokens across every
+        # turn on this WS connection. ``CostUpdateEvent.cumulative_tokens_in``
+        # ships this to the client so the context-window gauge updates
+        # live. Resets on reconnect (new ``SessionRunner`` instance per
+        # WS accept).
+        self._cumulative_tokens_in = 0
 
     @property
     def turn_number(self) -> int:
@@ -336,7 +342,7 @@ class SessionRunner:
         turn_gen = cast(AsyncGenerator[ChatEvent, None], session.turn(content))
         try:
             async for chat_event in turn_gen:
-                ws_event = _convert_chat_event(chat_event)
+                ws_event = self._convert_chat_event(chat_event)
                 if ws_event is not None:
                     await websocket.send_json(serialize_server_event(ws_event))
                 # ChatSession's own internal TURN_END event is consumed
@@ -401,80 +407,88 @@ class SessionRunner:
                 # not escape the runner; log + swallow.
                 logger.exception("turn_gen.aclose raised")
 
+    def _convert_chat_event(self, e: ChatEvent) -> ServerEvent | None:
+        """Map ``brain_core.chat.types.ChatEvent`` → ``brain_api`` ``ServerEvent``.
 
-def _convert_chat_event(e: ChatEvent) -> ServerEvent | None:
-    """Map ``brain_core.chat.types.ChatEvent`` → ``brain_api`` ``ServerEvent``.
+        Returns ``None`` for kinds that have no WS counterpart in the Task
+        18 wire contract (``TURN_END`` is emitted by the session loop but
+        the WS layer owns the authoritative ``turn_end`` frame with
+        ``turn_number``; ``ERROR`` is surfaced via the ``run_turn``
+        exception path, not forwarded from the session).
 
-    Returns ``None`` for kinds that have no WS counterpart in the Task
-    18 wire contract (``TURN_END`` is emitted by the session loop but
-    the WS layer owns the authoritative ``turn_end`` frame with
-    ``turn_number``; ``ERROR`` is surfaced via the ``run_turn``
-    exception path, not forwarded from the session).
+        The ``ChatEvent`` shape is a single Pydantic model with ``kind``
+        (a ``ChatEventKind`` enum) and ``data`` (an untyped ``dict``).
+        Per the Plan 03 session loop (``brain_core/chat/session.py``),
+        every kind populates ``data`` with a known set of keys:
 
-    The ``ChatEvent`` shape is a single Pydantic model with ``kind``
-    (a ``ChatEventKind`` enum) and ``data`` (an untyped ``dict``).
-    Per the Plan 03 session loop (``brain_core/chat/session.py``),
-    every kind populates ``data`` with a known set of keys:
+        * ``DELTA``: ``{"text": str}``
+        * ``TOOL_CALL``: ``{"id": str, "name": str, "args": dict}``
+        * ``TOOL_RESULT``: ``{"id": str, "name": str, "text": str, "error"?: bool}``
+        * ``COST_UPDATE``: ``{"turn_cost_usd": float, "session_cost_usd": float,
+          "tokens_in"?: int, "tokens_out"?: int}`` (tokens added in Plan 07 Task 3)
+        * ``PATCH_PROPOSED``: ``{"patch_id": str, "target_path": str, "tool": str}``
 
-    * ``DELTA``: ``{"text": str}``
-    * ``TOOL_CALL``: ``{"id": str, "name": str, "args": dict}``
-    * ``TOOL_RESULT``: ``{"id": str, "name": str, "text": str, "error"?: bool}``
-    * ``COST_UPDATE``: ``{"turn_cost_usd": float, "session_cost_usd": float}``
-    * ``PATCH_PROPOSED``: ``{"patch_id": str, "target_path": str, "tool": str}``
+        Field-name adaptations below (the WS contract and the core session
+        chose different names for the same concept):
 
-    Field-name adaptations below (the WS contract and the core session
-    chose different names for the same concept):
+        * TOOL_CALL: core ``name`` / ``args`` → WS ``tool`` / ``arguments``
+        * TOOL_RESULT: core emits ``text`` (the already-stringified tool
+          output); WS contract carries ``data: dict``. We wrap the text in
+          ``{"text": ...}`` (and forward ``error`` if present) to satisfy
+          the typed schema without losing the tool's actual output.
+        * COST_UPDATE: core plumbs ``tokens_in`` / ``tokens_out`` from
+          the round's ``TokenUsage`` when available (default 0 if the
+          LLM didn't report usage). We forward them and accumulate
+          ``tokens_in`` into ``self._cumulative_tokens_in`` for the
+          ``cumulative_tokens_in`` field. ``cost_usd`` and
+          ``cumulative_usd`` still come from ``turn_cost_usd`` /
+          ``session_cost_usd`` — the cost-pricing side is not Task 3's
+          concern.
+        * PATCH_PROPOSED: core emits ``tool`` (the tool that proposed the
+          patch); WS contract carries a human-readable ``reason``. We pass
+          ``reason=f"proposed by {tool_name}"`` as a stopgap until Plan 03
+          teaches tools to emit a structured reason.
+        """
+        kind = e.kind
+        data = e.data
 
-    * TOOL_CALL: core ``name`` / ``args`` → WS ``tool`` / ``arguments``
-    * TOOL_RESULT: core emits ``text`` (the already-stringified tool
-      output); WS contract carries ``data: dict``. We wrap the text in
-      ``{"text": ...}`` (and forward ``error`` if present) to satisfy
-      the typed schema without losing the tool's actual output.
-    * COST_UPDATE: core doesn't emit token counts in Task 17/18 (no
-      cost ledger plumbing yet), so we pass ``tokens_in=0``,
-      ``tokens_out=0``, ``cost_usd=turn_cost_usd``,
-      ``cumulative_usd=session_cost_usd``. Task 21+ plugs real numbers.
-    * PATCH_PROPOSED: core emits ``tool`` (the tool that proposed the
-      patch); WS contract carries a human-readable ``reason``. We pass
-      ``reason=f"proposed by {tool_name}"`` as a stopgap until Plan 03
-      teaches tools to emit a structured reason.
-    """
-    kind = e.kind
-    data = e.data
+        if kind is ChatEventKind.DELTA:
+            return DeltaEvent(text=str(data.get("text", "")))
 
-    if kind is ChatEventKind.DELTA:
-        return DeltaEvent(text=str(data.get("text", "")))
+        if kind is ChatEventKind.TOOL_CALL:
+            return ToolCallEvent(
+                id=str(data["id"]),
+                tool=str(data["name"]),
+                arguments=dict(data.get("args", {})),
+            )
 
-    if kind is ChatEventKind.TOOL_CALL:
-        return ToolCallEvent(
-            id=str(data["id"]),
-            tool=str(data["name"]),
-            arguments=dict(data.get("args", {})),
-        )
+        if kind is ChatEventKind.TOOL_RESULT:
+            wrapped: dict[str, object] = {"text": str(data.get("text", ""))}
+            if data.get("error"):
+                wrapped["error"] = True
+            return ToolResultEvent(id=str(data["id"]), data=wrapped)
 
-    if kind is ChatEventKind.TOOL_RESULT:
-        wrapped: dict[str, object] = {"text": str(data.get("text", ""))}
-        if data.get("error"):
-            wrapped["error"] = True
-        return ToolResultEvent(id=str(data["id"]), data=wrapped)
+        if kind is ChatEventKind.COST_UPDATE:
+            tokens_in = int(data.get("tokens_in", 0))
+            tokens_out = int(data.get("tokens_out", 0))
+            self._cumulative_tokens_in += tokens_in
+            return CostUpdateEvent(
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_usd=float(data.get("turn_cost_usd", 0.0)),
+                cumulative_usd=float(data.get("session_cost_usd", 0.0)),
+                cumulative_tokens_in=self._cumulative_tokens_in,
+            )
 
-    if kind is ChatEventKind.COST_UPDATE:
-        return CostUpdateEvent(
-            tokens_in=0,
-            tokens_out=0,
-            cost_usd=float(data.get("turn_cost_usd", 0.0)),
-            cumulative_usd=float(data.get("session_cost_usd", 0.0)),
-        )
+        if kind is ChatEventKind.PATCH_PROPOSED:
+            tool_name = str(data.get("tool", "unknown"))
+            return PatchProposedEvent(
+                patch_id=str(data["patch_id"]),
+                target_path=str(data["target_path"]),
+                reason=f"proposed by {tool_name}",
+            )
 
-    if kind is ChatEventKind.PATCH_PROPOSED:
-        tool_name = str(data.get("tool", "unknown"))
-        return PatchProposedEvent(
-            patch_id=str(data["patch_id"]),
-            target_path=str(data["target_path"]),
-            reason=f"proposed by {tool_name}",
-        )
-
-    # TURN_END and ERROR: WS layer owns these frames (turn_end with
-    # the WS-side turn_number, error from the exception path), so we
-    # drop the core-side versions to avoid double-emitting.
-    return None
+        # TURN_END and ERROR: WS layer owns these frames (turn_end with
+        # the WS-side turn_number, error from the exception path), so we
+        # drop the core-side versions to avoid double-emitting.
+        return None

@@ -390,3 +390,57 @@ async def test_turn_handles_combined_delta_and_usage_chunk(env: EnvTuple) -> Non
     # Assistant turn captured with the combined text.
     assistant_turns = [t for t in session._turns if t.role.value == "assistant"]
     assert assistant_turns[-1].content == "hi"
+
+
+async def test_chat_turn_records_mode_on_cost_ledger(env: EnvTuple, tmp_path: Path) -> None:
+    """Plan 07 Task 3: when the session has a ``cost_ledger``, every
+    successful turn records a ``CostEntry`` tagged with the chat mode.
+    The Plan 07 UI uses ``summary.by_mode`` to break spend down by
+    surface (Ask / Brainstorm / Draft).
+    """
+    from brain_core.cost.ledger import CostLedger
+
+    vault, fake, registry, retrieval, pending, db = env
+    fake.queue("Hello.", input_tokens=120, output_tokens=30)
+
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    compiler = ContextCompiler(vault_root=vault, mode_prompt="MODE PROMPT")
+    cfg = ChatSessionConfig(mode=ChatMode.ASK, domains=("research",))
+    session = ChatSession(
+        config=cfg,
+        llm=fake,
+        compiler=compiler,
+        registry=registry,
+        retrieval=retrieval,
+        pending_store=pending,
+        state_db=db,
+        vault_root=vault,
+        thread_id="2026-04-14-draft-ledger",
+        cost_ledger=ledger,
+    )
+    _ = [e async for e in session.turn("hi")]
+
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date()
+    summary = ledger.summary(today=today, month=(today.year, today.month))
+    # Ask-mode turn landed in the ``ask`` bucket, not ``""``.
+    assert "ask" in summary.by_mode
+    # Domain is tagged to the first allowed domain (chat doesn't have a
+    # single-domain scope in general — ``research`` is what this session
+    # was configured with).
+    assert "research" in summary.by_domain
+
+
+async def test_chat_turn_cost_update_carries_token_counts(env: EnvTuple) -> None:
+    """Plan 07 Task 3: the COST_UPDATE event now plumbs ``tokens_in`` /
+    ``tokens_out`` from the round's TokenUsage so the WS
+    ``cumulative_tokens_in`` gauge has real numbers to accumulate."""
+    fake = env[1]
+    fake.queue("reply", input_tokens=450, output_tokens=75)
+    session = _make_session(env)
+    events = [e async for e in session.turn("question")]
+    cost_events = [e for e in events if e.kind == ChatEventKind.COST_UPDATE]
+    assert len(cost_events) == 1
+    assert cost_events[0].data["tokens_in"] == 450
+    assert cost_events[0].data["tokens_out"] == 75

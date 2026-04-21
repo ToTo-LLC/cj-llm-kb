@@ -15,6 +15,7 @@ import pytest
 from brain_api.chat.events import (
     SCHEMA_VERSION,
     CancelTurnMessage,
+    CostUpdateEvent,
     DeltaEvent,
     SwitchModeMessage,
     TurnStartMessage,
@@ -79,3 +80,32 @@ def test_switch_mode_rejects_invalid_mode() -> None:
     """
     with pytest.raises(ValidationError):
         parse_client_message({"type": "switch_mode", "mode": "telepathy"})
+
+
+def test_cost_update_event_has_cumulative_tokens_in() -> None:
+    """Plan 07 Task 3: ``cumulative_tokens_in`` is a new field that
+    carries the running WS-connection total so the frontend can drive
+    a live context-window gauge. Defaults to 0 so Plan 05 tests that
+    pinned the previous field set still pass."""
+    ev = CostUpdateEvent(
+        tokens_in=1000,
+        tokens_out=500,
+        cost_usd=0.05,
+        cumulative_usd=0.05,
+        cumulative_tokens_in=1000,
+    )
+    payload = serialize_server_event(ev)
+    assert payload["cumulative_tokens_in"] == 1000
+
+
+def test_cost_update_event_cumulative_tokens_in_defaults_to_zero() -> None:
+    """Back-compat: constructing without ``cumulative_tokens_in`` must
+    not raise. Plan 05 tests that pin the pre-Plan 07 shape still
+    construct CostUpdateEvent with the original four fields only."""
+    ev = CostUpdateEvent(
+        tokens_in=0,
+        tokens_out=0,
+        cost_usd=0.0,
+        cumulative_usd=0.0,
+    )
+    assert ev.cumulative_tokens_in == 0

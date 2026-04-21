@@ -101,3 +101,39 @@ def test_turn_error_emits_error_event_keeps_connection_open(app: FastAPI, monkey
             ws.send_json({"type": "turn_start", "content": "again", "mode": "ask"})
             next_frame = ws.receive_json()
             assert next_frame["type"] in {"turn_start", "error"}
+
+
+def test_cost_update_ws_frame_includes_cumulative_tokens_in(app: FastAPI) -> None:
+    """Plan 07 Task 3: the ``cost_update`` WS frame now carries a
+    ``cumulative_tokens_in`` field the frontend uses for a live
+    context-window gauge. SessionRunner accumulates ``tokens_in`` from
+    each turn's COST_UPDATE event; the first turn's cumulative equals
+    that turn's token total."""
+    with TestClient(app, base_url="http://localhost") as fresh:
+        # Queue a FakeLLM response with non-zero input tokens so the
+        # COST_UPDATE event carries real numbers to accumulate.
+        get_app_ctx(fresh).tool_ctx.llm.queue("Hello there.", input_tokens=1500, output_tokens=20)
+        token = get_app_token(fresh)
+
+        with fresh.websocket_connect(
+            f"/ws/chat/t-cumulative?token={token}", headers=_LOOPBACK_HEADERS
+        ) as ws:
+            assert ws.receive_json()["type"] == "schema_version"
+            assert ws.receive_json()["type"] == "thread_loaded"
+
+            ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
+
+            cost_frames: list[dict] = []
+            while True:
+                frame = ws.receive_json()
+                if frame["type"] == "cost_update":
+                    cost_frames.append(frame)
+                if frame["type"] in {"turn_end", "error"}:
+                    break
+
+    assert len(cost_frames) >= 1
+    # First turn's cumulative equals that turn's reported tokens_in
+    # since the runner starts with _cumulative_tokens_in = 0.
+    first = cost_frames[0]
+    assert first["tokens_in"] == 1500
+    assert first["cumulative_tokens_in"] == 1500

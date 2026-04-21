@@ -91,13 +91,20 @@ class ToolResultEvent(BaseModel):
 
 class CostUpdateEvent(BaseModel):
     """Running cost telemetry. ``cumulative_usd`` is the thread-level
-    total; the UI uses it to drive a live cost meter."""
+    total; the UI uses it to drive a live cost meter.
+
+    Plan 07 Task 3: ``cumulative_tokens_in`` is the running total of
+    input tokens across every turn on this WS connection. The frontend
+    uses it to show a live context-window gauge. Defaults to ``0`` so
+    every Plan 05 test pinning the existing field set still passes.
+    """
 
     type: Literal["cost_update"] = "cost_update"
     tokens_in: int
     tokens_out: int
     cost_usd: float
     cumulative_usd: float
+    cumulative_tokens_in: int = 0
 
 
 class PatchProposedEvent(BaseModel):

@@ -42,6 +42,10 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "today_usd": summary.today_usd,
             "month_usd": summary.month_usd,
             "by_domain": summary.by_domain,
+            # Plan 07 Task 3: by-mode breakdown for the cost-chart UI.
+            # NULL-mode rows (ingest / legacy) land in the empty-string
+            # key; the frontend renders that as ``Other``.
+            "by_mode": summary.by_mode,
         },
     )
 

@@ -34,6 +34,7 @@ from brain_core.chat.types import (
     ChatTurn,
     TurnRole,
 )
+from brain_core.cost.ledger import CostEntry, CostLedger
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import (
     ContentBlock,
@@ -78,6 +79,7 @@ class ChatSession:
         autotitler: AutoTitler | None = None,
         vault_writer: VaultWriter | None = None,
         initial_turns: list[ChatTurn] | None = None,
+        cost_ledger: CostLedger | None = None,
     ) -> None:
         if autotitler is not None and vault_writer is None:
             raise ValueError("autotitler requires vault_writer")
@@ -93,6 +95,12 @@ class ChatSession:
         self.persistence = persistence
         self.autotitler = autotitler
         self.vault_writer = vault_writer
+        # Plan 07 Task 3: optional CostLedger. When present, the session
+        # writes a ``CostEntry`` tagged with ``mode=self.config.mode.value``
+        # after every successful turn so the Plan 07 UI can break spend
+        # down by chat surface. ``None`` preserves Plan 03 semantics
+        # (session loop does not write to the ledger).
+        self.cost_ledger = cost_ledger
         # ``initial_turns`` rehydrates an existing thread — the list is
         # copied so mutations during subsequent turns don't leak back to
         # the caller. Plan 05 Task 21 uses this to reconstruct a chat
@@ -183,6 +191,14 @@ class ChatSession:
     async def turn(self, user_message: str) -> AsyncIterator[ChatEvent]:
         """Run one chat turn. Yields events; appends to self._turns at the end."""
         turn_cost = 0.0
+        # Plan 07 Task 3: accumulate token usage across rounds so the
+        # final COST_UPDATE event carries real numbers for the WS
+        # ``cumulative_tokens_in`` gauge. ``TokenUsage`` may be absent
+        # on a round (FakeLLM stubs, providers that don't report usage)
+        # — we treat that as 0 to avoid double-counting against whatever
+        # the previous round reported.
+        turn_tokens_in = 0
+        turn_tokens_out = 0
         tool_call_records: list[dict[str, Any]] = []
         compiled = self.compiler.compile(
             config=self.config,
@@ -254,7 +270,13 @@ class ChatSession:
 
                 # Cost pricing not owned by the session loop — Task 18 may plug
                 # in brain_core.cost. round_usage is observable but not priced.
-                _ = round_usage
+                # Plan 07 Task 3: accumulate token counts for the final
+                # COST_UPDATE event so the WS ``cumulative_tokens_in``
+                # gauge sees real numbers. Pricing (``turn_cost``) is
+                # still deferred to the Task 21+ ledger wiring.
+                if round_usage is not None:
+                    turn_tokens_in += round_usage.input_tokens
+                    turn_tokens_out += round_usage.output_tokens
 
                 if not pending_tool_uses:
                     round_text = "".join(current_text_parts)
@@ -264,6 +286,8 @@ class ChatSession:
                         data={
                             "turn_cost_usd": turn_cost,
                             "session_cost_usd": turn_cost,
+                            "tokens_in": turn_tokens_in,
+                            "tokens_out": turn_tokens_out,
                         },
                     )
                     break
@@ -479,6 +503,27 @@ class ChatSession:
                 thread_id=self.thread_id,
                 config=self.config,
                 turns=self._turns,
+            )
+
+        # Plan 07 Task 3: record the turn against the cost ledger, tagged
+        # with the chat mode so the Plan 07 UI can break spend down by
+        # surface (``ask`` / ``brainstorm`` / ``draft``). Tagged with the
+        # first allowed domain as a best-effort proxy — chat is scoped
+        # across all allowed domains, not a single one, but the ledger's
+        # ``domain`` column is required and must not be blank.
+        if self.cost_ledger is not None:
+            chat_domain = self.config.domains[0] if self.config.domains else "unknown"
+            self.cost_ledger.record(
+                CostEntry(
+                    timestamp=datetime.now(UTC),
+                    operation="chat_turn",
+                    model=turn_model,
+                    input_tokens=turn_tokens_in,
+                    output_tokens=turn_tokens_out,
+                    cost_usd=turn_cost,
+                    domain=chat_domain,
+                    mode=self.config.mode.value,
+                )
             )
 
         user_turn_count = sum(1 for t in self._turns if t.role == TurnRole.USER)
