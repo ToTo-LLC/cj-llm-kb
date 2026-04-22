@@ -4323,4 +4323,97 @@ Main loop pushes `main` + tag after reviewing the close commit.
 
 ## Review
 
-*Intentionally unfilled until Plan 07 completes. Captured at Task 25.*
+**Plan 07 — Frontend: complete.**
+
+- **Tag:** `plan-07-frontend`
+- **Completed:** 2026-04-21
+- **Task count:** 25 planned / 25 actual
+- **Commits since `plan-05-api`:** 39 (including Task 25A + 25B + 25C)
+- **Test counts:** brain_core (647) + brain_cli (29) + brain_mcp (72) + brain_api (76) + brain_web (229) + Playwright (14) = **1067 passing** + 12 skipped across all layers
+- **Coverage:** brain_core ≥91% · brain_cli ≥90% · brain_mcp ≥90% · brain_api ≥90% · brain_web ≥75% (component + lib, e2e covers the gaps)
+- **Gates:** mypy strict clean, ruff + format clean, pnpm type-check clean, eslint clean, Playwright 14/14 green, axe-core WCAG 2.2 AA 0 violations (color-contrast gate now enforced), ghost-file 0
+- **Tool surface:** 34 tools (up from 18 at Plan 05 — +4 Task 4 + 10 Task 25 sweep)
+- **Demo receipt:**
+
+```
+[gate 1] backend + frontend health
+  OK  backend /healthz -> 200 (got 200)
+  OK  backend reports status=ok
+  OK  frontend / -> 200 (got 200)
+[gate 2] setup wizard end-to-end via Playwright
+  OK  landed on /setup step 1
+  OK  landed on /chat (got http://127.0.0.1:4316/chat)
+[gate 3] WS chat turn
+  OK  turn_start frame received
+  OK  delta frames received
+  OK  turn_end frame received
+  OK  canned reply streamed (got 'Hello from FakeLLM. (E2E mode default reply.)')
+[gate 4] brain_classify → tool-call envelope
+  OK  brain_classify -> 200 (got 200)
+  OK  domain=work (got 'work')
+  OK  confidence numeric (got 0.85)
+[gate 5] propose_note → list_pending_patches
+  OK  brain_propose_note -> 200 (got 200)
+  OK  patch_id present
+  OK  list_pending_patches -> 200 (got 200)
+  OK  patch_id appears in pending list
+  OK  target path not yet on disk (staged, not applied)
+[gate 6] propose_note → apply_patch via REST
+  OK  propose_note -> 200 (got 200)
+  OK  patch_id present
+  OK  target file NOT on disk before apply
+  OK  apply_patch -> 200 (got 200)
+  OK  status=applied (got 'applied')
+  OK  undo_id present
+  OK  target file ON disk after apply
+[gate 7] brain_undo_last via REST
+  OK  undo_last -> 200 (got 200)
+  OK  status=reverted (got 'reverted')
+  OK  target file GONE after undo
+[gate 8] brain_ingest runs the full pipeline
+  OK  brain_ingest -> 200 (got 200)
+  OK  ingest status in {'pending', 'skipped_duplicate', 'ok'} (got 'pending')
+  OK  staged patch_id present
+[gate 9] brain_bulk_import dry-run → apply
+  OK  bulk_import dry-run -> 200 (got 200)
+  OK  status=planned (got 'planned')
+  OK  planned 3 files (got 3)
+  OK  bulk_import apply -> 200 (got 200)
+  OK  status=applied (got 'applied')
+  OK  at least one file applied (got 3)
+[gate 10] browse edit → propose_note stages a patch
+  OK  propose_note -> 200 (got 200)
+  OK  patch_id returned
+  OK  welcome.md unchanged on disk
+[gate 11] draft-mode doc_edit_proposed equivalent
+  OK  propose_note -> 200 (got 200)
+  OK  patch_id is a string
+[gate 12] brain_rename_domain
+  OK  rename_domain forward -> 200 (got 200)
+  OK  status=renamed (got 'renamed')
+  OK  new domain dir exists on disk
+  OK  old domain dir gone from disk
+  OK  rename_domain reverse -> 200 (got 200)
+  OK  research restored after reverse rename
+[gate 13] brain_budget_override via REST
+  OK  budget_override -> 200 (got 200)
+  OK  status=override_set (got 'override_set')
+  OK  override_until present
+  OK  override_delta_usd=5.0 (got 5.0)
+[gate 14] MCP install tools
+  OK  mcp_status -> 200 (got 200)
+  OK  mcp_install -> 200 (got 200)
+  OK  install status valid (got 'installed')
+  OK  config written at (tmp)/claude_desktop_config.json
+  OK  mcp_selftest -> 200 (got 200)
+  OK  selftest passed (got 'passed')
+  OK  mcp_uninstall -> 200 (got 200)
+
+Passed gates: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+Skipped gates: []
+
+PLAN 07 DEMO OK
+```
+
+- **Handoff to Plan 08:** `pnpm build` produces a production Next.js bundle in `apps/brain_web/.next/`. Plan 08's `brain start` launches `uvicorn brain_api:app --port 4317` + `pnpm --filter brain_web start` (port 4316) as subprocesses; user's browser opens `localhost:4316`. Token file discovery via `<vault>/.brain/run/api-secret.txt` works identically to the Playwright e2e harness.
+- **Handoff to Plan 09:** Manual QA checklist at `docs/testing/manual-qa.md`. WCAG 2.2 AA gate enforced by axe-core (8 routes × 0 violations).
