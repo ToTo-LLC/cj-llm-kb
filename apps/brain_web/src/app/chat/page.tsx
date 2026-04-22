@@ -1,32 +1,25 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import * as React from "react";
-
-import { Transcript } from "@/components/chat/transcript";
-import { useAppStore } from "@/lib/state/app-store";
-import { useChatStore } from "@/lib/state/chat-store";
+import { ChatScreen } from "@/components/chat/chat-screen";
+import { readToken } from "@/lib/auth/token";
 
 /**
- * /chat — "new thread" route. No ``thread_id`` in the URL yet; the
- * Transcript renders NewThreadEmpty because the store is empty and
- * ``activeThreadId`` is null.
+ * /chat — "new thread" route (server component).
  *
- * On mount we clear any stale transcript left over from a previous
- * thread. Task 15 wires the POST /threads on first send and then
- * navigates to the ``/chat/<id>`` route (which opens the WS).
+ * Reads the per-run API token from ``.brain/run/api-secret.txt`` on the
+ * server so it never round-trips through a browser fetch. When the
+ * token is missing (first-run before ``brain_api`` has started), we
+ * redirect to the setup wizard — chat without a token would just
+ * render a perma-"reconnecting" socket.
+ *
+ * Delegates to the client ``<ChatScreen />`` which owns the WS hook
+ * lifecycle and the composition of Transcript + Composer + sub-header.
+ * Passing ``threadId={null}`` tells ChatScreen this is the new-thread
+ * variant — the hook stays inert until the backend creates a thread
+ * and navigates to ``/chat/<id>``.
  */
-export default function ChatPage(): React.ReactElement {
-  const setActiveThreadId = useAppStore((s) => s.setActiveThreadId);
-  const clearTranscript = useChatStore((s) => s.clearTranscript);
-
-  React.useEffect(() => {
-    setActiveThreadId(null);
-    clearTranscript();
-  }, [setActiveThreadId, clearTranscript]);
-
-  return (
-    <main className="flex h-full flex-col">
-      <Transcript />
-    </main>
-  );
+export default async function ChatPage(): Promise<JSX.Element> {
+  const token = await readToken();
+  if (!token) redirect("/setup");
+  return <ChatScreen threadId={null} token={token} />;
 }

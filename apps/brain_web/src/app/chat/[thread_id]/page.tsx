@@ -1,26 +1,17 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import * as React from "react";
-
-import { Transcript } from "@/components/chat/transcript";
-import { useAppStore } from "@/lib/state/app-store";
-import { useChatStore } from "@/lib/state/chat-store";
-import { useChatWebSocket } from "@/lib/ws/hooks";
+import { ChatScreen } from "@/components/chat/chat-screen";
+import { readToken } from "@/lib/auth/token";
 
 /**
- * /chat/<thread_id> — existing-thread route. Opens the WS for the
- * given thread id, binds server events to the chat-store via
- * ``useChatWebSocket``.
+ * /chat/<thread_id> — existing-thread route (server component).
  *
- * Next.js 15 passes ``params`` as a Promise — unwrap with
- * ``React.use`` in a client component. Clearing the transcript on
- * thread change keeps the store shape correct when the user
- * navigates between threads without a full reload.
+ * Mirrors ``/chat``'s token handling: reads the per-run API token on
+ * the server, redirects to setup if missing, and passes token +
+ * thread id to the client ``<ChatScreen />``.
  *
- * Task 14 accepts an optional ``token`` (null by default) so the
- * hook is inert until Task 15 plumbs the real per-run token through
- * a server component wrapper. That keeps the component renderable in
- * isolation for the Task 23 e2e harness.
+ * Next.js 15 passes ``params`` as a Promise to server components —
+ * awaiting it unwraps the thread id.
  */
 
 type Params = { thread_id: string };
@@ -29,30 +20,11 @@ interface ChatThreadPageProps {
   params: Promise<Params>;
 }
 
-export default function ChatThreadPage({
+export default async function ChatThreadPage({
   params,
-}: ChatThreadPageProps): React.ReactElement {
-  const { thread_id } = React.use(params);
-
-  const setActiveThreadId = useAppStore((s) => s.setActiveThreadId);
-  const clearTranscript = useChatStore((s) => s.clearTranscript);
-
-  React.useEffect(() => {
-    setActiveThreadId(thread_id);
-    clearTranscript();
-    return () => {
-      setActiveThreadId(null);
-    };
-  }, [thread_id, setActiveThreadId, clearTranscript]);
-
-  // Task 15 will provide the token via a server-component wrapper.
-  // Passing null keeps the hook inert (see lib/ws/hooks.ts), so this
-  // route is safe to mount in tests.
-  useChatWebSocket(thread_id, null);
-
-  return (
-    <main className="flex h-full flex-col">
-      <Transcript />
-    </main>
-  );
+}: ChatThreadPageProps): Promise<JSX.Element> {
+  const token = await readToken();
+  if (!token) redirect("/setup");
+  const { thread_id } = await params;
+  return <ChatScreen threadId={thread_id} token={token} />;
 }

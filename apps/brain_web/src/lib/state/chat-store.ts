@@ -88,6 +88,14 @@ export interface ChatState {
   streamingText: string;
   currentTurn: number;
   cumulativeTokensIn: number;
+  /**
+   * Source ids the user has staged to attach to the next turn (via
+   * drag-and-drop, paste, or file picker). The composer renders a chip
+   * row for each; the WS hook reads this on ``sendTurnStart`` and
+   * clears it after a successful send so the next turn doesn't re-send
+   * stale attachments.
+   */
+  pendingAttachedSources: string[];
 
   // WS-event reducers
   onTurnStart: (ev: TurnStartEvent) => void;
@@ -110,6 +118,12 @@ export interface ChatState {
   sendUserMessage: (text: string) => void;
   /** Wipe the transcript + streaming state. Called on thread switch. */
   clearTranscript: () => void;
+  /** Append a source id to ``pendingAttachedSources`` (no duplicates). */
+  addAttachedSource: (id: string) => void;
+  /** Remove a source id from ``pendingAttachedSources``. */
+  removeAttachedSource: (id: string) => void;
+  /** Empty the attached-source row (fires on successful turn_start send). */
+  clearAttachedSources: () => void;
 }
 
 // ---------- Helpers ----------
@@ -147,6 +161,7 @@ export const useChatStore = create<ChatState>((set) => ({
   streamingText: "",
   currentTurn: 0,
   cumulativeTokensIn: 0,
+  pendingAttachedSources: [],
 
   onTurnStart: (ev) => {
     set((s) => ({
@@ -296,6 +311,25 @@ export const useChatStore = create<ChatState>((set) => ({
       streaming: false,
       streamingText: "",
       currentTurn: 0,
+      pendingAttachedSources: [],
     });
+  },
+
+  addAttachedSource: (id) => {
+    set((s) =>
+      s.pendingAttachedSources.includes(id)
+        ? {}
+        : { pendingAttachedSources: [...s.pendingAttachedSources, id] },
+    );
+  },
+
+  removeAttachedSource: (id) => {
+    set((s) => ({
+      pendingAttachedSources: s.pendingAttachedSources.filter((x) => x !== id),
+    }));
+  },
+
+  clearAttachedSources: () => {
+    set({ pendingAttachedSources: [] });
   },
 }));

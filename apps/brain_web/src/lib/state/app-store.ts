@@ -3,6 +3,8 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+import { useSystemStore } from "./system-store";
+
 // ---------- Types ----------
 
 export type ViewName =
@@ -79,9 +81,16 @@ export const useAppStore = create<AppState>()(
         set({ density });
       },
       setMode: (mode) => {
-        // TODO(Task 15): when streaming is true, emit invalid-state toast
-        // instead of mutating the mode. Test coverage deferred to Task 15.
-        if (get().streaming) return;
+        // Double guard (see plan Task 15): reducer AND WS hook both
+        // short-circuit when the chat is streaming. A mid-turn mode
+        // switch would desync with the server's ChatThread.mode; surface
+        // the "invalid-state-mode" toast instead so the user can retry
+        // between turns. The WS hook also guards this path — see
+        // ``lib/ws/hooks.ts#useChatWebSocket``.
+        if (get().streaming) {
+          useSystemStore.getState().setMidTurn("invalid-state-mode");
+          return;
+        }
         set({ mode });
       },
       setScope: (scope) => set({ scope }),
