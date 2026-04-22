@@ -16,11 +16,15 @@ from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware
 from brain_api.context import build_app_context
+from brain_api.endpoints import setup_status as setup_status_endpoint
+from brain_api.endpoints import token as token_endpoint
+from brain_api.endpoints import upload as upload_endpoint
 from brain_api.errors import register_error_handlers
 from brain_api.routes import chat as chat_routes
 from brain_api.routes import health
 from brain_api.routes import tools as tools_routes
 from brain_api.schema import build_model_from_schema
+from brain_api.static_ui import SPAStaticFiles, resolve_out_dir
 
 try:
     _VERSION = version("brain_api")
@@ -109,10 +113,33 @@ def create_app(
     app.include_router(health.router)
     app.include_router(tools_routes.router)
     app.include_router(chat_routes.router)
+    # Plan 08 Task 1: self-service endpoints the SPA calls before it has a
+    # token + during its own startup handshake. Included BEFORE the static
+    # mount so ``/api/*`` never falls through to the SPA index.html.
+    app.include_router(setup_status_endpoint.router)
+    app.include_router(token_endpoint.router)
+    app.include_router(upload_endpoint.router)
 
     # Task 15: project-wide exception handlers (D7a mapping). Installed AFTER
     # router include so the handlers wrap every endpoint's exceptions — middleware
     # (which sits outside routing) remains responsible for its own 403 envelope.
     register_error_handlers(app)
+
+    # Plan 08 Task 1: serve the Next.js static export under ``/`` LAST so
+    # every API + WS route takes precedence. :class:`SPAStaticFiles` falls
+    # back to ``index.html`` for non-reserved 404s (SPA client routes).
+    #
+    # The resolver raises if no candidate directory contains an index.html.
+    # Production (the install script sets ``BRAIN_INSTALL_DIR``) + static-UI
+    # tests (set ``BRAIN_WEB_OUT_DIR``) always resolve; headless API tests
+    # that never touch the UI should stay bootable, so we catch the error
+    # and leave the mount off. A deploy with missing UI content surfaces as
+    # ``GET /`` 404 at first browser load — visibly broken, not silently.
+    try:
+        out_dir = resolve_out_dir()
+        app.mount("/", SPAStaticFiles(directory=str(out_dir), html=True), name="ui")
+    except RuntimeError:
+        # API-only mode (CI, contract tests, headless). Intentional no-op.
+        pass
 
     return app
