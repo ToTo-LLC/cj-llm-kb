@@ -34,6 +34,7 @@ from brain_mcp.tools import config_get as _config_get_tool
 from brain_mcp.tools import config_set as _config_set_tool
 from brain_mcp.tools import cost_report as _cost_report_tool
 from brain_mcp.tools import create_domain as _create_domain_tool
+from brain_mcp.tools import fork_thread as _fork_thread_tool
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
 from brain_mcp.tools import get_pending_patch as _get_pending_patch_tool
@@ -77,6 +78,8 @@ _TOOL_MODULES: list[ToolModule] = [
     _create_domain_tool,
     _rename_domain_tool,
     _budget_override_tool,
+    # Plan 07 Task 20 — Fork dialog support.
+    _fork_thread_tool,
 ]
 
 

@@ -41,10 +41,11 @@ _DEFAULT_VAULT = Path.home() / "Documents" / "brain"
 # Tool count registered by ``brain_mcp.server.create_server``. Plan 04 Task 19
 # brought the count to 18; Plan 07 Task 4 added 4 more (recent_ingests,
 # create_domain, rename_domain, budget_override) → 22; Plan 07 Task 16's
-# support tool (``brain_get_pending_patch``) → 23. ``selftest`` checks for
-# at least this many tools so a botched registration surfaces as a failure
-# rather than a silent pass.
-_EXPECTED_TOOL_COUNT = 23
+# support tool (``brain_get_pending_patch``) → 23; Plan 07 Task 20's
+# ``brain_fork_thread`` (Fork dialog) → 24. ``selftest`` checks for at least
+# this many tools so a botched registration surfaces as a failure rather than
+# a silent pass.
+_EXPECTED_TOOL_COUNT = 24
 
 
 def _resolve_brain_mcp_command() -> str:

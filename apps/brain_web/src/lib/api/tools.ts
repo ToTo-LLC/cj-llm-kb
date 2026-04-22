@@ -6,10 +6,11 @@
 // payloads stay as ``Record<string, unknown>`` so individual tool bindings
 // don't over-constrain callers that want to treat the payload opaquely.
 //
-// Plan 07 Task 9 / Task 16: 23 tools total. 18 from Plan 04 (read / ingest /
-// patch / maintenance) + 4 added in Plan 07 Task 4 (recent_ingests,
-// create_domain, rename_domain, budget_override) + 1 added in Plan 07 Task 16
-// (get_pending_patch — envelope + body for the approval detail pane).
+// Plan 07 Task 9 / Task 16 / Task 20: 24 tools total. 18 from Plan 04
+// (read / ingest / patch / maintenance) + 4 added in Plan 07 Task 4
+// (recent_ingests, create_domain, rename_domain, budget_override) + 1 added
+// in Plan 07 Task 16 (get_pending_patch — envelope + body for the approval
+// detail pane) + 1 added in Plan 07 Task 20 (fork_thread — Fork dialog).
 //
 // Every binding ultimately calls ``POST /api/tools/<name>`` via the proxy.
 
@@ -353,11 +354,28 @@ export const budgetOverride = (args: {
     [extra: string]: unknown;
   }>("brain_budget_override", args);
 
+// ---------- Plan 07 Task 20 addition (1) ----------
+
+/**
+ * Fork a chat thread at a given turn index into a new thread. Returns the
+ * newly-minted ``new_thread_id`` so the Fork dialog can navigate to it.
+ * Carry modes: ``full`` (copy turns verbatim), ``none`` (empty),
+ * ``summary`` (Haiku-cheap prose summary as one SYSTEM entry).
+ */
+export const forkThread = (args: {
+  source_thread_id: string;
+  turn_index: number;
+  carry: "full" | "none" | "summary";
+  mode: "ask" | "brainstorm" | "draft";
+  title_hint?: string | null;
+}): Promise<ToolResponse<{ new_thread_id: string }>> =>
+  callTool<{ new_thread_id: string }>("brain_fork_thread", args);
+
 // ---------- registry ----------
 
 /**
  * Machine-readable list of every bound tool. Kept in sync manually with
- * the exports above. Used by the Task 9 test suite to assert all 23
+ * the exports above. Used by the Task 9 test suite to assert all 24
  * tools have typed bindings; a stale entry here means the client missed
  * a registry addition.
  */
@@ -390,6 +408,8 @@ export const ALL_TOOL_NAMES = [
   "brain_create_domain",
   "brain_rename_domain",
   "brain_budget_override",
+  // Plan 07 Task 20 (1)
+  "brain_fork_thread",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];

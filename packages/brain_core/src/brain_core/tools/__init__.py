@@ -73,6 +73,7 @@ from brain_core.tools import config_get as _config_get  # noqa: E402, F401
 from brain_core.tools import config_set as _config_set  # noqa: E402, F401
 from brain_core.tools import cost_report as _cost_report  # noqa: E402, F401
 from brain_core.tools import create_domain as _create_domain  # noqa: E402, F401
+from brain_core.tools import fork_thread as _fork_thread  # noqa: E402, F401
 from brain_core.tools import get_brain_md as _get_brain_md  # noqa: E402, F401
 from brain_core.tools import get_index as _get_index  # noqa: E402, F401
 from brain_core.tools import get_pending_patch as _get_pending_patch  # noqa: E402, F401
