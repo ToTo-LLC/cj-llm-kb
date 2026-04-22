@@ -16,6 +16,12 @@ node_modules/
 .next/
 out/
 
+# Playwright artifacts (traces, screenshots, reports) — regenerated per run,
+# sometimes include full-page screenshots with vault content.
+**/test-results/
+**/playwright-report/
+**/playwright/.cache/
+
 # Editors
 .vscode/
 .idea/
