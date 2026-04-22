@@ -104,3 +104,113 @@ export function renderBody(body: string): React.ReactNode {
     React.createElement("p", { key: i }, renderInline(para, i * 100)),
   );
 }
+
+/**
+ * Full-note renderer used by the Browse reader. Unlike
+ * ``renderBody`` (chat-stream paragraphs only), this pass handles
+ * block-level markdown brain writes to the vault: ``#`` / ``##`` /
+ * ``###`` headings, ``> `` blockquotes, ``- `` bullet lists, and
+ * ``code fences``. Inline tokenisation reuses ``renderInline``.
+ *
+ * Kept deliberately small — the vault stays simple enough that we
+ * don't need a full CommonMark parser yet. Anything more exotic
+ * (tables, nested lists) falls through as a plain paragraph.
+ *
+ * ``key`` prefixes guarantee stable React keys across line-level
+ * branches (heading vs list vs fence) so re-renders don't thrash
+ * the DOM.
+ */
+export function renderNote(body: string): React.ReactNode {
+  const lines = body.split("\n");
+  const out: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] | null = null;
+  let inFence = false;
+  let fenceLines: string[] = [];
+
+  const flushList = () => {
+    if (listItems) {
+      out.push(
+        React.createElement("ul", { key: `ul-${out.length}` }, listItems),
+      );
+      listItems = null;
+    }
+  };
+  const flushFence = () => {
+    if (fenceLines.length > 0 || inFence) {
+      out.push(
+        React.createElement(
+          "pre",
+          { key: `pre-${out.length}` },
+          React.createElement("code", null, fenceLines.join("\n")),
+        ),
+      );
+      fenceLines = [];
+    }
+  };
+
+  lines.forEach((raw, i) => {
+    if (raw.startsWith("```")) {
+      if (inFence) {
+        flushFence();
+        inFence = false;
+      } else {
+        flushList();
+        inFence = true;
+      }
+      return;
+    }
+    if (inFence) {
+      fenceLines.push(raw);
+      return;
+    }
+    if (raw.startsWith("### ")) {
+      flushList();
+      out.push(
+        React.createElement("h3", { key: `h3-${i}` }, renderInline(raw.slice(4), i * 100)),
+      );
+      return;
+    }
+    if (raw.startsWith("## ")) {
+      flushList();
+      out.push(
+        React.createElement("h2", { key: `h2-${i}` }, renderInline(raw.slice(3), i * 100)),
+      );
+      return;
+    }
+    if (raw.startsWith("# ")) {
+      flushList();
+      out.push(
+        React.createElement("h1", { key: `h1-${i}` }, renderInline(raw.slice(2), i * 100)),
+      );
+      return;
+    }
+    if (raw.startsWith("> ")) {
+      flushList();
+      out.push(
+        React.createElement(
+          "blockquote",
+          { key: `bq-${i}` },
+          renderInline(raw.slice(2), i * 100),
+        ),
+      );
+      return;
+    }
+    if (raw.startsWith("- ")) {
+      listItems = listItems ?? [];
+      listItems.push(
+        React.createElement("li", { key: `li-${i}` }, renderInline(raw.slice(2), i * 100)),
+      );
+      return;
+    }
+    if (raw.trim() === "") {
+      flushList();
+      return;
+    }
+    flushList();
+    out.push(React.createElement("p", { key: `p-${i}` }, renderInline(raw, i * 100)));
+  });
+
+  flushList();
+  if (inFence) flushFence();
+  return out;
+}

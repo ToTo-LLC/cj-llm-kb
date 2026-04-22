@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { SearchOverlay } from "@/components/browse/search-overlay";
 import { useSystemStore } from "@/lib/state/system-store";
 
 import { BudgetWall } from "./budget-wall";
@@ -31,8 +32,10 @@ export function SystemOverlays() {
   const budgetWallOpen = useSystemStore((s) => s.budgetWallOpen);
   const midTurn = useSystemStore((s) => s.midTurn);
   const draggingFile = useSystemStore((s) => s.draggingFile);
+  const searchOpen = useSystemStore((s) => s.searchOpen);
   const closeBudgetWall = useSystemStore((s) => s.closeBudgetWall);
   const setMidTurn = useSystemStore((s) => s.setMidTurn);
+  const setSearchOpen = useSystemStore((s) => s.setSearchOpen);
 
   return (
     <>
@@ -42,6 +45,10 @@ export function SystemOverlays() {
         <MidTurnToast kind={midTurn} onDismiss={() => setMidTurn(null)} />
       ) : null}
       <DropOverlay visible={draggingFile} />
+      <SearchOverlay
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+      />
       <Toasts />
     </>
   );

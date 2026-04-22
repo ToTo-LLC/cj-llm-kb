@@ -46,6 +46,31 @@ export function AppShell({
   const pathRef = React.useRef(pathname);
   pathRef.current = pathname;
 
+  // Global ⌘K / Ctrl+K opens the SearchOverlay. Plan 07 Task 18.
+  // We ignore the keystroke when focus is inside an editable input
+  // so the browser-native "focus search" doesn't fight our overlay.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isMeta = e.metaKey || e.ctrlKey;
+      if (!isMeta) return;
+      if (e.key.toLowerCase() !== "k") return;
+      const active = document.activeElement;
+      const tag = active?.tagName?.toLowerCase();
+      if (
+        tag === "input" ||
+        tag === "textarea" ||
+        (active as HTMLElement | null)?.isContentEditable
+      ) {
+        // Let the composer / input handle its own ⌘K if needed.
+        return;
+      }
+      e.preventDefault();
+      useSystemStore.getState().setSearchOpen(true);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   // Paste listener — document-level, installed once per mount.
   React.useEffect(() => {
     const handlePaste = (payload: { text: string; isUrl: boolean }) => {

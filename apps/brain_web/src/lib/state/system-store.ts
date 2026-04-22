@@ -61,6 +61,12 @@ export interface SystemState {
   budgetWallOpen: boolean;
   midTurn: MidTurnKind | null;
   draggingFile: boolean;
+  /**
+   * Plan 07 Task 18 — controls the ⌘K SearchOverlay. AppShell
+   *  owns the global keydown binding (so ⌘K works from any route);
+   *  the overlay itself renders on ``/browse`` via BrowseScreen.
+   */
+  searchOpen: boolean;
   toasts: Toast[];
 
   setConnection: (state: ConnectionState) => void;
@@ -68,6 +74,7 @@ export interface SystemState {
   closeBudgetWall: () => void;
   setMidTurn: (kind: MidTurnKind | null) => void;
   setDragging: (flag: boolean) => void;
+  setSearchOpen: (open: boolean) => void;
   /** Append a toast. Assigns a unique id; auto-dismisses after 6s unless a
    *  `countdown` is supplied. */
   pushToast: (toast: Omit<Toast, "id">) => void;
@@ -81,6 +88,7 @@ export const useSystemStore = create<SystemState>((set, get) => ({
   budgetWallOpen: false,
   midTurn: null,
   draggingFile: false,
+  searchOpen: false,
   toasts: [],
 
   setConnection: (connection) => set({ connection }),
@@ -88,6 +96,7 @@ export const useSystemStore = create<SystemState>((set, get) => ({
   closeBudgetWall: () => set({ budgetWallOpen: false }),
   setMidTurn: (midTurn) => set({ midTurn }),
   setDragging: (draggingFile) => set({ draggingFile }),
+  setSearchOpen: (searchOpen) => set({ searchOpen }),
   pushToast: (toast) => {
     // `Date.now()` alone collides when two toasts fire in the same tick
     // (e.g. rapid bulk-import feedback). Adding `Math.random()` keeps ids
