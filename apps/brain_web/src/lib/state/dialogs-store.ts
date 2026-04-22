@@ -91,8 +91,15 @@ export type DialogKind =
     }
   | {
       kind: "doc-picker";
+      /** Invoked when the user picks a vault document from the list. */
       onPick: (path: string) => void;
-      onNewBlank: () => void;
+      /**
+       * Invoked when the user chooses the "start a blank scratch doc"
+       * option. The picker itself generates the path (using the active
+       * scope + today's date); the caller only needs to read it back
+       * here and hand it to ``draft-store.openDoc``.
+       */
+      onNewBlank: (path: string) => void;
     };
 
 export interface DialogsState {

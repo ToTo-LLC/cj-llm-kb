@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { useAppStore } from "@/lib/state/app-store";
 import { useChatStore } from "@/lib/state/chat-store";
+import { useDraftStore } from "@/lib/state/draft-store";
 import { useSystemStore } from "@/lib/state/system-store";
 import { BrainWebSocket } from "./client";
 import type { ChatMode, ServerEvent } from "./events";
@@ -101,7 +102,16 @@ export function useChatWebSocket(
             store.onPatchProposed(event);
             return;
           case "doc_edit_proposed":
+            // Keep the chat-store hook firing for any per-message
+            // metadata it might stash, then fan each edit into the
+            // draft-store so the DocPanel banner lights up.
             store.onDocEditProposed(event);
+            {
+              const appendEdit = useDraftStore.getState().appendEdit;
+              for (const edit of event.edits) {
+                appendEdit(edit);
+              }
+            }
             return;
           case "turn_end":
             store.onTurnEnd(event);

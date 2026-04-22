@@ -5,8 +5,10 @@ import * as React from "react";
 import { ChatSubHeader } from "./chat-sub-header";
 import { Composer } from "./composer";
 import { Transcript } from "./transcript";
+import { DocPanel } from "@/components/draft/doc-panel";
 import { useAppStore } from "@/lib/state/app-store";
 import { useChatStore } from "@/lib/state/chat-store";
+import { useDraftStore } from "@/lib/state/draft-store";
 import { useChatWebSocket } from "@/lib/ws/hooks";
 
 /**
@@ -47,6 +49,9 @@ export function ChatScreen({
   );
   const removeAttachedSource = useChatStore((s) => s.removeAttachedSource);
 
+  const activeDoc = useDraftStore((s) => s.activeDoc);
+  const showDocPanel = mode === "draft" && activeDoc !== null;
+
   const { sendTurnStart, cancelTurn } = useChatWebSocket(threadId, token);
 
   // Keep the URL-derived active-thread-id in sync with app-store so the
@@ -81,8 +86,8 @@ export function ChatScreen({
     [sendTurnStart, mode, pendingAttachedSources],
   );
 
-  return (
-    <main className="flex h-full flex-col">
+  const chatColumn = (
+    <div className="flex h-full flex-col">
       <ChatSubHeader thread={subHeaderThread} />
       <div className="flex-1 overflow-hidden">
         <Transcript />
@@ -92,6 +97,20 @@ export function ChatScreen({
         onCancel={cancelTurn}
         onDetach={removeAttachedSource}
       />
-    </main>
+    </div>
   );
+
+  if (showDocPanel) {
+    return (
+      <main
+        className="grid h-full"
+        style={{ gridTemplateColumns: "1fr 420px" }}
+      >
+        {chatColumn}
+        <DocPanel />
+      </main>
+    );
+  }
+
+  return <main className="h-full">{chatColumn}</main>;
 }

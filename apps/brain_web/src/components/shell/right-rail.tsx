@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { PendingRail } from "@/components/pending/pending-rail";
 import { BrowseRailBridge } from "@/components/browse/browse-rail-bridge";
 import { useAppStore } from "@/lib/state/app-store";
+import { useDraftStore } from "@/lib/state/draft-store";
 
 /**
  * Context-sensitive right rail.
@@ -13,7 +14,9 @@ import { useAppStore } from "@/lib/state/app-store";
  * ``/chat*`` route. Plan 07 Task 18 adds the ``<BrowseRailBridge />``
  * (a thin client bridge that reads the browse-screen's current
  * note from a shared store and mounts the LinkedRail) for every
- * ``/browse*`` route.
+ * ``/browse*`` route. Plan 07 Task 19 hides the rail on ``/chat*``
+ * when Draft mode has an active document — the DocPanel occupies the
+ * rail slot in that split-view layout.
  */
 export function RightRail() {
   const railOpen = useAppStore((s) => s.railOpen);
@@ -21,6 +24,12 @@ export function RightRail() {
   const isChat = typeof pathname === "string" && pathname.startsWith("/chat");
   const isBrowse =
     typeof pathname === "string" && pathname.startsWith("/browse");
+  const activeDoc = useDraftStore((s) => s.activeDoc);
+
+  // When Draft mode has an open doc on a chat route the split-view
+  // inside ChatScreen already renders DocPanel — the app-shell rail
+  // would duplicate it, so collapse the whole aside in that case.
+  if (isChat && activeDoc !== null) return null;
 
   return (
     <aside
