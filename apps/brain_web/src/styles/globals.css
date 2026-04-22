@@ -31,8 +31,18 @@
     --muted: var(--surface-2);
     --muted-foreground: var(--text-muted);
 
-    --accent: var(--surface-3);
-    --accent-foreground: var(--text);
+    /* Task 25C color-contrast fix: ``--accent`` was pointing at
+       ``--surface-3`` (#232323) which made every ``text-[var(--accent)]``
+       link invisible on the page background (1.17:1). The design
+       intent is a brand-cyan interactive accent — remap to ``--tt-cyan``
+       (#00AFF0, contrast ~7:1 on dark, ~3:1 on light but always used
+       with bold/medium weight). shadcn ``accent`` in the rest of the
+       app expected a subtle hover surface; that role is covered by the
+       separate ``--surface-3`` token, so keeping ``--accent-foreground``
+       pointed at ``--tt-ink`` gives the high-contrast foreground used
+       when something sits on the accent background. */
+    --accent: var(--tt-cyan);
+    --accent-foreground: var(--tt-ink);
 
     --destructive: var(--tt-orange);
     --destructive-foreground: var(--tt-white);

@@ -119,9 +119,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # state_db + writer are required to reconstruct the source thread; without
     # them, fork_from can't read the source file or persist the new one.
     if ctx.state_db is None or ctx.writer is None:
-        raise RuntimeError(
-            "brain_fork_thread requires state_db + writer on ToolContext"
-        )
+        raise RuntimeError("brain_fork_thread requires state_db + writer on ToolContext")
 
     mode = ChatMode(str(arguments["mode"]))
     compiler = ContextCompiler(

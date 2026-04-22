@@ -53,14 +53,7 @@ _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,24}$")
 
 def _seed_index_md(name: str) -> str:
     today = datetime.now(tz=UTC).date().isoformat()
-    fm = (
-        f"---\n"
-        f"title: {name}\n"
-        f"type: index\n"
-        f"created: {today}\n"
-        f"updated: {today}\n"
-        f"---\n\n"
-    )
+    fm = f"---\ntitle: {name}\ntype: index\ncreated: {today}\nupdated: {today}\n---\n\n"
     body = (
         f"# {name}\n\n"
         f"Top-level index for the {name} domain. Add wikilinks to the "
@@ -71,13 +64,7 @@ def _seed_index_md(name: str) -> str:
 
 def _seed_log_md(name: str) -> str:
     today = datetime.now(tz=UTC).date().isoformat()
-    fm = (
-        f"---\n"
-        f"title: {name} log\n"
-        f"type: log\n"
-        f"created: {today}\n"
-        f"---\n\n"
-    )
+    fm = f"---\ntitle: {name} log\ntype: log\ncreated: {today}\n---\n\n"
     body = f"# {name} log\n\n"
     return fm + body
 

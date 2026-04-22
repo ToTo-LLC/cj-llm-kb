@@ -33,8 +33,7 @@ INPUT_SCHEMA: dict[str, Any] = {
             "type": "boolean",
             "default": False,
             "description": (
-                "Must be true. The frontend sets this after the user types "
-                "the confirmation string."
+                "Must be true. The frontend sets this after the user types the confirmation string."
             ),
         },
     },
@@ -53,8 +52,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     )
     return ToolResult(
         text=(
-            f"restored backup {backup_id!r} over vault (previous contents "
-            f"moved to {trash_path})"
+            f"restored backup {backup_id!r} over vault (previous contents moved to {trash_path})"
         ),
         data={
             "status": "restored",

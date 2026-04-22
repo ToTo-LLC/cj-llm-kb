@@ -64,9 +64,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     api_key = str(arguments["api_key"])
 
     if provider not in _ENV_KEYS:
-        raise ValueError(
-            f"unsupported provider {provider!r} — supported: {sorted(_ENV_KEYS)}"
-        )
+        raise ValueError(f"unsupported provider {provider!r} — supported: {sorted(_ENV_KEYS)}")
     if not api_key.strip():
         raise ValueError("api_key must be a non-empty string")
 

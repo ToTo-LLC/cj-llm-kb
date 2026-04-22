@@ -41,10 +41,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if not snapshots:
         text = "(no backups)"
     else:
-        text = "\n".join(
-            f"- {m.backup_id} ({m.trigger}, {m.size_bytes} bytes)"
-            for m in snapshots
-        )
+        text = "\n".join(f"- {m.backup_id} ({m.trigger}, {m.size_bytes} bytes)" for m in snapshots)
     return ToolResult(text=text, data={"backups": out})
 
 

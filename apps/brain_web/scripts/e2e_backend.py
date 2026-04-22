@@ -15,7 +15,7 @@ from pathlib import Path
 from brain_api import create_app
 
 
-def build_app():  # noqa: D401 — uvicorn calls this with no args
+def build_app():
     """Build the brain_api app for e2e, reading config from env vars.
 
     Required env:

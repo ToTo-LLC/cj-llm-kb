@@ -1,37 +1,60 @@
 /**
  * Chat turn e2e — end-to-end WS round-trip via the composer.
  *
- * DEFERRED TO PLAN 07 TASK 25 SWEEP.
+ * Plan 07 Task 25C: unskipped. The backend now runs with
+ * ``BRAIN_E2E_MODE=1`` (set by ``start-backend-for-e2e.sh``) which makes
+ * FakeLLMProvider return a canned chat response when the queue is empty.
+ * We can therefore drive a turn from the browser without reaching into
+ * the subprocess's LLM instance.
  *
- * Rationale: the chat pipeline requires a primed FakeLLMProvider queue
- * before the turn begins. In unit tests we queue a response on the
- * in-process ``ctx.llm`` directly; across a subprocess boundary there is
- * no HTTP endpoint to queue into, and ``FakeLLMProvider`` currently
- * raises ``RuntimeError`` the moment a turn starts against an empty
- * queue. Options we rejected for Task 23:
- *
- *   1. Add a ``POST /api/testing/queue_llm`` backdoor to brain_api —
- *      violates CLAUDE.md principle 1 (no surface only tests use).
- *   2. Monkey-patch FakeLLMProvider to return a canned "hello" for any
- *      unqueued request — changes production semantics (currently
- *      "empty queue = programmer error, raise loudly").
- *   3. Launch a dedicated e2e flavor of brain_api that auto-queues — too
- *      much infra for one test.
- *
- * Correct move: Task 25 sweep adds a queue-priming helper behind an
- * ``BRAIN_E2E_MODE=1`` env flag (gated, not a tool). Until then, this
- * flow is covered by the ChatSession unit + integration tests in
- * ``packages/brain_api/tests/test_ws_chat_*.py`` (16 tests) and the
- * ``useChatWs`` hook unit tests.
+ * We land the thread by navigating to ``/chat/e2e-chat-<id>`` so the WS
+ * hook opens immediately (``/chat`` keeps the socket closed until a
+ * thread exists). The FakeLLM greeting "Hello from FakeLLM. (E2E mode
+ * default reply.)" streams as deltas and is asserted on the transcript.
  */
-import { test } from "./fixtures";
+import { expect, test } from "./fixtures";
 
-test.describe.skip("chat turn", () => {
-  test("composer → turn_start → delta* → turn_end renders message", async () => {
-    // TODO(plan-07 task 25): wire FakeLLM queue priming via BRAIN_E2E_MODE.
+const FAKE_LLM_REPLY = "Hello from FakeLLM. (E2E mode default reply.)";
+
+test.describe("chat turn", () => {
+  // Seed BRAIN.md directly on disk so the root redirect doesn't bounce
+  // a thread-route fetch through the setup wizard. Each spec is its own
+  // file on disk; writing here idempotently is safe.
+  test.beforeEach(async ({ seedPath }) => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    await fs.writeFile(
+      path.join(seedPath, "BRAIN.md"),
+      "# BRAIN\n\nYou are brain. Maintain this vault carefully.\n",
+      "utf-8",
+    );
   });
 
-  test("second turn auto-titles the thread", async () => {
-    // TODO(plan-07 task 25): depends on queue priming above.
+  test("composer → turn_start → delta → turn_end renders assistant reply", async ({
+    page,
+  }) => {
+    const threadId = `e2e-chat-${Date.now()}`;
+    await page.goto(`/chat/${threadId}`);
+    await page.waitForLoadState("networkidle");
+
+    const composer = page.getByRole("textbox", { name: "Message brain" });
+    await expect(composer).toBeVisible();
+    await composer.fill("hello brain");
+
+    const send = page.getByRole("button", { name: "Send" });
+    await send.click();
+
+    // The user turn appears optimistically first, then the assistant
+    // streaming placeholder, then the canned reply streams in char by
+    // char. We wait on the final accumulated text matching the FakeLLM
+    // canned reply — whichever element carries the body.
+    const assistant = page.locator('[data-role="brain"]').first();
+    await expect(assistant).toContainText(FAKE_LLM_REPLY, {
+      timeout: 20_000,
+    });
+
+    // User message is also in the transcript.
+    const user = page.locator('[data-role="user"]').first();
+    await expect(user).toContainText("hello brain");
   });
 });

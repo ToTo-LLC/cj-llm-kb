@@ -61,8 +61,16 @@ INDEX
 
 export BRAIN_ALLOWED_DOMAINS="${BRAIN_ALLOWED_DOMAINS:-research,work}"
 
+# Plan 07 Task 25C: flip FakeLLMProvider's empty-queue fallback from
+# "raise RuntimeError" to "return a scripted canned response." Required
+# for the 4 e2e specs (chat / patch / ingest / bulk) + the 14-gate demo
+# because nothing from the test driver can reach in-process and queue
+# responses on the LLM — brain_api runs in a subprocess.
+export BRAIN_E2E_MODE="${BRAIN_E2E_MODE:-1}"
+
 echo "[e2e-backend] vault=${BRAIN_VAULT_ROOT}" >&2
 echo "[e2e-backend] allowed=${BRAIN_ALLOWED_DOMAINS}" >&2
+echo "[e2e-backend] e2e_mode=${BRAIN_E2E_MODE}" >&2
 
 # --- launch uvicorn ----------------------------------------------------------
 # --factory gives uvicorn a zero-arg callable it can invoke; our shim reads

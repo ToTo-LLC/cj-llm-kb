@@ -32,9 +32,7 @@ def test_name() -> None:
 def _seed_vault(vault: Path) -> None:
     vault.mkdir(parents=True, exist_ok=True)
     (vault / "research").mkdir()
-    (vault / "research" / "note.md").write_text(
-        "---\ntitle: Note\n---\nhello\n", encoding="utf-8"
-    )
+    (vault / "research" / "note.md").write_text("---\ntitle: Note\n---\nhello\n", encoding="utf-8")
     secrets_dir = vault / ".brain"
     secrets_dir.mkdir(parents=True, exist_ok=True)
     (secrets_dir / "secrets.env").write_text("ANTHROPIC_API_KEY=sk-xxx\n", encoding="utf-8")

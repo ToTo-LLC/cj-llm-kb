@@ -60,12 +60,17 @@ function planToFiles(plan: Array<Record<string, unknown>>): BulkFile[] {
       (typeof item.source === "string" && item.source) ||
       (typeof item.path === "string" && item.path) ||
       `file-${i + 1}`;
+    // ``classified`` is the legacy mock name; the tool envelope emits
+    // ``classified_domain``. Accept both so the UI keeps working on
+    // either shape (Plan 07 Task 25C fix — surfaced by bulk-import e2e).
     const classified =
       typeof item.classified === "string"
         ? (item.classified as string)
-        : typeof item.domain === "string"
-          ? (item.domain as string)
-          : null;
+        : typeof item.classified_domain === "string"
+          ? (item.classified_domain as string)
+          : typeof item.domain === "string"
+            ? (item.domain as string)
+            : null;
     const confidence =
       typeof item.confidence === "number" ? (item.confidence as number) : null;
     const duplicate = item.duplicate === true;
@@ -123,8 +128,15 @@ export function StepPickFolder(): React.ReactElement {
       setLoading(true);
       try {
         const res = await bulkImport({ folder: folderPath, dry_run: true });
-        const plan =
-          (res.data?.plan as Array<Record<string, unknown>> | undefined) ?? [];
+        // ``brain_bulk_import`` ships its per-file breakdown under
+        // ``data.items``; an earlier iteration named it ``plan`` in the
+        // sketch. Accept both so the UI keeps working if the tool name
+        // flips back for any reason (Plan 07 Task 25C sweep fix —
+        // surfaced by the bulk-import e2e spec).
+        const rawPlan = res.data?.plan ?? (res.data as { items?: unknown })?.items;
+        const plan = Array.isArray(rawPlan)
+          ? (rawPlan as Array<Record<string, unknown>>)
+          : [];
         pickFolder(folderPath, planToFiles(plan));
       } catch (err) {
         pushToast({

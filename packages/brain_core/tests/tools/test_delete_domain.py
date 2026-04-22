@@ -28,9 +28,7 @@ def _mk_ctx(vault: Path) -> ToolContext:
 def _seed_domain(vault: Path, slug: str) -> None:
     domain_dir = vault / slug
     domain_dir.mkdir(parents=True, exist_ok=True)
-    (domain_dir / "index.md").write_text(
-        f"---\ntitle: {slug}\n---\n# {slug}\n", encoding="utf-8"
-    )
+    (domain_dir / "index.md").write_text(f"---\ntitle: {slug}\n---\n# {slug}\n", encoding="utf-8")
     (domain_dir / "note.md").write_text(
         f"---\ntitle: note\ndomain: {slug}\n---\nbody\n", encoding="utf-8"
     )

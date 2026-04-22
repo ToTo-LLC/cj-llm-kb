@@ -46,9 +46,7 @@ async def test_installs_entry_and_returns_config_path(tmp_path: Path) -> None:
     assert cfg.exists()
     body = json.loads(cfg.read_text(encoding="utf-8"))
     assert body["mcpServers"]["brain"]["command"] == "/usr/local/bin/brain-mcp"
-    assert body["mcpServers"]["brain"]["env"]["BRAIN_VAULT_ROOT"] == str(
-        tmp_path / "vault"
-    )
+    assert body["mcpServers"]["brain"]["env"]["BRAIN_VAULT_ROOT"] == str(tmp_path / "vault")
 
 
 async def test_reinstall_creates_backup(tmp_path: Path) -> None:

@@ -55,8 +55,16 @@ if (-not $env:BRAIN_ALLOWED_DOMAINS) {
     $env:BRAIN_ALLOWED_DOMAINS = "research,work"
 }
 
+# Plan 07 Task 25C: flip FakeLLMProvider's empty-queue fallback from
+# "raise RuntimeError" to "return a scripted canned response." See the
+# sh sibling for rationale.
+if (-not $env:BRAIN_E2E_MODE) {
+    $env:BRAIN_E2E_MODE = "1"
+}
+
 Write-Host "[e2e-backend] vault=$env:BRAIN_VAULT_ROOT"
 Write-Host "[e2e-backend] allowed=$env:BRAIN_ALLOWED_DOMAINS"
+Write-Host "[e2e-backend] e2e_mode=$env:BRAIN_E2E_MODE"
 
 # --- launch uvicorn ----------------------------------------------------------
 Push-Location $repoRoot

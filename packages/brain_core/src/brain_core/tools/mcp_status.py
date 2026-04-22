@@ -40,11 +40,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     )
 
     result = verify(config_path=config_path, server_name=server_name)
-    ok = (
-        result.config_exists
-        and result.entry_present
-        and result.executable_resolves
-    )
+    ok = result.config_exists and result.entry_present and result.executable_resolves
     text = (
         f"brain MCP status: {'ok' if ok else 'not installed'} "
         f"(config_exists={result.config_exists}, entry_present={result.entry_present}, "

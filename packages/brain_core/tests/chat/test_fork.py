@@ -95,9 +95,7 @@ def _seed_source_thread(
     turns: list[ChatTurn] = []
     now = datetime.now(UTC)
     for i in range(n_turns):
-        turns.append(
-            ChatTurn(role=TurnRole.USER, content=f"user msg {i}", created_at=now)
-        )
+        turns.append(ChatTurn(role=TurnRole.USER, content=f"user msg {i}", created_at=now))
         turns.append(
             ChatTurn(
                 role=TurnRole.ASSISTANT,
@@ -141,9 +139,7 @@ async def test_fork_full_carry_copies_turns(env: ForkEnv) -> None:
     source_id, _ = _seed_source_thread(persistence=env.persistence, n_turns=3)
     # Source has 6 turns (3 user + 3 assistant). Forking at index 3
     # means turns 0..3 inclusive — i.e., 4 turns copied.
-    forked = await _do_fork(
-        env, source_thread_id=source_id, turn_index=3, carry="full"
-    )
+    forked = await _do_fork(env, source_thread_id=source_id, turn_index=3, carry="full")
     assert isinstance(forked, ChatSession)
     assert len(forked._turns) == 4
     assert forked._turns[0].content == "user msg 0"
@@ -160,9 +156,7 @@ async def test_fork_none_carry_empty(env: ForkEnv) -> None:
     source_id, _ = _seed_source_thread(
         persistence=env.persistence, n_turns=3, mode=ChatMode.BRAINSTORM
     )
-    forked = await _do_fork(
-        env, source_thread_id=source_id, turn_index=2, carry="none"
-    )
+    forked = await _do_fork(env, source_thread_id=source_id, turn_index=2, carry="none")
     assert forked._turns == []
     # Mode inherited from source thread.
     assert forked.config.mode == ChatMode.BRAINSTORM
@@ -172,9 +166,7 @@ async def test_fork_summary_carry_runs_llm(env: ForkEnv) -> None:
     """``carry='summary'`` compresses prior turns into one SYSTEM entry."""
     source_id, _ = _seed_source_thread(persistence=env.persistence, n_turns=2)
     env.fake.queue("This is a 4-sentence summary of prior conversation.")
-    forked = await _do_fork(
-        env, source_thread_id=source_id, turn_index=3, carry="summary"
-    )
+    forked = await _do_fork(env, source_thread_id=source_id, turn_index=3, carry="summary")
     assert len(forked._turns) == 1
     assert forked._turns[0].role == TurnRole.SYSTEM
     assert "summary" in forked._turns[0].content.lower()
@@ -185,16 +177,12 @@ async def test_fork_invalid_turn_index_raises(env: ForkEnv) -> None:
     source_id, _ = _seed_source_thread(persistence=env.persistence, n_turns=2)
     # Source has 4 turns (0..3); index 99 is out of range.
     with pytest.raises(IndexError):
-        await _do_fork(
-            env, source_thread_id=source_id, turn_index=99, carry="full"
-        )
+        await _do_fork(env, source_thread_id=source_id, turn_index=99, carry="full")
 
 
 async def test_fork_mode_override_wins(env: ForkEnv) -> None:
     """Explicit ``mode=...`` overrides the source thread's mode."""
-    source_id, _ = _seed_source_thread(
-        persistence=env.persistence, n_turns=1, mode=ChatMode.ASK
-    )
+    source_id, _ = _seed_source_thread(persistence=env.persistence, n_turns=1, mode=ChatMode.ASK)
     forked = await _do_fork(
         env,
         source_thread_id=source_id,

@@ -7,7 +7,13 @@ dependencies = [
     "brain_core",
     # "brain_mcp",  # REMOVED — Plan 05 Task 14 moved RateLimiter to brain_core.
     "fastapi>=0.115",
-    "uvicorn>=0.32",
+    # ``[standard]`` pulls in ``websockets`` + ``httptools`` + ``uvloop``;
+    # without ``websockets`` the /ws/chat/* routes fail every upgrade with
+    # "No supported WebSocket library detected" under real uvicorn (tests
+    # that use Starlette TestClient's in-process WS shim are unaffected,
+    # but the Playwright e2e drives a real browser against a real uvicorn
+    # subprocess).
+    "uvicorn[standard]>=0.32",
 ]
 
 [build-system]

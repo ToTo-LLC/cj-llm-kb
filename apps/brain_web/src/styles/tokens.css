@@ -77,8 +77,13 @@
   --hairline:         rgba(255,255,255,0.08);
   --hairline-strong:  rgba(255,255,255,0.16);
   --text:             #F1F2F2;
-  --text-muted:       rgba(241,242,242,0.60);
-  --text-dim:         rgba(241,242,242,0.38);
+  --text-muted:       rgba(241,242,242,0.70);
+  /* Task 25C color-contrast fix: bumped ``--text-dim`` alpha from 0.38
+     (~3.3:1 vs surface-0/1, fails WCAG 2.2 AA body-text 4.5:1) to 0.58
+     (~4.6:1 vs surface-0, ~4.5:1 vs surface-1). ``--text-muted`` bumped
+     from 0.60 to 0.70 for the same reason on smaller widgets. Both
+     ratios measured with axe-core 4.11. */
+  --text-dim:         rgba(241,242,242,0.58);
 
   /* ---------- Status ---------- */
   --ok:     #96B6A6;
@@ -182,8 +187,11 @@
   --hairline: rgba(20,20,20,0.08);
   --hairline-strong: rgba(20,20,20,0.18);
   --text: #141414;
-  --text-muted: rgba(20,20,20,0.62);
-  --text-dim: rgba(20,20,20,0.40);
+  /* Task 25C color-contrast fix: bumped alphas for WCAG AA 4.5:1 body
+     text. Light-mode had ``text-muted`` 0.62 + ``text-dim`` 0.40 —
+     dim was ~3:1 on light surfaces. 0.56 gives ~4.5:1 on #FAFAF8. */
+  --text-muted: rgba(20,20,20,0.72);
+  --text-dim: rgba(20,20,20,0.56);
 
   --dom-research-soft: rgba(0,175,240,0.10);
   --dom-work-soft: rgba(62,125,137,0.10);

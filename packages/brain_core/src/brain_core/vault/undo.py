@@ -134,7 +134,5 @@ class UndoLog:
         if not trash_path.exists():
             raise FileNotFoundError(f"trashed domain folder {trash_path} is missing")
         if original_path.exists():
-            raise FileExistsError(
-                f"cannot restore {trash_path} — {original_path} already exists"
-            )
+            raise FileExistsError(f"cannot restore {trash_path} — {original_path} already exists")
         shutil.move(str(trash_path), str(original_path))

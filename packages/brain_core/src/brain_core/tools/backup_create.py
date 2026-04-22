@@ -40,16 +40,13 @@ INPUT_SCHEMA: dict[str, Any] = {
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     trigger_str = str(arguments.get("trigger", "manual"))
     if trigger_str not in _VALID_TRIGGERS:
-        raise ValueError(
-            f"trigger {trigger_str!r} must be one of {list(_VALID_TRIGGERS)}"
-        )
+        raise ValueError(f"trigger {trigger_str!r} must be one of {list(_VALID_TRIGGERS)}")
     trigger = cast(BackupTrigger, trigger_str)
     meta = create_snapshot(ctx.vault_root, trigger=trigger)
 
     return ToolResult(
         text=(
-            f"created backup {meta.backup_id} "
-            f"({meta.file_count} files, {meta.size_bytes} bytes)"
+            f"created backup {meta.backup_id} ({meta.file_count} files, {meta.size_bytes} bytes)"
         ),
         data={
             "status": "created",

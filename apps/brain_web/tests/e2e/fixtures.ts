@@ -39,17 +39,11 @@ const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag22aa"] as const;
 /**
  * axe rules we're temporarily skipping.
  *
- *   * ``color-contrast`` — the design tokens (--text-dim, --surface-1 pair)
- *     currently yield ~3.3:1 on some 11-14px text. Fixing the tokens is a
- *     design-system change that belongs with brain-ui-designer, not in the
- *     Plan 07 Task 23 test-gate landing. Tracked as Plan 07 Task 25 cleanup
- *     (remove this entry + fix tokens). Running axe WITHOUT this rule still
- *     enforces the more serious structural a11y checks — labels, roles,
- *     landmarks, alt text, heading order, keyboard traps — which would have
- *     been invisible if the whole gate sat disabled waiting on a token
- *     refresh.
+ * Plan 07 Task 25C — ``color-contrast`` is now re-enabled. Tokens were
+ * nudged so every 11-14px text-on-surface pair clears 4.5:1. See the
+ * sibling note in ``styles/tokens.css`` for the specific tweaks.
  */
-const DISABLED_RULES = ["color-contrast"] as const;
+const DISABLED_RULES: readonly string[] = [];
 
 export const test = base.extend<BrainFixtures>({
   checkA11y: async ({}, use) => {

@@ -98,9 +98,7 @@ def create_snapshot(
         ValueError: if ``trigger`` is not one of the supported triggers.
     """
     if trigger not in _VALID_TRIGGERS:
-        raise ValueError(
-            f"trigger {trigger!r} must be one of {sorted(_VALID_TRIGGERS)}"
-        )
+        raise ValueError(f"trigger {trigger!r} must be one of {sorted(_VALID_TRIGGERS)}")
     vault_root = vault_root.resolve()
     if not vault_root.exists():
         raise FileNotFoundError(f"vault_root {vault_root} does not exist")

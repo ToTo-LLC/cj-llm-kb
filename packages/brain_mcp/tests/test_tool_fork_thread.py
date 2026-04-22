@@ -34,9 +34,7 @@ async def test_fork_thread_returns_new_thread_id(
     """MCP shim returns a TextContent block with ``new_thread_id`` in the JSON body."""
     ctx = make_ctx(seeded_vault, allowed_domains=("research",))
     # Seed a source thread via the real persistence layer.
-    persistence = ThreadPersistence(
-        vault_root=seeded_vault, writer=ctx.writer, db=ctx.state_db
-    )
+    persistence = ThreadPersistence(vault_root=seeded_vault, writer=ctx.writer, db=ctx.state_db)
     source_id = "2026-04-21-mcp-source"
     now = datetime.now(UTC)
     persistence.write(

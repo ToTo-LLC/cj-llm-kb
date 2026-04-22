@@ -50,13 +50,10 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     duration_hours = int(arguments.get("duration_hours", 24))
 
     if not (_MIN_AMOUNT <= amount_usd <= _MAX_AMOUNT):
-        raise ValueError(
-            f"amount_usd {amount_usd} out of range [{_MIN_AMOUNT}, {_MAX_AMOUNT}]"
-        )
+        raise ValueError(f"amount_usd {amount_usd} out of range [{_MIN_AMOUNT}, {_MAX_AMOUNT}]")
     if not (_MIN_DURATION <= duration_hours <= _MAX_DURATION):
         raise ValueError(
-            f"duration_hours {duration_hours} out of range "
-            f"[{_MIN_DURATION}, {_MAX_DURATION}]"
+            f"duration_hours {duration_hours} out of range [{_MIN_DURATION}, {_MAX_DURATION}]"
         )
 
     override_until = datetime.now(tz=UTC) + timedelta(hours=duration_hours)

@@ -56,9 +56,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     args_raw = arguments.get("args", [])
     args: list[str] = [str(a) for a in args_raw] if args_raw else []
     env_raw = arguments.get("env", {})
-    env: dict[str, str] = (
-        {str(k): str(v) for k, v in env_raw.items()} if env_raw else {}
-    )
+    env: dict[str, str] = {str(k): str(v) for k, v in env_raw.items()} if env_raw else {}
     server_name = str(arguments.get("server_name", "brain"))
     config_path = (
         Path(str(arguments["config_path"]))

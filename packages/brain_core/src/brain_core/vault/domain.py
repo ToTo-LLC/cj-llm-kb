@@ -67,9 +67,7 @@ def _write_delete_domain_undo(
         f"TRASH\t{trash_path}",
         f"ORIGINAL\t{original_path}",
     ]
-    (undo_dir / f"{undo_id}.txt").write_text(
-        "\n".join(lines), encoding="utf-8", newline="\n"
-    )
+    (undo_dir / f"{undo_id}.txt").write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def delete_domain(
@@ -95,9 +93,7 @@ def delete_domain(
             "folder to trash and is only reversible via brain_undo_last"
         )
     if not _SLUG_RE.match(slug):
-        raise ValueError(
-            f"slug {slug!r} must match ^[a-z][a-z0-9-]{{1,24}}$"
-        )
+        raise ValueError(f"slug {slug!r} must match ^[a-z][a-z0-9-]{{1,24}}$")
     if slug in _RESERVED_SLUGS:
         raise PermissionError(
             f"refusing to delete reserved domain {slug!r} — personal notes "
@@ -107,9 +103,7 @@ def delete_domain(
     vault_root = vault_root.resolve()
     domain_dir = vault_root / slug
     if not domain_dir.exists() or not domain_dir.is_dir():
-        raise FileNotFoundError(
-            f"domain {slug!r} does not exist at {domain_dir}"
-        )
+        raise FileNotFoundError(f"domain {slug!r} does not exist at {domain_dir}")
 
     trash_root = vault_root / ".brain" / "trash"
     trash_root.mkdir(parents=True, exist_ok=True)
