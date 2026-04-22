@@ -36,7 +36,9 @@ test.describe("setup wizard", () => {
   }) => {
     // Step 0: root redirects to /setup because BRAIN.md is missing.
     await page.goto("/");
-    await page.waitForURL("**/setup");
+    // Plan 08 Task 2 added ``trailingSlash: true`` so the wizard URL lands
+    // at ``/setup/``. Accept either for forward-compat with the dev server.
+    await page.waitForURL(/\/setup\/?$/);
     await expect(page.getByText("Welcome to")).toBeVisible();
     await expect(page.getByText("Step 1 of 6")).toBeVisible();
     await checkA11y(page, "setup-step-1-welcome");
@@ -74,7 +76,7 @@ test.describe("setup wizard", () => {
 
     // Step 6 → done: "Start using brain" navigates to /chat.
     await page.getByRole("button", { name: /Start using brain/ }).click();
-    await page.waitForURL("**/chat");
+    await page.waitForURL(/\/chat\/?$/);
     // Empty-state copy from <NewThreadEmpty> confirms we landed on the
     // new-thread variant, not a populated thread.
     await expect(

@@ -1,20 +1,25 @@
 /**
- * File upload (Plan 07 Task 17).
+ * File upload (Plan 07 Task 17, updated Plan 08 Task 2).
  *
  * ``uploadFile(file)`` is the browser-side entry point for drag-drop
- * and file-picker ingestion. It POSTs a multipart form to the Task 17
- * proxy route ``/api/proxy/upload``; the route reads the file body on
- * the server, attaches the per-run token, and forwards the raw text to
- * ``brain_ingest``.
+ * and file-picker ingestion. It POSTs a multipart form to the same-origin
+ * ``/api/upload`` endpoint served by brain_api; the backend validates the
+ * MIME type + size and forwards the text body to ``brain_ingest``.
  *
- * Binary files (PDF, images, zip, ...) are out of scope for day-one —
- * the proxy route rejects them with 415 and we translate that into a
- * typed error here so the caller can surface a "PDFs coming soon" toast
- * without parsing the error body itself. Task 25 sweep will plumb a
- * proper binary upload variant (base64 or temp-file handoff).
+ * Plan 08 pivot: the old Next.js proxy route at ``/api/proxy/upload`` is
+ * gone — brain_api is now both the API + UI host, so we call it directly.
+ * The per-run token is attached via ``X-Brain-Token`` read from the Zustand
+ * token store (populated by the bootstrap effect on mount).
+ *
+ * Binary files (PDF, images, zip, ...) are still out of scope for day-one —
+ * the backend rejects them with 415 and we translate that into a typed error
+ * here so the caller can surface a "PDFs coming soon" toast without parsing
+ * the error body itself. Task 25 sweep will plumb a proper binary upload
+ * variant.
  */
 
 import { ApiError } from "@/lib/api/types";
+import { getToken } from "@/lib/state/token-store";
 
 /** Successful upload response — echoes the patch id from ``brain_ingest``. */
 export interface UploadResult {
@@ -54,8 +59,13 @@ export async function uploadFile(file: File): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
 
-  const response = await fetch("/api/proxy/upload", {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["X-Brain-Token"] = token;
+
+  const response = await fetch("/api/upload", {
     method: "POST",
+    headers,
     body: form,
   });
 

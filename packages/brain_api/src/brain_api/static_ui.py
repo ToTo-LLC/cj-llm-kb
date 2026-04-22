@@ -14,12 +14,24 @@ earlier in ``create_app`` you'll start seeing ``index.html`` returned for
 unknown API paths — a silent contract break.
 
 Fallback rules (see :class:`SPAStaticFiles`): when the requested path has no
-physical file AND doesn't begin with a reserved prefix, return
+physical file AND doesn't begin with a reserved prefix, return an
 ``index.html`` so the SPA can resolve the route on the client. Reserved
-prefixes (``/api``, ``/ws``, ``/_next``, ``/healthz``) never get the fallback:
-``/api/*`` + ``/ws/*`` + ``/healthz`` should 404 when not routed; ``/_next/*``
-should 404 cleanly so a missing asset surfaces as a real failure rather than
-an HTML response that parses as broken JS.
+prefixes (``/api``, ``/ws``, ``/_next``, ``/healthz``) never get the fallback.
+
+## Dynamic-segment placeholder routing (Plan 08 Task 2)
+
+Next.js app-router static export only emits HTML for paths listed in
+``generateStaticParams``. Pages like ``/chat/[thread_id]/`` pre-render one
+placeholder (``/chat/_/index.html``) so the chunk is built; real thread ids
+are unknown at build time. The generic "serve root index.html" fallback
+would put the client router into its 404 state because the initial route
+match is ``/``, not ``/chat/[thread_id]``.
+
+The fix: when a 404 would fire for a path matching a known dynamic-segment
+pattern (``/chat/<x>/``, ``/browse/<x>/...``, ``/settings/<x>/``), serve the
+corresponding ``_``-placeholder HTML so the client runtime mounts the right
+route component. That component reads the real id via ``useParams()`` and
+the URL stays unchanged in the browser.
 """
 
 from __future__ import annotations
@@ -36,6 +48,22 @@ from starlette.types import Scope
 # that doesn't match a real file stays a 404, so a typo or a stale proxy
 # rewrite surfaces visibly instead of masquerading as an HTML page.
 _RESERVED_PREFIXES: tuple[str, ...] = ("api", "ws", "_next", "healthz")
+
+# Dynamic-segment → placeholder map. Static export's ``generateStaticParams``
+# pre-renders one placeholder HTML per dynamic pattern; this dict records
+# which placeholder to serve when the live URL matches the pattern but wasn't
+# pre-rendered. Keep in sync with the Next.js page files under
+# ``apps/brain_web/src/app/**/[...]/page.tsx``.
+_DYNAMIC_PLACEHOLDERS: dict[str, str] = {
+    # /chat/<thread_id>/...  -> /chat/_/index.html
+    "chat": "chat/_/index.html",
+    # /browse/<...path>/...  -> /browse/_/index.html
+    "browse": "browse/_/index.html",
+}
+
+# Pre-rendered tabs under /settings/<tab>/ are enumerated by
+# ``generateStaticParams``. Unknown tabs fall through to /settings/general/.
+_SETTINGS_FALLBACK = "settings/general/index.html"
 
 
 def resolve_out_dir() -> Path:
@@ -86,26 +114,82 @@ class SPAStaticFiles(StaticFiles):
     On a 404 from the base class, we check the request path:
 
     * If it starts with a reserved prefix (``/api``, ``/ws``, ``/_next``,
-      ``/healthz``): re-raise the 404. The caller's typo / misconfigured proxy
-      stays a visible failure.
-    * Otherwise (a client-side route like ``/chat/abc-123`` that Next.js
-      didn't pre-render, or a missing ``index.html`` in a sub-route): serve
-      the root ``index.html`` so the React Router can resolve it.
+      ``/healthz``): 404. The caller's typo / misconfigured proxy stays a
+      visible failure.
+    * If the first segment matches a known dynamic-segment pattern
+      (``chat``, ``browse``), serve the corresponding pre-rendered
+      ``_``-placeholder so the client runtime mounts the right route
+      component and ``useParams()`` sees the real URL.
+    * If the first segment is ``settings``, serve ``settings/general/``
+      (unknown tabs fall through to General; ``<SettingsScreen />`` handles
+      tab normalisation client-side).
+    * Otherwise (a bare client-only route like ``/about/``): serve the root
+      ``index.html`` so the React Router can resolve it.
+
+    ## Why we override get_response AND watch for ``html=True`` 404s
+
+    Starlette's ``StaticFiles(html=True)`` auto-serves ``<mount_dir>/404.html``
+    when a file is missing (see ``staticfiles.py`` lines ~147-152). That
+    means we can't simply ``try: super().get_response()`` and catch
+    ``HTTPException`` — the base class returns a 200-shaped FileResponse
+    with status_code=404 carrying the Next.js built-in 404 page, and no
+    exception is raised. We detect both cases: the 404 HTTPException (when
+    there's no ``404.html``) AND the 404-status FileResponse, and funnel
+    both through the same SPA-fallback decision tree.
     """
 
     async def get_response(self, path: str, scope: Scope) -> Response:
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
-            # `path` is already stripped of the mount prefix ("/") and has no
-            # leading slash — match segments directly.
-            first_segment = path.split("/", 1)[0] if path else ""
-            if first_segment in _RESERVED_PREFIXES:
-                raise
-            # SPA fallback: serve the repo-root index.html verbatim.
-            index = Path(str(self.directory)) / "index.html"
-            if not index.is_file():
-                raise
-            return FileResponse(index)
+            return self._spa_fallback(path, raise_on_miss=True)
+
+        # Starlette with html=True converts missing files into a 404
+        # FileResponse serving 404.html. Intercept that so we can send the
+        # caller to the right SPA placeholder instead of Next.js's static
+        # 404 page.
+        if response.status_code == 404:
+            fallback = self._spa_fallback(path, raise_on_miss=False)
+            if fallback is not None:
+                return fallback
+        return response
+
+    def _spa_fallback(self, path: str, *, raise_on_miss: bool) -> Response | None:
+        """Pick the best SPA fallback HTML for a given client-route path.
+
+        Args:
+            path: Mount-relative path (no leading slash).
+            raise_on_miss: When True, raise ``HTTPException(404)`` if no
+                fallback applies. When False, return ``None`` so the caller
+                can return the original 404 response unchanged.
+        """
+        first_segment = path.split("/", 1)[0] if path else ""
+        if first_segment in _RESERVED_PREFIXES:
+            if raise_on_miss:
+                raise HTTPException(status_code=404)
+            return None
+
+        out_root = Path(str(self.directory))
+        chosen: Path | None = None
+
+        if first_segment in _DYNAMIC_PLACEHOLDERS:
+            candidate = out_root / _DYNAMIC_PLACEHOLDERS[first_segment]
+            if candidate.is_file():
+                chosen = candidate
+        elif first_segment == "settings":
+            candidate = out_root / _SETTINGS_FALLBACK
+            if candidate.is_file():
+                chosen = candidate
+
+        if chosen is None:
+            # Generic SPA fallback — serve the repo-root index.html.
+            root_index = out_root / "index.html"
+            if not root_index.is_file():
+                if raise_on_miss:
+                    raise HTTPException(status_code=404)
+                return None
+            chosen = root_index
+
+        return FileResponse(chosen)

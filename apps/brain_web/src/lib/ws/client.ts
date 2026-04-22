@@ -1,24 +1,17 @@
 // Thin browser WebSocket wrapper for brain_api chat streaming.
 //
-// ## Same-origin compromise (Plan 07 Task 9)
+// ## Same-origin WebSocket (Plan 08 Task 2)
 //
-// HTTP traffic goes through the Next.js proxy at ``/api/proxy/*`` so
-// the per-run token never leaves the server. WebSocket traffic DOES
-// NOT — Next.js 15 Route Handlers can't natively proxy WS upgrades, so
-// the browser opens the socket DIRECTLY to brain_api at
-// ``ws://localhost:4317/ws/chat/<thread_id>?token=<secret>``.
+// brain_api now serves both the static UI and the WebSocket endpoints, so
+// the browser opens the socket at ``ws://${location.host}/ws/chat/<id>`` —
+// no hardcoded port, no dual-origin dance.
 //
-// The token therefore lands in client-side JS memory. Accepted because:
+// The token is carried as a URL query parameter (``?token=<secret>``) to
+// match the WS handshake auth that OriginHostMiddleware + the chat route
+// expect. It lands in client-side JS memory. Accepted because:
 //   - deploy is localhost-loopback only;
 //   - the token rotates every time ``create_app`` runs;
-//   - same-origin restrictions keep the WS URL off cross-site fetches;
-//   - the Next.js SSR pipeline passes the token to the client via a
-//     Server Component prop, so it never round-trips through a
-//     browser-originated fetch.
-//
-// Plan 09 may tighten this by running a custom Node server or edge
-// middleware that bridges WS upgrades through the proxy. Document the
-// compromise here so future readers don't "fix" it accidentally.
+//   - same-origin restrictions keep the WS URL off cross-site fetches.
 
 import {
   SCHEMA_VERSION,
@@ -171,23 +164,22 @@ export class BrainWebSocket {
   }
 
   /**
-   * Build the direct-to-brain_api WS URL.
+   * Build the same-origin WS URL.
    *
-   * ``NEXT_PUBLIC_BRAIN_API_HOST`` overrides the default
-   * ``localhost:4317`` for dev environments that proxy differently
-   * (e.g. containerised dev). The ``wss:`` / ``ws:`` scheme is picked
-   * from ``window.location.protocol`` when available so an HTTPS
-   * front-end automatically upgrades the WS too.
+   * Because brain_api hosts both the static UI and the WebSocket endpoint,
+   * the host is always ``location.host`` — no env override needed. The
+   * ``wss:`` / ``ws:`` scheme is picked from ``window.location.protocol``
+   * so an HTTPS front-end automatically upgrades the WS too.
    */
   private buildUrl(): string {
-    const apiHost =
-      process.env.NEXT_PUBLIC_BRAIN_API_HOST ?? "localhost:4317";
+    const host =
+      typeof window !== "undefined" ? window.location.host : "localhost:4317";
     const isHttps =
       typeof window !== "undefined" &&
       window.location.protocol === "https:";
     const scheme = isHttps ? "wss:" : "ws:";
     const threadPart = encodeURIComponent(this.opts.threadId);
     const tokenPart = encodeURIComponent(this.opts.token);
-    return `${scheme}//${apiHost}/ws/chat/${threadPart}?token=${tokenPart}`;
+    return `${scheme}//${host}/ws/chat/${threadPart}?token=${tokenPart}`;
   }
 }

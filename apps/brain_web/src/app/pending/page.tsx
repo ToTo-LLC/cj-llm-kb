@@ -1,20 +1,15 @@
-import { redirect } from "next/navigation";
+"use client";
+
+// /pending — approval queue route (Client Component, Plan 08 Task 2).
+//
+// Client-component port of the old server-gated page. ``<BootstrapProvider>``
+// in the layout has already redirected first-run users to /setup/ by the
+// time this renders, so the PendingScreen's API calls will have a token
+// available via ``useTokenStore``. No token prop threading is needed because
+// every tool binding reads ``getToken()`` lazily.
 
 import { PendingScreen } from "@/components/pending/pending-screen";
-import { readToken } from "@/lib/auth/token";
 
-/**
- * /pending — approval queue route (server component).
- *
- * Mirrors the ``/chat`` page pattern: read the per-run API token on
- * the server so it never round-trips through a browser fetch, redirect
- * to the setup wizard when the token is missing, then delegate to the
- * client ``<PendingScreen />`` which owns the list + detail state.
- *
- * Plan 07 Task 16.
- */
-export default async function PendingPage(): Promise<JSX.Element> {
-  const token = await readToken();
-  if (!token) redirect("/setup");
+export default function PendingPage(): React.ReactElement {
   return <PendingScreen />;
 }

@@ -1,21 +1,13 @@
-import { redirect } from "next/navigation";
+"use client";
+
+// /inbox — ingest surface (Client Component, Plan 08 Task 2).
+//
+// Client-component port of the old server-gated page. First-run redirect
+// happens upstream in ``<BootstrapProvider>``; the token is available via
+// ``useTokenStore`` for every tool binding this screen calls.
 
 import { InboxScreen } from "@/components/inbox/inbox-screen";
-import { readToken } from "@/lib/auth/token";
 
-/**
- * /inbox — ingest surface (server component).
- *
- * Mirrors the ``/chat`` and ``/pending`` pattern: read the per-run API
- * token on the server so it never round-trips through a browser fetch,
- * redirect to the setup wizard when the token is missing, then delegate
- * to the client ``<InboxScreen />`` which owns the list + drop zone
- * state.
- *
- * Plan 07 Task 17.
- */
-export default async function InboxPage(): Promise<JSX.Element> {
-  const token = await readToken();
-  if (!token) redirect("/setup");
+export default function InboxPage(): React.ReactElement {
   return <InboxScreen />;
 }

@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import { listDomains, search, ALL_TOOL_NAMES } from "@/lib/api/tools";
+import { useTokenStore } from "@/lib/state/token-store";
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -12,13 +13,16 @@ describe("apiFetch", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     global.fetch = vi.fn() as unknown as typeof fetch;
+    // Reset token store between tests to avoid cross-test bleed.
+    useTokenStore.setState({ token: null });
   });
 
   afterAll(() => {
     global.fetch = originalFetch;
   });
 
-  test("returns decoded ToolResponse envelope on 200", async () => {
+  test("returns decoded ToolResponse envelope on 200 and attaches X-Brain-Token", async () => {
+    useTokenStore.setState({ token: "tkn-xyz" });
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "ok", data: { foo: 1 } }), {
         status: 200,
@@ -33,10 +37,24 @@ describe("apiFetch", () => {
     expect(res.data).toEqual({ foo: 1 });
 
     const call = (global.fetch as unknown as FetchMock).mock.calls[0];
-    expect(call[0]).toBe("/api/proxy/api/tools/brain_noop");
+    // Plan 08 Task 2: direct same-origin call — no /api/proxy prefix.
+    expect(call[0]).toBe("/api/tools/brain_noop");
     const init = call[1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-Brain-Token"]).toBe("tkn-xyz");
+  });
+
+  test("omits X-Brain-Token header when token store is empty", async () => {
+    useTokenStore.setState({ token: null });
+    (global.fetch as unknown as FetchMock).mockResolvedValue(
+      new Response(JSON.stringify({ text: "ok", data: null }), { status: 200 }),
+    );
+    await apiFetch("/api/tools/brain_noop", { method: "POST", body: "{}" });
+    const init = (global.fetch as unknown as FetchMock).mock
+      .calls[0][1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect("X-Brain-Token" in headers).toBe(false);
   });
 
   test("throws ApiError with typed envelope on 4xx", async () => {
@@ -101,14 +119,22 @@ describe("apiFetch", () => {
     expect((err as ApiError).detail).toBeNull();
   });
 
-  test("per-tool bindings cover all 34 tools + hit the proxy path", async () => {
-    // Every ALL_TOOL_NAMES entry should have a binding that targets
-    // /api/proxy/api/tools/<name>. Two spot-checks below; the list
-    // itself asserts the count stays at 34 (22 before Task 16 +
-    // brain_get_pending_patch → 23, plus brain_fork_thread (Task 20) → 24,
-    // plus 10 from the Task 25A/B sweep — mcp install/uninstall/status/
-    // selftest, set_api_key, ping_llm, backup_create/list/restore,
-    // delete_domain → 34).
+  test("maps 401 without a JSON body to code='unauthorized'", async () => {
+    (global.fetch as unknown as FetchMock).mockResolvedValue(
+      new Response("<html>nope</html>", { status: 401 }),
+    );
+    const err = await apiFetch("/api/tools/brain_noop", {
+      method: "POST",
+      body: "{}",
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(401);
+    expect((err as ApiError).code).toBe("unauthorized");
+  });
+
+  test("per-tool bindings cover all 34 tools + hit same-origin /api path", async () => {
+    // Plan 08 Task 2: bindings now target ``/api/tools/<name>`` directly
+    // (no proxy prefix). The ALL_TOOL_NAMES count still holds at 34.
     expect(ALL_TOOL_NAMES.length).toBe(34);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
@@ -118,7 +144,7 @@ describe("apiFetch", () => {
     );
     await listDomains();
     expect((global.fetch as unknown as FetchMock).mock.calls[0][0]).toBe(
-      "/api/proxy/api/tools/brain_list_domains",
+      "/api/tools/brain_list_domains",
     );
 
     (global.fetch as unknown as FetchMock).mockResolvedValueOnce(
@@ -129,7 +155,7 @@ describe("apiFetch", () => {
     );
     await search({ query: "foo", top_k: 5 });
     const call = (global.fetch as unknown as FetchMock).mock.calls[1];
-    expect(call[0]).toBe("/api/proxy/api/tools/brain_search");
+    expect(call[0]).toBe("/api/tools/brain_search");
     const init = call[1] as RequestInit;
     expect(JSON.parse(init.body as string)).toEqual({
       query: "foo",

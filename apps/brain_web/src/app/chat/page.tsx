@@ -1,37 +1,22 @@
-import { redirect } from "next/navigation";
+"use client";
+
+// /chat — new-thread route (Client Component, Plan 08 Task 2).
+//
+// Port from the old server-component pattern: the token now lives in the
+// ``useTokenStore`` Zustand slice (populated by the bootstrap effect) +
+// ``useBootstrap()``. First-run is handled upstream by ``<BootstrapProvider>``
+// pushing the user to /setup/ before the chat page ever renders, so by the
+// time we get here the token is either present or the BootGate is showing
+// the "Starting brain…" / error state.
+//
+// ``token={null}`` is still a legal prop for ChatScreen — the ``useChatWebSocket``
+// hook stays inert until a real token arrives, which matches the old
+// "redirect to /setup" behaviour without actually navigating.
 
 import { ChatScreen } from "@/components/chat/chat-screen";
-import { readToken } from "@/lib/auth/token";
+import { useBootstrap } from "@/lib/bootstrap/bootstrap-context";
 
-/**
- * /chat — "new thread" route (server component).
- *
- * Reads the per-run API token from ``.brain/run/api-secret.txt`` on the
- * server so it never round-trips through a browser fetch. When the
- * token is missing (first-run before ``brain_api`` has started), we
- * redirect to the setup wizard — chat without a token would just
- * render a perma-"reconnecting" socket.
- *
- * Delegates to the client ``<ChatScreen />`` which owns the WS hook
- * lifecycle and the composition of Transcript + Composer + sub-header.
- * Passing ``threadId={null}`` tells ChatScreen this is the new-thread
- * variant — the hook stays inert until the backend creates a thread
- * and navigates to ``/chat/<id>``.
- *
- * Plan 07 Task 24 cross-platform sweep fix: the page was being
- * statically prerendered at ``pnpm build`` time, which baked in the
- * "token missing → redirect to /setup" branch because ``BRAIN_VAULT_ROOT``
- * isn't set during the build. At runtime the cached redirect would
- * fire even after the token file existed, so the setup wizard's final
- * ``router.push("/chat")`` bounced straight back to /setup. Forcing
- * dynamic rendering re-runs ``readToken()`` per request, which is the
- * correct behavior for a route whose output depends on live filesystem
- * state.
- */
-export const dynamic = "force-dynamic";
-
-export default async function ChatPage(): Promise<JSX.Element> {
-  const token = await readToken();
-  if (!token) redirect("/setup");
+export default function ChatPage(): React.ReactElement {
+  const { token } = useBootstrap();
   return <ChatScreen threadId={null} token={token} />;
 }

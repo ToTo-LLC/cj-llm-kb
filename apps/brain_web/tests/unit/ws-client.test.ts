@@ -80,8 +80,9 @@ describe("BrainWebSocket", () => {
     expect(MockWebSocket.instances).toHaveLength(1);
     const url = MockWebSocket.instances[0]!.url;
     expect(url.startsWith("ws://")).toBe(true);
-    // Host defaults to localhost:4317 when NEXT_PUBLIC_BRAIN_API_HOST is unset.
-    expect(url).toContain("localhost:4317");
+    // Plan 08 Task 2: same-origin — host comes from ``window.location.host``.
+    // In jsdom's default environment that's ``localhost:3000``.
+    expect(url).toContain(window.location.host);
     expect(url).toContain("/ws/chat/");
     // Thread + token must be URL-encoded.
     expect(url).toContain(encodeURIComponent("thread abc/1"));

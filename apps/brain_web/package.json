@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --port 4316",
-    "build": "next build",
-    "start": "next start --port 4316",
+    "build": "next build && test -d out",
+    "start": "echo 'Static export — serve apps/brain_web/out/ via brain_api. See BRAIN_WEB_OUT_DIR.' && exit 1",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
     "test": "vitest",

@@ -7,14 +7,16 @@ import { Wizard } from "@/components/setup/wizard";
 
 /**
  * Full-screen setup wizard page. Client component — the wizard is fully
- * interactive and has no server-side dependencies once the page is reached
- * (first-run detection happens upstream in `app/page.tsx`).
+ * interactive and has no server-side dependencies.
  *
- * `onDone` sets `localStorage.brain-setup-done=1` + routes to `/chat`. The
- * flag is a client-side signal only — the real first-run check lives in
- * `detectSetupStatus()` and uses on-disk state (vault / BRAIN.md / token),
- * which is the source of truth. The localStorage flag is purely a UX signal
- * so we don't re-trigger a redirect loop while SSR state is warming.
+ * Plan 08 Task 2: first-run detection now lives in the bootstrap context,
+ * which pushes the user to ``/setup/`` when no BRAIN.md + no token. On
+ * completion we push to ``/chat/`` — trailing slash matches the static-
+ * export URL form (``trailingSlash: true`` in next.config.mjs).
+ *
+ * The ``localStorage.brain-setup-done`` flag is purely a UX signal so we
+ * don't fight the bootstrap redirect on the immediate post-wizard navigation
+ * while the backend's on-disk state is settling.
  */
 export default function SetupPage() {
   const router = useRouter();
@@ -26,7 +28,7 @@ export default function SetupPage() {
       // localStorage may be unavailable (private window on Safari is the
       // usual suspect). Not fatal — disk state is authoritative.
     }
-    router.push("/chat");
+    router.push("/chat/");
   }, [router]);
 
   return <Wizard onDone={handleDone} />;

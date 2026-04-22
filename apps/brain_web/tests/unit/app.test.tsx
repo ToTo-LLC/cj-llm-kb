@@ -6,17 +6,21 @@ import { useAppStore } from "@/lib/state/app-store";
 import { useChatStore } from "@/lib/state/chat-store";
 
 /**
- * Task 15 made ``app/chat/page.tsx`` a server component that reads the
- * per-run API token on the server, redirects to ``/setup`` when the
- * token is missing, and passes token + ``threadId={null}`` to the
- * client ``<ChatScreen />``. To keep this smoke test around without a
- * real vault we mock ``readToken`` to return a fake token, await the
- * async page function, and render the resulting element with
- * Testing Library — same behaviour Next.js exercises in production.
+ * Plan 08 Task 2 port: ``app/chat/page.tsx`` is a Client Component under
+ * static export. Tokens come from the bootstrap context — we mock
+ * ``useBootstrap`` to return a fake token so the page renders synchronously
+ * without a real ``BootstrapProvider`` wiring up fetches.
  */
 
-vi.mock("@/lib/auth/token", () => ({
-  readToken: vi.fn(async () => "test-token"),
+vi.mock("@/lib/bootstrap/bootstrap-context", () => ({
+  useBootstrap: () => ({
+    token: "test-token",
+    isFirstRun: false,
+    vaultPath: "/tmp/vault",
+    loading: false,
+    error: null,
+    retry: vi.fn(),
+  }),
 }));
 
 // WebSocket is unused by the empty transcript path but the ChatScreen
@@ -57,8 +61,7 @@ describe("ChatPage (/chat)", () => {
 
   test("renders NewThreadEmpty's 'What are we working on?' heading", async () => {
     const { default: ChatPage } = await import("@/app/chat/page");
-    const element = await ChatPage();
-    render(element);
+    render(<ChatPage />);
     expect(
       screen.getByRole("heading", { name: /what are we working on/i }),
     ).toBeInTheDocument();
