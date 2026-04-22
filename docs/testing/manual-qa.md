@@ -182,3 +182,48 @@ If you find a bug, file an issue with:
 5. Expected vs actual.
 
 Block the release until every box is green on both OSes.
+
+---
+
+## Clean-VM dry run (per release, before tagging)
+
+This checklist runs **inside an existing install** to validate end-user
+behavior. Before every version tag we also run a **fresh-install** dry
+run on a pristine macOS VM and a pristine Windows 11 VM, to catch
+install-time regressions that a running-from-dev-repo QA pass can't see
+(PATH pollution, first-boot permission prompts, missing Node, SmartScreen
+banner wording, fnm install failure modes, etc.).
+
+The dry run is a user-driven flow — the tester copy-pastes commands
+into the VM, walks the wizard, and pastes logs + screenshots back into
+a receipt template. It is **not** automated; the whole point is to hit
+real OS surface area.
+
+### Docs
+
+- **Host-side harness** — `scripts/serve-local-tarball.py` cuts a
+  tarball from `git HEAD`, copies `install.sh` + `install.ps1` next to
+  it, writes `manifest.json`, and serves everything over HTTP on the
+  host's LAN so the VM can fetch it.
+- **Mac host instructions** — [`clean-mac-vm-host-instructions.md`](./clean-mac-vm-host-instructions.md)
+  (Tart + macOS 14 base image; ~45 min end-to-end).
+- **Windows host instructions** — [`clean-windows-vm-host-instructions.md`](./clean-windows-vm-host-instructions.md)
+  (UTM + Win 11 snapshot; ~60 min end-to-end).
+
+### Receipts (filled in per run)
+
+- [`clean-mac-vm-receipt.md`](./clean-mac-vm-receipt.md) — Mac receipt
+  template. Commit alongside screenshots under
+  `docs/testing/screenshots/mac/`.
+- [`clean-windows-vm-receipt.md`](./clean-windows-vm-receipt.md) —
+  Windows receipt template. Screenshots under
+  `docs/testing/screenshots/windows/`.
+
+### Acceptance
+
+- Both receipts land **PASS** or **PASS WITH NOTES** (any FAIL blocks
+  the tag).
+- Every screenshot slot has a real PNG (no placeholders).
+- Timing table completed — total wall clock under target on both OSes.
+- Any Findings have GitHub issue IDs. Any Deviations are either fixed
+  or added as items in the next plan's scope.
