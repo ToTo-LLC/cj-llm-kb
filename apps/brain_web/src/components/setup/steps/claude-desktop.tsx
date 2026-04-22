@@ -1,33 +1,48 @@
 "use client";
 
 import { useState } from "react";
+import { Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { brainMcpInstall } from "@/lib/api/tools";
 
 /**
  * Claude Desktop integration step (6 / 6).
  *
- * Checkpoint 3 decision (1) — MCP install from frontend is DEFERRED to a
- * later plan. This screen is informational only: we do NOT add
- * `brain_mcp_install` / `brain_mcp_uninstall` / `brain_mcp_status` tools in
- * Task 13. The tool surface stays at 22.
+ * Plan 07 Task 25B wiring: the "Install MCP" button now calls
+ * `brain_mcp_install` end-to-end. The backend writes the brain entry
+ * into Claude Desktop's config with a timestamped backup of the prior
+ * contents. Skip is still offered — the user can install later from
+ * Settings → Integrations.
  *
- * TODO(plan-07 task 25 sweep): revisit. Either add the three MCP tools and
- * wire an "Install MCP" button here, or leave this as a link into Settings →
- * Integrations once that screen ships.
+ * The default install command mirrors the CLI: `python -m brain_mcp`.
+ * The wizard does NOT prompt for a custom command here; Settings →
+ * Integrations exposes Regenerate / Uninstall for fine-grained control
+ * after install.
  */
-export function ClaudeDesktopStep() {
-  const [copied, setCopied] = useState(false);
 
-  async function copyCommand() {
+const DEFAULT_COMMAND = "python";
+const DEFAULT_ARGS = ["-m", "brain_mcp"];
+
+type InstallState = "idle" | "installing" | "done" | "error";
+
+export function ClaudeDesktopStep() {
+  const [state, setState] = useState<InstallState>("idle");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+
+  async function handleInstall() {
+    if (state === "installing" || state === "done") return;
+    setState("installing");
+    setErrorMsg("");
     try {
-      await navigator.clipboard.writeText("brain mcp install");
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard may be unavailable (insecure context, etc.). The user
-      // can select-and-copy the visible command manually — we surface the
-      // fallback by not flipping `copied`.
+      await brainMcpInstall({
+        command: DEFAULT_COMMAND,
+        args: DEFAULT_ARGS,
+      });
+      setState("done");
+    } catch (err) {
+      setState("error");
+      setErrorMsg(err instanceof Error ? err.message : "Unknown error.");
     }
   }
 
@@ -37,29 +52,41 @@ export function ClaudeDesktopStep() {
         Talk to brain from Claude Desktop?
       </h1>
       <p className="text-base leading-relaxed text-muted-foreground">
-        brain can expose your vault to Claude Desktop via MCP. You can install
-        this later from Settings → Integrations.
+        brain can expose your vault to Claude Desktop via MCP. We&apos;ll
+        write the entry into Claude Desktop&apos;s config with a
+        timestamped backup of the prior contents. You can always
+        regenerate or remove it from Settings → Integrations.
       </p>
       <div className="rounded-lg border border-input bg-muted/30 p-4">
-        <p className="mb-3 text-sm text-muted-foreground">
-          Run this in a terminal whenever you&apos;re ready:
-        </p>
-        <code className="block rounded bg-background px-3 py-2 font-mono text-xs">
-          brain mcp install
-        </code>
-        <div className="mt-3 flex items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={copyCommand}
-          >
-            {copied ? "Copied!" : "Copy install command"}
-          </Button>
+        <div className="flex items-center gap-3">
+          {state === "done" ? (
+            <div className="inline-flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-200">
+              <Check className="h-3.5 w-3.5" />
+              Installed
+            </div>
+          ) : (
+            <Button
+              type="button"
+              onClick={handleInstall}
+              disabled={state === "installing"}
+            >
+              {state === "installing" ? "Installing…" : "Install MCP"}
+            </Button>
+          )}
           <span className="text-xs text-muted-foreground">
             I&apos;ll do this later
           </span>
         </div>
+
+        {state === "error" && (
+          <p
+            data-testid="mcp-install-error"
+            className="mt-3 text-xs text-red-400"
+          >
+            Install failed: {errorMsg || "unknown error"}. You can retry or
+            install from Settings → Integrations.
+          </p>
+        )}
       </div>
     </div>
   );

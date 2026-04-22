@@ -6,11 +6,13 @@
 // payloads stay as ``Record<string, unknown>`` so individual tool bindings
 // don't over-constrain callers that want to treat the payload opaquely.
 //
-// Plan 07 Task 9 / Task 16 / Task 20: 24 tools total. 18 from Plan 04
-// (read / ingest / patch / maintenance) + 4 added in Plan 07 Task 4
+// Plan 07 Task 9 / Task 16 / Task 20 / Task 25B: 34 tools total. 18 from
+// Plan 04 (read / ingest / patch / maintenance) + 4 added in Plan 07 Task 4
 // (recent_ingests, create_domain, rename_domain, budget_override) + 1 added
 // in Plan 07 Task 16 (get_pending_patch — envelope + body for the approval
-// detail pane) + 1 added in Plan 07 Task 20 (fork_thread — Fork dialog).
+// detail pane) + 1 added in Plan 07 Task 20 (fork_thread — Fork dialog) +
+// 10 added in Plan 07 Task 25A/B (mcp install/uninstall/status/selftest,
+// set_api_key, ping_llm, backup_create/list/restore, delete_domain).
 //
 // Every binding ultimately calls ``POST /api/tools/<name>`` via the proxy.
 
@@ -371,11 +373,278 @@ export const forkThread = (args: {
 }): Promise<ToolResponse<{ new_thread_id: string }>> =>
   callTool<{ new_thread_id: string }>("brain_fork_thread", args);
 
+// ---------- Plan 07 Task 25A/B additions (10) ----------
+
+// --- Claude Desktop / MCP (4) ---
+
+/**
+ * Install the brain MCP entry into Claude Desktop's config. ``command`` is
+ * required; ``args`` / ``env`` / ``server_name`` / ``config_path`` are all
+ * optional. Writes a timestamped backup of any prior config before mutating.
+ */
+export const brainMcpInstall = (args: {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  config_path?: string;
+  server_name?: string;
+}): Promise<
+  ToolResponse<{
+    status: string;
+    config_path: string;
+    backup_path: string | null;
+    server_name: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    config_path: string;
+    backup_path: string | null;
+    server_name: string;
+    [extra: string]: unknown;
+  }>("brain_mcp_install", args);
+
+/**
+ * Remove the brain MCP entry from Claude Desktop's config. No-op when
+ * absent. Always writes a timestamped backup before mutating.
+ */
+export const brainMcpUninstall = (
+  args: { config_path?: string; server_name?: string } = {},
+): Promise<
+  ToolResponse<{
+    status: string;
+    config_path: string;
+    backup_path?: string | null;
+    server_name: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    config_path: string;
+    backup_path?: string | null;
+    server_name: string;
+    [extra: string]: unknown;
+  }>("brain_mcp_uninstall", args);
+
+/**
+ * Report current Claude Desktop integration status (config path, entry
+ * presence, executable resolution). Read-only.
+ */
+export const brainMcpStatus = (
+  args: { config_path?: string; server_name?: string } = {},
+): Promise<
+  ToolResponse<{
+    status: string;
+    config_path: string;
+    config_exists: boolean;
+    entry_present: boolean;
+    executable_resolves: boolean;
+    command: string | null;
+    server_name: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    config_path: string;
+    config_exists: boolean;
+    entry_present: boolean;
+    executable_resolves: boolean;
+    command: string | null;
+    server_name: string;
+    [extra: string]: unknown;
+  }>("brain_mcp_status", args);
+
+/**
+ * File-layer self-test of the Claude Desktop integration (config exists,
+ * entry present, command executable resolves). Does NOT spawn the MCP
+ * server — full subprocess round-trip lives in the CLI.
+ */
+export const brainMcpSelftest = (
+  args: { config_path?: string; server_name?: string } = {},
+): Promise<
+  ToolResponse<{
+    status: string;
+    ok: boolean;
+    config_exists: boolean;
+    entry_present: boolean;
+    executable_resolves: boolean;
+    command: string | null;
+    config_path: string;
+    server_name: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    ok: boolean;
+    config_exists: boolean;
+    entry_present: boolean;
+    executable_resolves: boolean;
+    command: string | null;
+    config_path: string;
+    server_name: string;
+    [extra: string]: unknown;
+  }>("brain_mcp_selftest", args);
+
+// --- Provider key + health (2) ---
+
+/**
+ * Save an LLM provider API key to ``<vault>/.brain/secrets.env`` (0600 on
+ * POSIX). The plaintext key is NEVER echoed back — the response returns
+ * a masked suffix only.
+ */
+export const brainSetApiKey = (args: {
+  provider: "anthropic";
+  api_key: string;
+}): Promise<
+  ToolResponse<{
+    status: string;
+    provider: string;
+    env_key: string;
+    masked: string;
+    path: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    provider: string;
+    env_key: string;
+    masked: string;
+    path: string;
+    [extra: string]: unknown;
+  }>("brain_set_api_key", args);
+
+/**
+ * Send a 1-token probe to the configured LLM provider. Returns
+ * ``{ok, latency_ms, provider, model}``, or ``ok=false`` with ``error``
+ * on failure (failures are returned in the envelope, not thrown, so the
+ * UI has a stable shape to render).
+ */
+export const brainPingLlm = (
+  args: { model?: string } = {},
+): Promise<
+  ToolResponse<{
+    ok: boolean;
+    provider: string | null;
+    model: string | null;
+    latency_ms: number;
+    error?: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    ok: boolean;
+    provider: string | null;
+    model: string | null;
+    latency_ms: number;
+    error?: string;
+    [extra: string]: unknown;
+  }>("brain_ping_llm", args);
+
+// --- Backups (3) ---
+
+export interface BackupEntry {
+  backup_id: string;
+  path: string;
+  trigger: string;
+  created_at: string; // ISO-8601
+  size_bytes: number;
+  file_count: number;
+  [extra: string]: unknown;
+}
+
+/** Create a gzip-tarball snapshot of the vault. */
+export const brainBackupCreate = (
+  args: { trigger?: "manual" | "daily" | "pre_bulk_import" } = {},
+): Promise<
+  ToolResponse<{
+    status: string;
+    backup_id: string;
+    path: string;
+    trigger: string;
+    created_at: string;
+    size_bytes: number;
+    file_count: number;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    backup_id: string;
+    path: string;
+    trigger: string;
+    created_at: string;
+    size_bytes: number;
+    file_count: number;
+    [extra: string]: unknown;
+  }>("brain_backup_create", args);
+
+/** List existing vault snapshots, newest first. */
+export const brainBackupList = (): Promise<
+  ToolResponse<{ backups: BackupEntry[] }>
+> => callTool<{ backups: BackupEntry[] }>("brain_backup_list");
+
+/**
+ * Restore a vault snapshot over the current vault. Requires
+ * ``typed_confirm=true``. Previous vault contents are moved to a
+ * timestamped trash directory rather than deleted.
+ */
+export const brainBackupRestore = (args: {
+  backup_id: string;
+  typed_confirm: boolean;
+}): Promise<
+  ToolResponse<{
+    status: string;
+    backup_id: string;
+    trash_path: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    backup_id: string;
+    trash_path: string;
+    [extra: string]: unknown;
+  }>("brain_backup_restore", args);
+
+// --- Domains (1) ---
+
+/**
+ * Move a vault domain to ``<vault>/.brain/trash/`` (reversible via
+ * ``brain_undo_last``). Requires ``typed_confirm=true``. Refuses the
+ * reserved ``personal`` slug unconditionally.
+ */
+export const brainDeleteDomain = (args: {
+  slug: string;
+  typed_confirm: boolean;
+}): Promise<
+  ToolResponse<{
+    status: string;
+    slug: string;
+    trash_path: string;
+    files_moved: number;
+    undo_id: string;
+    [extra: string]: unknown;
+  }>
+> =>
+  callTool<{
+    status: string;
+    slug: string;
+    trash_path: string;
+    files_moved: number;
+    undo_id: string;
+    [extra: string]: unknown;
+  }>("brain_delete_domain", args);
+
 // ---------- registry ----------
 
 /**
  * Machine-readable list of every bound tool. Kept in sync manually with
- * the exports above. Used by the Task 9 test suite to assert all 24
+ * the exports above. Used by the Task 9 test suite to assert all 34
  * tools have typed bindings; a stale entry here means the client missed
  * a registry addition.
  */
@@ -410,6 +679,17 @@ export const ALL_TOOL_NAMES = [
   "brain_budget_override",
   // Plan 07 Task 20 (1)
   "brain_fork_thread",
+  // Plan 07 Task 25A/B (10)
+  "brain_mcp_install",
+  "brain_mcp_uninstall",
+  "brain_mcp_status",
+  "brain_mcp_selftest",
+  "brain_set_api_key",
+  "brain_ping_llm",
+  "brain_backup_create",
+  "brain_backup_list",
+  "brain_backup_restore",
+  "brain_delete_domain",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];

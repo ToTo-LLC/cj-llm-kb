@@ -1,27 +1,29 @@
 import { describe, expect, test, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
 /**
- * DomainsPanel (Plan 07 Task 22).
+ * DomainsPanel (Plan 07 Task 22 + Task 25B wiring).
  *
  * - List renders via `listDomains`.
  * - "Add domain" form calls `createDomain` with {slug, name, accent_color}.
- * - Delete button opens typed-confirm (stubbed, no-op on confirm — tool
- *   pending in Task 25).
+ * - Delete button opens typed-confirm; on confirm → brainDeleteDomain({slug,
+ *   typed_confirm: true}) → removes row + toasts.
  * - Rename button opens dialog via dialogs-store (kind = "rename-domain").
  * - Personal domain shows a privacy-railed badge + NO delete button.
  */
 
-const { listDomainsMock, createDomainMock } = vi.hoisted(() => ({
+const { listDomainsMock, createDomainMock, brainDeleteDomainMock } = vi.hoisted(() => ({
   listDomainsMock: vi.fn(),
   createDomainMock: vi.fn(),
+  brainDeleteDomainMock: vi.fn(),
 }));
 
 vi.mock("@/lib/api/tools", () => ({
   listDomains: listDomainsMock,
   createDomain: createDomainMock,
+  brainDeleteDomain: brainDeleteDomainMock,
 }));
 
 const { openDialogMock } = vi.hoisted(() => ({
@@ -36,11 +38,13 @@ vi.mock("@/lib/state/dialogs-store", () => ({
   ),
 }));
 
+const { pushToastStub } = vi.hoisted(() => ({ pushToastStub: vi.fn() }));
+
 vi.mock("@/lib/state/system-store", () => ({
   useSystemStore: Object.assign(
     (selector: (s: { pushToast: () => void }) => unknown) =>
-      selector({ pushToast: vi.fn() }),
-    { getState: () => ({ pushToast: vi.fn() }) },
+      selector({ pushToast: pushToastStub }),
+    { getState: () => ({ pushToast: pushToastStub }) },
   ),
 }));
 
@@ -49,6 +53,7 @@ import { PanelDomains } from "@/components/settings/panel-domains";
 beforeEach(() => {
   listDomainsMock.mockReset();
   createDomainMock.mockReset();
+  brainDeleteDomainMock.mockReset();
   openDialogMock.mockReset();
   listDomainsMock.mockResolvedValue({
     text: "",
@@ -57,6 +62,16 @@ beforeEach(() => {
   createDomainMock.mockResolvedValue({
     text: "",
     data: { slug: "hobby", name: "Hobby", accent_color: "#6677ee" },
+  });
+  brainDeleteDomainMock.mockResolvedValue({
+    text: "deleted",
+    data: {
+      status: "deleted",
+      slug: "work",
+      trash_path: "/vault/.brain/trash/work-1234",
+      files_moved: 12,
+      undo_id: "u-1",
+    },
   });
 });
 
@@ -92,7 +107,7 @@ describe("PanelDomains", () => {
     expect(typeof args.accent_color === "string" || args.accent_color === undefined).toBe(true);
   });
 
-  test("delete button opens typed-confirm dialog", async () => {
+  test("delete button opens typed-confirm with the slug as the confirm word", async () => {
     const user = userEvent.setup();
     render(<PanelDomains />);
     await waitFor(() => expect(screen.getByText("work")).toBeInTheDocument());
@@ -100,8 +115,38 @@ describe("PanelDomains", () => {
     const deleteBtn = screen.getByRole("button", { name: /delete work/i });
     await user.click(deleteBtn);
     expect(openDialogMock).toHaveBeenCalled();
-    const payload = openDialogMock.mock.calls[0]![0] as { kind: string };
+    const payload = openDialogMock.mock.calls[0]![0] as {
+      kind: string;
+      word: string;
+      onConfirm: () => void;
+    };
     expect(payload.kind).toBe("typed-confirm");
+    expect(payload.word).toBe("work"); // slug-as-word per plan
+  });
+
+  test("typed-confirm onConfirm calls brainDeleteDomain and removes the row", async () => {
+    const user = userEvent.setup();
+    render(<PanelDomains />);
+    await waitFor(() => expect(screen.getByText("work")).toBeInTheDocument());
+
+    const deleteBtn = screen.getByRole("button", { name: /delete work/i });
+    await user.click(deleteBtn);
+    const payload = openDialogMock.mock.calls[0]![0] as {
+      kind: string;
+      onConfirm: () => void;
+    };
+    // Simulate the user typing "work" + hitting Confirm.
+    await act(async () => {
+      await payload.onConfirm();
+    });
+
+    expect(brainDeleteDomainMock).toHaveBeenCalledWith({
+      slug: "work",
+      typed_confirm: true,
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("work")).not.toBeInTheDocument();
+    });
   });
 
   test("rename button opens rename-domain dialog via dialogs-store", async () => {

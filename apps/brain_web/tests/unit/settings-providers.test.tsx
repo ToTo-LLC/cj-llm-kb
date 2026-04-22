@@ -4,35 +4,46 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
 /**
- * ProvidersPanel (Plan 07 Task 22).
+ * ProvidersPanel (Plan 07 Task 22 + Task 25B wiring).
  *
  * Panel layout:
- *   - API key input (type=password) + save button + "Test" button
- *     (stubbed pending `brain_set_api_key` + `brain_ping_llm` in Task 25).
+ *   - API key input (type=password) + Save button (→ brain_set_api_key)
+ *     + "Test connection" button (→ brain_ping_llm).
  *   - Model-per-stage table (6 rows: ask / brainstorm / draft / classify
  *     / summarize / integrate). Each row has a dropdown bound to the
  *     `<stage>_model` config key.
  *
- * The API key "Save" + "Test connection" actions are stubbed — they
- * render + respond to clicks but do not hit the backend (tools don't
- * exist yet). The model dropdowns wire through to `configSet`.
+ * Task 25B wires Save + Test connection to the 25A backend tools; the
+ * success states mask the key + show a green pill for the ping. Error
+ * states render inline error text.
  */
 
-const { configSetMock, configGetMock } = vi.hoisted(() => ({
+const {
+  configSetMock,
+  configGetMock,
+  brainSetApiKeyMock,
+  brainPingLlmMock,
+} = vi.hoisted(() => ({
   configSetMock: vi.fn(),
   configGetMock: vi.fn(),
+  brainSetApiKeyMock: vi.fn(),
+  brainPingLlmMock: vi.fn(),
 }));
 
 vi.mock("@/lib/api/tools", () => ({
   configGet: configGetMock,
   configSet: configSetMock,
+  brainSetApiKey: brainSetApiKeyMock,
+  brainPingLlm: brainPingLlmMock,
 }));
+
+const { pushToastStub } = vi.hoisted(() => ({ pushToastStub: vi.fn() }));
 
 vi.mock("@/lib/state/system-store", () => ({
   useSystemStore: Object.assign(
     (selector: (s: { pushToast: () => void }) => unknown) =>
-      selector({ pushToast: vi.fn() }),
-    { getState: () => ({ pushToast: vi.fn() }) },
+      selector({ pushToast: pushToastStub }),
+    { getState: () => ({ pushToast: pushToastStub }) },
   ),
 }));
 
@@ -41,10 +52,31 @@ import { PanelProviders } from "@/components/settings/panel-providers";
 beforeEach(() => {
   configSetMock.mockReset();
   configGetMock.mockReset();
+  brainSetApiKeyMock.mockReset();
+  brainPingLlmMock.mockReset();
   configSetMock.mockResolvedValue({ text: "", data: { key: "x", value: "y" } });
   configGetMock.mockResolvedValue({
     text: "",
     data: { key: "x", value: "sonnet" },
+  });
+  brainSetApiKeyMock.mockResolvedValue({
+    text: "saved",
+    data: {
+      status: "saved",
+      provider: "anthropic",
+      env_key: "ANTHROPIC_API_KEY",
+      masked: "sk-ant-•••qXf2",
+      path: "/vault/.brain/secrets.env",
+    },
+  });
+  brainPingLlmMock.mockResolvedValue({
+    text: "ok",
+    data: {
+      ok: true,
+      provider: "anthropic",
+      model: "claude-haiku-4-6",
+      latency_ms: 420,
+    },
   });
 });
 
@@ -53,17 +85,59 @@ describe("PanelProviders", () => {
     render(<PanelProviders />);
     const input = screen.getByLabelText(/api key/i) as HTMLInputElement;
     expect(input).toHaveAttribute("type", "password");
-    // Masked placeholder reads like a stored key — exact format flex.
     expect(input.placeholder).toMatch(/sk-ant/i);
   });
 
-  test('"Test connection" button renders (stubbed, no-op click)', async () => {
+  test("Save button calls brainSetApiKey and renders masked key on success", async () => {
+    const user = userEvent.setup();
+    render(<PanelProviders />);
+    const input = screen.getByLabelText(/api key/i) as HTMLInputElement;
+    await user.type(input, "sk-ant-test-abcdqXf2");
+    const saveBtn = screen.getByRole("button", { name: /^save$/i });
+    await user.click(saveBtn);
+
+    await waitFor(() => {
+      expect(brainSetApiKeyMock).toHaveBeenCalledWith({
+        provider: "anthropic",
+        api_key: "sk-ant-test-abcdqXf2",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("api-key-masked")).toBeInTheDocument();
+    });
+  });
+
+  test("Test connection calls brainPingLlm and renders a green ok pill on ok:true", async () => {
     const user = userEvent.setup();
     render(<PanelProviders />);
     const btn = screen.getByRole("button", { name: /test connection/i });
-    expect(btn).toBeInTheDocument();
-    // Click shouldn't throw — stubbed action displays toast or TODO note.
     await user.click(btn);
+    await waitFor(() => {
+      expect(brainPingLlmMock).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("ping-ok-pill")).toBeInTheDocument();
+    });
+  });
+
+  test("Test connection renders error state on ok:false", async () => {
+    brainPingLlmMock.mockResolvedValueOnce({
+      text: "ping_llm failed: timeout",
+      data: {
+        ok: false,
+        error: "timeout",
+        provider: "anthropic",
+        model: "claude-haiku-4-6",
+        latency_ms: 3000,
+      },
+    });
+    const user = userEvent.setup();
+    render(<PanelProviders />);
+    const btn = screen.getByRole("button", { name: /test connection/i });
+    await user.click(btn);
+    await waitFor(() => {
+      expect(screen.getByTestId("ping-err")).toBeInTheDocument();
+    });
   });
 
   test("model-per-stage renders 6 stage rows", () => {
@@ -77,7 +151,6 @@ describe("PanelProviders", () => {
   test("changing a model dropdown calls configSet with `<stage>_model`", async () => {
     const user = userEvent.setup();
     render(<PanelProviders />);
-    // Native <select> fallback — panel uses a simple select for test-friendliness.
     const selects = screen.getAllByRole("combobox");
     expect(selects.length).toBeGreaterThanOrEqual(6);
     const askSelect = selects[0] as HTMLSelectElement;

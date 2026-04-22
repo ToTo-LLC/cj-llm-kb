@@ -1,20 +1,35 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Check, Copy } from "lucide-react";
+import { Check, Copy, RefreshCw, Trash2, Wrench, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  brainMcpInstall,
+  brainMcpSelftest,
+  brainMcpStatus,
+  brainMcpUninstall,
+} from "@/lib/api/tools";
+import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
 /**
- * PanelIntegrations (Plan 07 Task 22).
+ * PanelIntegrations (Plan 07 Task 22 + Task 25B wiring).
  *
  * Two sections:
- *   1. Claude Desktop status card — stubbed until Task 25 adds the
- *      `brain_mcp_status` / `_install` / `_uninstall` / `_selftest` tools.
+ *   1. Claude Desktop status card — wired to the Task 25A MCP tools
+ *      (`brain_mcp_status` on mount + `brain_mcp_selftest` / `_install`
+ *      / `_uninstall` behind buttons). Uninstall flows through a typed
+ *      confirm dialog (word = "UNINSTALL").
  *   2. Other MCP clients snippet — a ready-to-paste JSON block with a
  *      Copy button (clipboard integration).
  */
+
+// The default install command expected by the backend. Mirrors the CLI
+// `brain mcp install` default — `python -m brain_mcp`. Callers can edit
+// the Claude Desktop config manually if they need something different.
+const DEFAULT_INSTALL_COMMAND = "python";
+const DEFAULT_INSTALL_ARGS = ["-m", "brain_mcp"];
 
 const MCP_SNIPPET = `"brain": {
   "command": "python",
@@ -24,6 +39,23 @@ const MCP_SNIPPET = `"brain": {
     "BRAIN_ALLOWED_DOMAINS": "research,work"
   }
 }`;
+
+interface McpStatus {
+  status: string;
+  config_path: string;
+  config_exists: boolean;
+  entry_present: boolean;
+  executable_resolves: boolean;
+  command: string | null;
+}
+
+interface SelftestResult {
+  ok: boolean;
+  status: string;
+  config_exists: boolean;
+  entry_present: boolean;
+  executable_resolves: boolean;
+}
 
 export function PanelIntegrations(): React.ReactElement {
   return (
@@ -35,6 +67,143 @@ export function PanelIntegrations(): React.ReactElement {
 }
 
 function ClaudeDesktopCard(): React.ReactElement {
+  const pushToast = useSystemStore((s) => s.pushToast);
+  const openDialog = useDialogsStore((s) => s.open);
+
+  const [status, setStatus] = React.useState<McpStatus | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [selftesting, setSelftesting] = React.useState(false);
+  const [selftestResult, setSelftestResult] =
+    React.useState<SelftestResult | null>(null);
+  const [installing, setInstalling] = React.useState(false);
+
+  const loadStatus = React.useCallback(async () => {
+    try {
+      const r = await brainMcpStatus();
+      const d = r.data;
+      if (d) {
+        setStatus({
+          status: d.status,
+          config_path: d.config_path,
+          config_exists: d.config_exists,
+          entry_present: d.entry_present,
+          executable_resolves: d.executable_resolves,
+          command: d.command,
+        });
+      }
+    } catch (err) {
+      pushToast({
+        lead: "Couldn't read MCP status.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    } finally {
+      setLoading(false);
+    }
+    // pushToast stays out of the dep list — stable store ref. Reducing
+    // effect churn avoids clobbering local state right after a user
+    // action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  React.useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
+
+  const handleSelftest = async () => {
+    if (selftesting) return;
+    setSelftesting(true);
+    setSelftestResult(null);
+    try {
+      const r = await brainMcpSelftest();
+      const d = r.data;
+      if (d) {
+        setSelftestResult({
+          ok: d.ok,
+          status: d.status,
+          config_exists: d.config_exists,
+          entry_present: d.entry_present,
+          executable_resolves: d.executable_resolves,
+        });
+      }
+    } catch (err) {
+      setSelftestResult({
+        ok: false,
+        status: "failed",
+        config_exists: false,
+        entry_present: false,
+        executable_resolves: false,
+      });
+      pushToast({
+        lead: "Self-test failed.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    } finally {
+      setSelftesting(false);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (installing) return;
+    setInstalling(true);
+    try {
+      await brainMcpInstall({
+        command: DEFAULT_INSTALL_COMMAND,
+        args: DEFAULT_INSTALL_ARGS,
+      });
+      pushToast({
+        lead: "MCP config regenerated.",
+        msg: "Restart Claude Desktop to pick up the new entry.",
+        variant: "success",
+      });
+      void loadStatus();
+    } catch (err) {
+      pushToast({
+        lead: "Couldn't regenerate config.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const handleUninstall = () => {
+    openDialog({
+      kind: "typed-confirm",
+      title: "Uninstall brain from Claude Desktop?",
+      body:
+        "This removes the brain entry from Claude Desktop's config. A timestamped backup of the prior config is written — you can reinstall with Regenerate at any time.",
+      word: "UNINSTALL",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await brainMcpUninstall();
+          pushToast({
+            lead: "Uninstalled.",
+            msg: "Restart Claude Desktop to drop the brain entry.",
+            variant: "success",
+          });
+          void loadStatus();
+        } catch (err) {
+          pushToast({
+            lead: "Uninstall failed.",
+            msg: err instanceof Error ? err.message : "Unknown error.",
+            variant: "danger",
+          });
+        }
+      },
+    });
+  };
+
+  const pillColour =
+    status?.status === "ok"
+      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+      : "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  const pillLabel =
+    status?.status === "ok" ? "Installed" : "Not installed";
+
   return (
     <section>
       <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">
@@ -42,7 +211,7 @@ function ClaudeDesktopCard(): React.ReactElement {
       </h2>
 
       <div
-        data-testid="claude-desktop-stub"
+        data-testid="claude-desktop-card"
         className="flex flex-col gap-3 rounded-md border border-[var(--hairline)] bg-[var(--surface-1)] p-4"
       >
         <div className="flex items-start gap-3">
@@ -51,48 +220,110 @@ function ClaudeDesktopCard(): React.ReactElement {
               <span className="text-sm font-medium text-[var(--text)]">
                 MCP status
               </span>
-              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                Stubbed
+              <span
+                data-testid="mcp-status-pill"
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${pillColour}`}
+              >
+                {loading ? "Checking…" : pillLabel}
               </span>
             </div>
-            <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-              Detection + install / uninstall / self-test land in the Task
-              25 sweep (new tools: <code className="font-mono">brain_mcp_status</code>,{" "}
-              <code className="font-mono">brain_mcp_install</code>,{" "}
-              <code className="font-mono">brain_mcp_uninstall</code>,{" "}
-              <code className="font-mono">brain_mcp_selftest</code>).
-            </p>
+            {status ? (
+              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dt className="text-[var(--text-dim)]">Config path</dt>
+                <dd
+                  className="truncate font-mono text-[var(--text-muted)]"
+                  title={status.config_path}
+                >
+                  {status.config_path}
+                </dd>
+                <dt className="text-[var(--text-dim)]">Config exists</dt>
+                <dd className="text-[var(--text-muted)]">
+                  {status.config_exists ? "yes" : "no"}
+                </dd>
+                <dt className="text-[var(--text-dim)]">Entry present</dt>
+                <dd className="text-[var(--text-muted)]">
+                  {status.entry_present ? "yes" : "no"}
+                </dd>
+                <dt className="text-[var(--text-dim)]">Executable resolves</dt>
+                <dd className="text-[var(--text-muted)]">
+                  {status.executable_resolves ? "yes" : "no"}
+                </dd>
+                {status.command && (
+                  <>
+                    <dt className="text-[var(--text-dim)]">Command</dt>
+                    <dd
+                      className="truncate font-mono text-[var(--text-muted)]"
+                      title={status.command}
+                    >
+                      {status.command}
+                    </dd>
+                  </>
+                )}
+              </dl>
+            ) : (
+              <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                {loading
+                  ? "Probing Claude Desktop config…"
+                  : "Status unavailable."}
+              </p>
+            )}
           </div>
         </div>
 
+        {selftestResult && (
+          <div
+            data-testid="selftest-result"
+            className={`flex items-start gap-2 rounded border p-2 text-[11px] ${
+              selftestResult.ok
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+                : "border-red-500/30 bg-red-500/10 text-red-200"
+            }`}
+          >
+            {selftestResult.ok ? (
+              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+            ) : (
+              <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+            )}
+            <span>
+              Self-test {selftestResult.ok ? "passed" : "failed"} — config
+              exists: {selftestResult.config_exists ? "yes" : "no"}, entry
+              present: {selftestResult.entry_present ? "yes" : "no"},
+              executable resolves:{" "}
+              {selftestResult.executable_resolves ? "yes" : "no"}.
+            </span>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled title="Pending brain_mcp_selftest">
-            Run self-test
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleSelftest()}
+            disabled={selftesting}
+            className="gap-1.5"
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            {selftesting ? "Running…" : "Run self-test"}
           </Button>
           <Button
             variant="outline"
             size="sm"
-            disabled
-            title="Pending brain_mcp_install"
+            onClick={() => void handleRegenerate()}
+            disabled={installing}
+            className="gap-1.5"
           >
-            Regenerate config
+            <RefreshCw className="h-3.5 w-3.5" />
+            {installing ? "Regenerating…" : "Regenerate config"}
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            disabled
-            title="Pending brain_mcp_uninstall"
+            onClick={handleUninstall}
+            className="gap-1.5 text-red-400 hover:text-red-300"
           >
+            <Trash2 className="h-3.5 w-3.5" />
             Uninstall
           </Button>
-        </div>
-
-        <div className="flex items-start gap-2 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] text-amber-100">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-          <span>
-            Once the MCP tools ship, this card will surface the detected
-            app version + config path + a live status pill.
-          </span>
         </div>
       </div>
     </section>

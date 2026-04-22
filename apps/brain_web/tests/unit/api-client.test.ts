@@ -101,12 +101,15 @@ describe("apiFetch", () => {
     expect((err as ApiError).detail).toBeNull();
   });
 
-  test("per-tool bindings cover all 24 tools + hit the proxy path", async () => {
+  test("per-tool bindings cover all 34 tools + hit the proxy path", async () => {
     // Every ALL_TOOL_NAMES entry should have a binding that targets
     // /api/proxy/api/tools/<name>. Two spot-checks below; the list
-    // itself asserts the count stays at 24 (22 before Task 16 +
-    // brain_get_pending_patch → 23, plus brain_fork_thread (Task 20) → 24).
-    expect(ALL_TOOL_NAMES.length).toBe(24);
+    // itself asserts the count stays at 34 (22 before Task 16 +
+    // brain_get_pending_patch → 23, plus brain_fork_thread (Task 20) → 24,
+    // plus 10 from the Task 25A/B sweep — mcp install/uninstall/status/
+    // selftest, set_api_key, ping_llm, backup_create/list/restore,
+    // delete_domain → 34).
+    expect(ALL_TOOL_NAMES.length).toBe(34);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "", data: { domains: ["research"] } }), {

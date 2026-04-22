@@ -5,7 +5,7 @@ import { Edit2, Lock, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { createDomain, listDomains } from "@/lib/api/tools";
+import { brainDeleteDomain, createDomain, listDomains } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
 import { kebabCoerce } from "@/lib/vault/path-builder";
@@ -78,16 +78,26 @@ export function PanelDomains(): React.ReactElement {
     openDialog({
       kind: "typed-confirm",
       title: `Delete ${slug}?`,
-      body: `This permanently deletes the ${slug}/ folder and every note inside it. Backups (if enabled) retain a copy.`,
-      word: "DELETE",
+      body: `This moves the ${slug}/ folder to .brain/trash/. Backups (if enabled) retain a copy; brain_undo_last fully reverses the move.`,
+      word: slug, // per plan: typed-match on the slug itself
       danger: true,
-      onConfirm: () => {
-        // Task 25 sweep: wire ``brain_delete_domain`` here.
-        pushToast({
-          lead: "Not yet wired.",
-          msg: `Delete-domain lands with Task 25 (brain_delete_domain). ${slug} not removed.`,
-          variant: "warn",
-        });
+      onConfirm: async () => {
+        try {
+          const res = await brainDeleteDomain({ slug, typed_confirm: true });
+          setDomains((prev) => prev.filter((s) => s !== slug));
+          const moved = res.data?.files_moved ?? 0;
+          pushToast({
+            lead: "Domain deleted.",
+            msg: `${slug}/ moved to trash (${moved} files). Undo via brain_undo_last.`,
+            variant: "success",
+          });
+        } catch (err) {
+          pushToast({
+            lead: "Couldn't delete domain.",
+            msg: err instanceof Error ? err.message : "Unknown error.",
+            variant: "danger",
+          });
+        }
       },
     });
   };

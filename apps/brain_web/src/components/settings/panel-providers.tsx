@@ -1,20 +1,26 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Check } from "lucide-react";
+import { Check, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { configGet, configSet } from "@/lib/api/tools";
+import {
+  brainPingLlm,
+  brainSetApiKey,
+  configGet,
+  configSet,
+} from "@/lib/api/tools";
 import { useSystemStore } from "@/lib/state/system-store";
 
 /**
- * PanelProviders (Plan 07 Task 22).
+ * PanelProviders (Plan 07 Task 22 + Task 25B wiring).
  *
- * Top: Anthropic API key input + Save (stubbed) + Test connection
- * (stubbed). The backend tools `brain_set_api_key` + `brain_ping_llm`
- * are part of the Task 25 sweep — the Save / Test buttons render + emit
- * placeholder toasts for now.
+ * Top: Anthropic API key input + Save (→ brain_set_api_key) + Test
+ * connection (→ brain_ping_llm). On save success, masks the input and
+ * surfaces the masked suffix the backend returns (the plaintext is
+ * never echoed back). Test connection renders a green ok pill on
+ * ok:true, or inline error text on ok:false / thrown.
  *
  * Bottom: 6-row model-per-stage table. Each row owns a native `<select>`
  * (intentionally simple — shadcn's Radix Select renders through a
@@ -73,9 +79,77 @@ export function PanelProviders(): React.ReactElement {
   );
 }
 
+interface PingResult {
+  ok: boolean;
+  provider: string | null;
+  model: string | null;
+  latency_ms: number;
+  error?: string;
+}
+
 function ApiKeySection(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
   const [input, setInput] = React.useState<string>("");
+  const [masked, setMasked] = React.useState<string | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [pinging, setPinging] = React.useState(false);
+  const [ping, setPing] = React.useState<PingResult | null>(null);
+
+  const handleSave = async () => {
+    if (!input || saving) return;
+    setSaving(true);
+    try {
+      const res = await brainSetApiKey({
+        provider: "anthropic",
+        api_key: input,
+      });
+      const maskedVal = res.data?.masked ?? null;
+      setMasked(maskedVal);
+      setInput("");
+      pushToast({
+        lead: "API key saved.",
+        msg: "Stored in <vault>/.brain/secrets.env.",
+        variant: "success",
+      });
+    } catch (err) {
+      pushToast({
+        lead: "Couldn't save API key.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    if (pinging) return;
+    setPinging(true);
+    setPing(null);
+    try {
+      const res = await brainPingLlm();
+      const data = res.data;
+      if (data) {
+        setPing({
+          ok: data.ok,
+          provider: data.provider,
+          model: data.model,
+          latency_ms: data.latency_ms,
+          error: data.error,
+        });
+      }
+    } catch (err) {
+      setPing({
+        ok: false,
+        provider: null,
+        model: null,
+        latency_ms: 0,
+        error: err instanceof Error ? err.message : "Unknown error.",
+      });
+    } finally {
+      setPinging(false);
+    }
+  };
 
   return (
     <section>
@@ -95,53 +169,65 @@ function ApiKeySection(): React.ReactElement {
           type="password"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="sk-ant-**************qXf2"
+          placeholder={masked ?? "sk-ant-**************qXf2"}
           className="font-mono"
           autoComplete="off"
           spellCheck={false}
         />
         <Button
           variant="default"
-          onClick={() => {
-            // Stub pending Task 25 sweep: `brain_set_api_key` tool.
-            pushToast({
-              lead: "Not yet wired.",
-              msg: "API-key save lands with Task 25 (brain_set_api_key).",
-              variant: "warn",
-            });
-          }}
-          disabled={!input}
+          onClick={() => void handleSave()}
+          disabled={!input || saving}
         >
-          Save
+          {saving ? "Saving…" : "Save"}
         </Button>
         <Button
           variant="outline"
-          onClick={() => {
-            // Stub pending Task 25 sweep: `brain_ping_llm` tool.
-            pushToast({
-              lead: "Not yet wired.",
-              msg: "Test-connection lands with Task 25 (brain_ping_llm).",
-              variant: "warn",
-            });
-          }}
+          onClick={() => void handleTest()}
+          disabled={pinging}
         >
           <Check className="h-3.5 w-3.5" />
-          Test connection
+          {pinging ? "Testing…" : "Test connection"}
         </Button>
       </div>
 
-      <div
-        data-testid="providers-stub-warn"
-        className="mt-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100"
-      >
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-        <div>
-          Save + Test connection are staged UI. The backend tools
-          (<code className="font-mono">brain_set_api_key</code> and{" "}
-          <code className="font-mono">brain_ping_llm</code>) land with the
-          Task 25 sweep.
+      {masked && (
+        <div
+          data-testid="api-key-masked"
+          className="mt-3 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100"
+        >
+          <Check className="h-3.5 w-3.5 text-emerald-400" />
+          <span>
+            Saved:{" "}
+            <code className="font-mono text-emerald-200">{masked}</code>
+          </span>
         </div>
-      </div>
+      )}
+
+      {ping && ping.ok && (
+        <div
+          data-testid="ping-ok-pill"
+          className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-200"
+        >
+          <Check className="h-3 w-3 text-emerald-400" />
+          <span>
+            Connected — {ping.provider ?? "provider"} / {ping.model ?? "model"}{" "}
+            ({ping.latency_ms}ms)
+          </span>
+        </div>
+      )}
+
+      {ping && !ping.ok && (
+        <div
+          data-testid="ping-err"
+          className="mt-3 flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200"
+        >
+          <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+          <span>
+            Connection failed{ping.error ? ` — ${ping.error}` : "."}
+          </span>
+        </div>
+      )}
     </section>
   );
 }
