@@ -13,17 +13,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_lists_twenty_two_tools_after_plan07_task4(client: TestClient) -> None:
-    """After Plan 07 Task 4, the registry has all 22 tools auto-registered.
+def test_lists_twenty_three_tools_after_plan07_task16(client: TestClient) -> None:
+    """After Plan 07 Task 16, the registry has all 23 tools auto-registered.
 
-    Plan 05 baseline: 18. Plan 07 Task 4 adds:
-      brain_recent_ingests, brain_create_domain,
-      brain_rename_domain, brain_budget_override.
+    Plan 05 baseline: 18. Plan 07 Task 4 added 4
+    (brain_recent_ingests, brain_create_domain, brain_rename_domain,
+    brain_budget_override) → 22. Plan 07 Task 16 added
+    ``brain_get_pending_patch`` for the pending-screen detail pane → 23.
     """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 22
+    assert len(body["tools"]) == 23
     # Spot-check a few names across all 4 groups (read/ingest/patch/maintenance).
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
@@ -34,6 +35,8 @@ def test_lists_twenty_two_tools_after_plan07_task4(client: TestClient) -> None:
     assert "brain_create_domain" in names
     assert "brain_rename_domain" in names
     assert "brain_budget_override" in names
+    # Plan 07 Task 16 addition.
+    assert "brain_get_pending_patch" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:

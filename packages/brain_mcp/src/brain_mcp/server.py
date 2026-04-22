@@ -36,6 +36,7 @@ from brain_mcp.tools import cost_report as _cost_report_tool
 from brain_mcp.tools import create_domain as _create_domain_tool
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
+from brain_mcp.tools import get_pending_patch as _get_pending_patch_tool
 from brain_mcp.tools import ingest as _ingest_tool
 from brain_mcp.tools import lint as _lint_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
@@ -63,6 +64,7 @@ _TOOL_MODULES: list[ToolModule] = [
     _bulk_import_tool,
     _propose_note_tool,
     _list_pending_patches_tool,
+    _get_pending_patch_tool,
     _apply_patch_tool,
     _reject_patch_tool,
     _undo_last_tool,

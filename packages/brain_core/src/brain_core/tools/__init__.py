@@ -75,6 +75,7 @@ from brain_core.tools import cost_report as _cost_report  # noqa: E402, F401
 from brain_core.tools import create_domain as _create_domain  # noqa: E402, F401
 from brain_core.tools import get_brain_md as _get_brain_md  # noqa: E402, F401
 from brain_core.tools import get_index as _get_index  # noqa: E402, F401
+from brain_core.tools import get_pending_patch as _get_pending_patch  # noqa: E402, F401
 from brain_core.tools import ingest as _ingest  # noqa: E402, F401
 from brain_core.tools import lint as _lint  # noqa: E402, F401
 from brain_core.tools import list_domains as _list_domains  # noqa: E402, F401

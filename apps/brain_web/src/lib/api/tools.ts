@@ -6,9 +6,10 @@
 // payloads stay as ``Record<string, unknown>`` so individual tool bindings
 // don't over-constrain callers that want to treat the payload opaquely.
 //
-// Plan 07 Task 9: 22 tools total. 18 from Plan 04 (read / ingest / patch /
-// maintenance) + 4 added in Plan 07 Task 4 (recent_ingests, create_domain,
-// rename_domain, budget_override).
+// Plan 07 Task 9 / Task 16: 23 tools total. 18 from Plan 04 (read / ingest /
+// patch / maintenance) + 4 added in Plan 07 Task 4 (recent_ingests,
+// create_domain, rename_domain, budget_override) + 1 added in Plan 07 Task 16
+// (get_pending_patch — envelope + body for the approval detail pane).
 //
 // Every binding ultimately calls ``POST /api/tools/<name>`` via the proxy.
 
@@ -181,6 +182,26 @@ export const listPendingPatches = (
 ): Promise<ToolResponse<{ patches: PendingPatch[] }>> =>
   callTool<{ patches: PendingPatch[] }>("brain_list_pending_patches", args);
 
+/**
+ * Fetch one pending patch by id — envelope metadata PLUS the full patchset
+ * body (``new_files`` / ``edits`` / ``index_entries`` / ``log_entry``).
+ * Used by the Plan 07 Task 16 pending-approval detail pane, which needs the
+ * body to render a diff. ``listPendingPatches`` deliberately omits the body
+ * for that reason; this is the complementary by-id read.
+ */
+export const getPendingPatch = (args: {
+  patch_id: string;
+}): Promise<
+  ToolResponse<{
+    envelope: Record<string, unknown>;
+    patchset: Record<string, unknown>;
+  }>
+> =>
+  callTool<{
+    envelope: Record<string, unknown>;
+    patchset: Record<string, unknown>;
+  }>("brain_get_pending_patch", args);
+
 /** Apply a staged patch. */
 export const applyPatch = (args: {
   patch_id: string;
@@ -336,7 +357,7 @@ export const budgetOverride = (args: {
 
 /**
  * Machine-readable list of every bound tool. Kept in sync manually with
- * the exports above. Used by the Task 9 test suite to assert all 22
+ * the exports above. Used by the Task 9 test suite to assert all 23
  * tools have typed bindings; a stale entry here means the client missed
  * a registry addition.
  */
@@ -352,9 +373,10 @@ export const ALL_TOOL_NAMES = [
   "brain_ingest",
   "brain_classify",
   "brain_bulk_import",
-  // write / patch (5)
+  // write / patch (6)
   "brain_propose_note",
   "brain_list_pending_patches",
+  "brain_get_pending_patch",
   "brain_apply_patch",
   "brain_reject_patch",
   "brain_undo_last",
