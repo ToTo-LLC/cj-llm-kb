@@ -42,10 +42,13 @@ _DEFAULT_VAULT = Path.home() / "Documents" / "brain"
 # brought the count to 18; Plan 07 Task 4 added 4 more (recent_ingests,
 # create_domain, rename_domain, budget_override) → 22; Plan 07 Task 16's
 # support tool (``brain_get_pending_patch``) → 23; Plan 07 Task 20's
-# ``brain_fork_thread`` (Fork dialog) → 24. ``selftest`` checks for at least
-# this many tools so a botched registration surfaces as a failure rather than
-# a silent pass.
-_EXPECTED_TOOL_COUNT = 24
+# ``brain_fork_thread`` (Fork dialog) → 24. Plan 07 Task 25 sub-task A added
+# the ten remaining sweep tools (mcp_install, mcp_uninstall, mcp_status,
+# mcp_selftest, set_api_key, ping_llm, backup_create, backup_list,
+# backup_restore, delete_domain) → 34. ``selftest`` checks for at least this
+# many tools so a botched registration surfaces as a failure rather than a
+# silent pass.
+_EXPECTED_TOOL_COUNT = 34
 
 
 def _resolve_brain_mcp_command() -> str:

@@ -3,10 +3,13 @@
 Plan 07 Task 4 extends the on-disk format with a ``RENAME_DOMAIN`` kind.
 The original Plan 01 ``PATH``/``NEW``/``PREV_LEN``/``END_PREV`` per-file
 record format is unchanged; the new kind sits alongside as a discrete
-record with a different first line (``KIND\trename_domain``). When
-``revert`` reads a file, it routes by the leading marker:
+record with a different first line (``KIND\trename_domain``). Plan 07
+Task 25 sub-task A adds a third kind ``KIND\tdelete_domain`` for the
+Manage Domains "Delete" action. When ``revert`` reads a file, it routes
+by the leading marker:
 
 * ``KIND\trename_domain`` — handled by ``_revert_rename_domain``.
+* ``KIND\tdelete_domain`` — handled by ``_revert_delete_domain``.
 * anything else — replayed by the legacy per-file replay loop.
 
 This shape keeps `brain_undo_last` blind to the kind: a single undo_id
@@ -16,6 +19,7 @@ fully reverses whatever was logged.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 
@@ -29,6 +33,9 @@ class UndoLog:
         lines = record.split("\n")
         if lines and lines[0] == "KIND\trename_domain":
             self._revert_rename_domain(lines[1:])
+            return
+        if lines and lines[0] == "KIND\tdelete_domain":
+            self._revert_delete_domain(lines[1:])
             return
         self._revert_per_file(lines)
 
@@ -98,3 +105,36 @@ class UndoLog:
         # already point under <from>/ (we wrote the records BEFORE the
         # folder rename in the apply path).
         self._revert_per_file(lines[i:])
+
+    def _revert_delete_domain(self, lines: list[str]) -> None:
+        """Reverse a ``brain_delete_domain`` operation.
+
+        Record shape (after the leading ``KIND`` line):
+
+            SLUG\t<slug>
+            TRASH\t<absolute-path-of-trash-dir>
+            ORIGINAL\t<absolute-path-of-original-domain-dir>
+
+        We ``shutil.move`` the trashed folder back to its original
+        location. If the original path is occupied (e.g. the user
+        recreated the domain after deleting it), refuse rather than
+        clobber.
+        """
+        trash: str | None = None
+        original: str | None = None
+        for line in lines:
+            if line.startswith("TRASH\t"):
+                trash = line.split("\t", 1)[1]
+            elif line.startswith("ORIGINAL\t"):
+                original = line.split("\t", 1)[1]
+        if trash is None or original is None:
+            raise ValueError("delete_domain undo record missing TRASH / ORIGINAL header")
+        trash_path = Path(trash)
+        original_path = Path(original)
+        if not trash_path.exists():
+            raise FileNotFoundError(f"trashed domain folder {trash_path} is missing")
+        if original_path.exists():
+            raise FileExistsError(
+                f"cannot restore {trash_path} — {original_path} already exists"
+            )
+        shutil.move(str(trash_path), str(original_path))

@@ -119,12 +119,15 @@ def test_selftest_subprocess_env_reads_from_installed_config(
             args=mcp_cmd._resolve_brain_mcp_args(),
             env=env,
         )
-        # Pretend tools/list returned 24 tools so the final sanity check passes
+        # Pretend tools/list returned 34 tools so the final sanity check passes
         # without requiring a real subprocess. Plan 07 Task 4 raised the
         # registered tool count from 18 → 22; Plan 07 Task 16 added
         # brain_get_pending_patch → 23; Plan 07 Task 20 added
-        # brain_fork_thread → 24.
-        return 24
+        # brain_fork_thread → 24; Plan 07 Task 25A added ten sweep tools
+        # (mcp_install / mcp_uninstall / mcp_status / mcp_selftest /
+        # set_api_key / ping_llm / backup_create / backup_list /
+        # backup_restore / delete_domain) → 34.
+        return 34
 
     monkeypatch.setattr(mcp_cmd, "_subprocess_tools_list", fake_subprocess_tools_list)
 

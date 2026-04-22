@@ -54,6 +54,46 @@ class VerifyResult:
     command: str | None
 
 
+@dataclass(frozen=True)
+class SelftestResult:
+    """Outcome of a ``selftest()`` call.
+
+    ``ok`` is True only when every check (config exists, entry present,
+    executable resolves) passes. Individual check results are surfaced
+    so the UI can render a checklist rather than a single pass/fail.
+    The tool-tier wrapper in ``brain_core.tools.mcp_selftest`` does not
+    spawn a subprocess — the CLI ``brain mcp selftest`` command retains
+    the subprocess round-trip for the fuller end-to-end test.
+    """
+
+    ok: bool
+    config_exists: bool
+    entry_present: bool
+    executable_resolves: bool
+    command: str | None
+    config_path: Path
+
+
+def selftest(*, config_path: Path, server_name: str = "brain") -> SelftestResult:
+    """Run the non-subprocess slice of `brain mcp selftest`.
+
+    Pure file / path validation — spawning the MCP server as a child
+    process requires ``mcp.client.stdio`` and the ``brain-mcp`` executable,
+    which live above ``brain_core`` (brain_core must not import the MCP
+    SDK). That check stays in ``brain_cli.commands.mcp.selftest_cmd``.
+    """
+    v = verify(config_path=config_path, server_name=server_name)
+    ok = v.config_exists and v.entry_present and v.executable_resolves
+    return SelftestResult(
+        ok=ok,
+        config_exists=v.config_exists,
+        entry_present=v.entry_present,
+        executable_resolves=v.executable_resolves,
+        command=v.command,
+        config_path=config_path,
+    )
+
+
 _ENV_OVERRIDE = "BRAIN_CLAUDE_DESKTOP_CONFIG_PATH"
 
 

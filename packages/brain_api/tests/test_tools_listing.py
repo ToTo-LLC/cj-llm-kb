@@ -13,20 +13,25 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_lists_twenty_four_tools_after_plan07_task20(client: TestClient) -> None:
-    """After Plan 07 Task 20, the registry has all 24 tools auto-registered.
+def test_lists_thirty_four_tools_after_plan07_task25a(client: TestClient) -> None:
+    """After Plan 07 Task 25 sub-task A, the registry has all 34 tools auto-registered.
 
     Plan 05 baseline: 18. Plan 07 Task 4 added 4
     (brain_recent_ingests, brain_create_domain, brain_rename_domain,
     brain_budget_override) → 22. Plan 07 Task 16 added
     ``brain_get_pending_patch`` for the pending-screen detail pane → 23.
     Plan 07 Task 20 added ``brain_fork_thread`` for the Fork dialog → 24.
+    Plan 07 Task 25A added ten sweep tools for MCP install / settings /
+    backup / domain admin (brain_mcp_install, brain_mcp_uninstall,
+    brain_mcp_status, brain_mcp_selftest, brain_set_api_key,
+    brain_ping_llm, brain_backup_create, brain_backup_list,
+    brain_backup_restore, brain_delete_domain) → 34.
     """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 24
-    # Spot-check a few names across all 4 groups (read/ingest/patch/maintenance).
+    assert len(body["tools"]) == 34
+    # Spot-check a few names across all groups.
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
     assert "brain_apply_patch" in names
@@ -40,6 +45,17 @@ def test_lists_twenty_four_tools_after_plan07_task20(client: TestClient) -> None
     assert "brain_get_pending_patch" in names
     # Plan 07 Task 20 addition.
     assert "brain_fork_thread" in names
+    # Plan 07 Task 25A additions — the 10 sweep tools.
+    assert "brain_mcp_install" in names
+    assert "brain_mcp_uninstall" in names
+    assert "brain_mcp_status" in names
+    assert "brain_mcp_selftest" in names
+    assert "brain_set_api_key" in names
+    assert "brain_ping_llm" in names
+    assert "brain_backup_create" in names
+    assert "brain_backup_list" in names
+    assert "brain_backup_restore" in names
+    assert "brain_delete_domain" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:

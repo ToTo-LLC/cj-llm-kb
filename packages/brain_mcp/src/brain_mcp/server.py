@@ -27,6 +27,9 @@ from brain_mcp.resources import brain_md as _brain_md_res
 from brain_mcp.resources import config_public as _config_public_res
 from brain_mcp.resources import domain_index as _domain_index_res
 from brain_mcp.tools import apply_patch as _apply_patch_tool
+from brain_mcp.tools import backup_create as _backup_create_tool
+from brain_mcp.tools import backup_list as _backup_list_tool
+from brain_mcp.tools import backup_restore as _backup_restore_tool
 from brain_mcp.tools import budget_override as _budget_override_tool
 from brain_mcp.tools import bulk_import as _bulk_import_tool
 from brain_mcp.tools import classify as _classify_tool
@@ -34,6 +37,7 @@ from brain_mcp.tools import config_get as _config_get_tool
 from brain_mcp.tools import config_set as _config_set_tool
 from brain_mcp.tools import cost_report as _cost_report_tool
 from brain_mcp.tools import create_domain as _create_domain_tool
+from brain_mcp.tools import delete_domain as _delete_domain_tool
 from brain_mcp.tools import fork_thread as _fork_thread_tool
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
@@ -42,6 +46,11 @@ from brain_mcp.tools import ingest as _ingest_tool
 from brain_mcp.tools import lint as _lint_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
 from brain_mcp.tools import list_pending_patches as _list_pending_patches_tool
+from brain_mcp.tools import mcp_install as _mcp_install_tool
+from brain_mcp.tools import mcp_selftest as _mcp_selftest_tool
+from brain_mcp.tools import mcp_status as _mcp_status_tool
+from brain_mcp.tools import mcp_uninstall as _mcp_uninstall_tool
+from brain_mcp.tools import ping_llm as _ping_llm_tool
 from brain_mcp.tools import propose_note as _propose_note_tool
 from brain_mcp.tools import read_note as _read_note_tool
 from brain_mcp.tools import recent as _recent_tool
@@ -49,6 +58,7 @@ from brain_mcp.tools import recent_ingests as _recent_ingests_tool
 from brain_mcp.tools import reject_patch as _reject_patch_tool
 from brain_mcp.tools import rename_domain as _rename_domain_tool
 from brain_mcp.tools import search as _search_tool
+from brain_mcp.tools import set_api_key as _set_api_key_tool
 from brain_mcp.tools import undo_last as _undo_last_tool
 from brain_mcp.tools.base import ToolContext, ToolModule
 
@@ -80,6 +90,17 @@ _TOOL_MODULES: list[ToolModule] = [
     _budget_override_tool,
     # Plan 07 Task 20 — Fork dialog support.
     _fork_thread_tool,
+    # Plan 07 Task 25 sub-task A — sweep: MCP install / settings / backup / domain admin.
+    _mcp_install_tool,
+    _mcp_uninstall_tool,
+    _mcp_status_tool,
+    _mcp_selftest_tool,
+    _set_api_key_tool,
+    _ping_llm_tool,
+    _backup_create_tool,
+    _backup_list_tool,
+    _backup_restore_tool,
+    _delete_domain_tool,
 ]
 
 
