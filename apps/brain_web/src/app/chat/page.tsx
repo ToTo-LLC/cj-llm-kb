@@ -17,7 +17,19 @@ import { readToken } from "@/lib/auth/token";
  * Passing ``threadId={null}`` tells ChatScreen this is the new-thread
  * variant — the hook stays inert until the backend creates a thread
  * and navigates to ``/chat/<id>``.
+ *
+ * Plan 07 Task 24 cross-platform sweep fix: the page was being
+ * statically prerendered at ``pnpm build`` time, which baked in the
+ * "token missing → redirect to /setup" branch because ``BRAIN_VAULT_ROOT``
+ * isn't set during the build. At runtime the cached redirect would
+ * fire even after the token file existed, so the setup wizard's final
+ * ``router.push("/chat")`` bounced straight back to /setup. Forcing
+ * dynamic rendering re-runs ``readToken()`` per request, which is the
+ * correct behavior for a route whose output depends on live filesystem
+ * state.
  */
+export const dynamic = "force-dynamic";
+
 export default async function ChatPage(): Promise<JSX.Element> {
   const token = await readToken();
   if (!token) redirect("/setup");
