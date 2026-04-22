@@ -8,6 +8,9 @@ from brain_cli import __version__
 from brain_cli.commands.chat import chat
 from brain_cli.commands.mcp import mcp_app
 from brain_cli.commands.patches import patches_app
+from brain_cli.commands.start import start
+from brain_cli.commands.status import status
+from brain_cli.commands.stop import stop
 
 app = typer.Typer(
     name="brain",
@@ -17,6 +20,10 @@ app = typer.Typer(
 )
 
 app.command()(chat)
+# Plan 08 Task 3 — supervisor verbs.
+app.command()(start)
+app.command()(stop)
+app.command()(status)
 app.add_typer(patches_app, name="patches")
 app.add_typer(mcp_app, name="mcp")
 

@@ -8,6 +8,15 @@ dependencies = [
     "typer>=0.13",
     "rich>=13.9",
     "prompt-toolkit>=3.0",
+    # Plan 08 Task 3 — cross-platform PID liveness + terminate/kill for the
+    # ``brain start/stop/status`` supervisor. stdlib ``os.kill`` + signal
+    # constants differ on Windows, so we go through psutil for a single
+    # cross-platform code path.
+    "psutil>=5.9",
+    # Plan 08 Task 3 — ``brain start`` polls ``/healthz`` after spawning
+    # uvicorn. httpx is already in the dev deps via respx; we need it at
+    # runtime now so the supervisor can probe the backend.
+    "httpx>=0.27",
 ]
 
 [project.scripts]
