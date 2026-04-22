@@ -1,0 +1,3 @@
+# Transient iconset workdir used by the macOS regeneration pipeline
+# (see README.md). Contents are rebuilt on demand.
+brain.iconset/

@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from brain_cli import __version__
+from brain_cli.commands.backup import backup
 from brain_cli.commands.chat import chat
 from brain_cli.commands.doctor import doctor
 from brain_cli.commands.mcp import mcp_app
@@ -33,6 +34,8 @@ app.command()(doctor)
 app.command()(upgrade)
 # Plan 08 Task 6 — uninstall with vault-sacred typed confirms.
 app.command()(uninstall)
+# Plan 08 Task 9 — manual vault snapshot.
+app.command()(backup)
 app.add_typer(patches_app, name="patches")
 app.add_typer(mcp_app, name="mcp")
 
