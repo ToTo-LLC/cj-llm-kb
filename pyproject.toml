@@ -28,6 +28,14 @@ asyncio_mode = "auto"
 markers = [
     "vcr: requires cassette (deferred in Task 21)",
 ]
+# Include the install-script integration tests under scripts/tests/ in
+# the default discovery set so ``uv run pytest`` picks them up. The
+# tests themselves are gated on platform (skip on non-Mac unless
+# BRAIN_INSTALL_SH_CI=1) — see scripts/tests/conftest.py.
+testpaths = [
+    "packages",
+    "scripts/tests",
+]
 
 [dependency-groups]
 dev = [
