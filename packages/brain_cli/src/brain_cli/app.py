@@ -12,6 +12,7 @@ from brain_cli.commands.patches import patches_app
 from brain_cli.commands.start import start
 from brain_cli.commands.status import status
 from brain_cli.commands.stop import stop
+from brain_cli.commands.upgrade import upgrade
 
 app = typer.Typer(
     name="brain",
@@ -27,6 +28,8 @@ app.command()(stop)
 app.command()(status)
 # Plan 08 Task 4 — diagnostic.
 app.command()(doctor)
+# Plan 08 Task 5 — upgrade via tarball + atomic swap.
+app.command()(upgrade)
 app.add_typer(patches_app, name="patches")
 app.add_typer(mcp_app, name="mcp")
 
