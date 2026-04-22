@@ -7,6 +7,11 @@ import { Button } from "@/components/ui/button";
 interface NavItem {
   href: string;
   label: string;
+  /** Alternative URL prefix to match against when highlighting the active
+   *  row. Used when a nav entry deep-links into a specific sub-tab (e.g.
+   *  Settings → `/settings/general`) but any `/settings/*` pathname
+   *  should still light up "Settings". */
+  matchPrefix?: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -15,7 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/browse", label: "Browse" },
   { href: "/pending", label: "Pending" },
   { href: "/bulk", label: "Bulk" },
-  { href: "/settings", label: "Settings" },
+  { href: "/settings/general", label: "Settings", matchPrefix: "/settings" },
   { href: "/setup", label: "Setup" },
 ];
 
@@ -46,7 +51,11 @@ export function LeftNav() {
 
       <ul className="mt-2 flex flex-col gap-1" role="list">
         {NAV_ITEMS.map((item) => {
-          const active = pathname === item.href || pathname?.startsWith(`${item.href}/`);
+          const matchBase = item.matchPrefix ?? item.href;
+          const active =
+            pathname === matchBase ||
+            pathname?.startsWith(`${matchBase}/`) ||
+            pathname === item.href;
           return (
             <li key={item.href}>
               <Link

@@ -1,8 +1,13 @@
-export default function SettingsPage() {
-  return (
-    <section style={{ padding: "2rem" }}>
-      <h1>Settings</h1>
-      <p>Placeholder — Task 20 fills in the settings tabs.</p>
-    </section>
-  );
+import { redirect } from "next/navigation";
+
+/**
+ * /settings — default route (server component).
+ *
+ * Settings routing lives at ``/settings/<tab>``. Plain ``/settings`` has
+ * no dedicated landing page; redirect the caller to the General tab.
+ *
+ * Plan 07 Task 22.
+ */
+export default function SettingsPage(): never {
+  redirect("/settings/general");
 }

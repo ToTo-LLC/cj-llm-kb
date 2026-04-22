@@ -68,7 +68,12 @@ describe("Shell components", () => {
     expect(screen.getByRole("link", { name: /browse/i })).toHaveAttribute("href", "/browse");
     expect(screen.getByRole("link", { name: /pending/i })).toHaveAttribute("href", "/pending");
     expect(screen.getByRole("link", { name: /bulk/i })).toHaveAttribute("href", "/bulk");
-    expect(screen.getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
+    // Plan 07 Task 22: nav links deep-link into /settings/general so a
+    // click avoids the redirect round-trip through /settings.
+    expect(screen.getByRole("link", { name: /settings/i })).toHaveAttribute(
+      "href",
+      "/settings/general",
+    );
     expect(screen.getByRole("link", { name: /setup/i })).toHaveAttribute("href", "/setup");
     expect(screen.getByRole("button", { name: /new chat/i })).toBeInTheDocument();
   });
