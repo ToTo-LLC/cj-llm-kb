@@ -12,6 +12,7 @@ from brain_cli.commands.patches import patches_app
 from brain_cli.commands.start import start
 from brain_cli.commands.status import status
 from brain_cli.commands.stop import stop
+from brain_cli.commands.uninstall import uninstall
 from brain_cli.commands.upgrade import upgrade
 
 app = typer.Typer(
@@ -30,6 +31,8 @@ app.command()(status)
 app.command()(doctor)
 # Plan 08 Task 5 — upgrade via tarball + atomic swap.
 app.command()(upgrade)
+# Plan 08 Task 6 — uninstall with vault-sacred typed confirms.
+app.command()(uninstall)
 app.add_typer(patches_app, name="patches")
 app.add_typer(mcp_app, name="mcp")
 
