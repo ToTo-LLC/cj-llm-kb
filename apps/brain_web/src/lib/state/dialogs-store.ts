@@ -6,23 +6,17 @@ import { create } from "zustand";
  * Dialog state lives in one Zustand store so any component can pop a dialog
  * without threading props through the shell. Plan 07 Task 11 introduces the
  * first three dialog kinds implemented in `<DialogHost />`: `reject-reason`,
- * `edit-approve`, `typed-confirm`.
- *
- * The other four kinds (`file-to-wiki`, `fork`, `rename-domain`, `doc-picker`)
- * are reserved here as TS-only stubs. Tasks 19 (doc-picker) and 20 (the rest)
- * will implement their components; the host's switch will grow default
- * branches until then.
+ * `edit-approve`, `typed-confirm`. Task 19 adds `doc-picker`. Task 20 adds
+ * `file-to-wiki`, `fork`, `rename-domain` with full typed payloads.
  *
  * One-dialog-at-a-time invariant: a second `open()` replaces the active
  * dialog rather than stacking. Stacking modals is confusing UX and a
  * keyboard-trap hazard — chain sub-flows via `onConfirm` instead.
  */
 
-// ---------- Reserved future payload types (Tasks 19/20) ----------
-// These are named types so the discriminated union stays extensible and
-// future tasks can import them rather than rewriting the union. Shapes are
-// intentionally minimal; Tasks 19/20 will flesh them out.
+// ---------- Shared payload types ----------
 
+/** FileToWiki submit callback payload. */
 export interface FileToWikiResult {
   path: string;
   domain: string;
@@ -31,19 +25,11 @@ export interface FileToWikiResult {
   body: string;
 }
 
-export interface ThreadMeta {
-  id: string;
-  title: string;
-}
-
-export interface ForkResult {
-  mode: string;
-  carry: string;
-}
-
+/** Domain metadata used by the RenameDomain dialog. */
 export interface DomainMeta {
-  slug: string;
+  id: string;
   name: string;
+  count: number;
 }
 
 // ---------- Active-dialog union ----------
@@ -72,22 +58,31 @@ export type DialogKind =
       danger?: boolean;
       onConfirm: () => void;
     }
-  // ---- reserved (Tasks 19/20) ----
   | {
       kind: "file-to-wiki";
+      /** Chat message being filed — body is the raw markdown, threadId is
+       *  the source thread so frontmatter can stamp ``source_thread:``. */
       msg: { body: string; threadId: string };
-      onConfirm: (p: FileToWikiResult) => void;
+      /** Source thread id (dialog prefers this if set, else falls back to
+       *  ``msg.threadId``). */
+      threadId?: string;
+      /** Primary domain of the source thread — seeds the domain selector. */
+      defaultDomain?: string;
+      /** Optional — fires after ``proposeNote`` succeeds. */
+      onConfirm?: (p: FileToWikiResult) => void;
     }
   | {
       kind: "fork";
-      thread: ThreadMeta;
+      /** Source thread id — passed straight through to ``brain_fork_thread``. */
+      threadId: string;
+      /** 0-based turn index to fork from. */
       turnIndex: number;
-      onConfirm: (p: ForkResult) => void;
+      /** Short prose summary of the last turn, purely for dialog context. */
+      summary?: string;
     }
   | {
       kind: "rename-domain";
       domain: DomainMeta;
-      onConfirm: (from: string, to: string, rewrite: boolean) => void;
     }
   | {
       kind: "doc-picker";

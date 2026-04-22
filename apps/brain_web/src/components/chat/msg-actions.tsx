@@ -4,6 +4,9 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/lib/state/chat-store";
+import { useChatStore } from "@/lib/state/chat-store";
+import { useAppStore } from "@/lib/state/app-store";
+import { useDialogsStore } from "@/lib/state/dialogs-store";
 
 /**
  * MsgActions — per-assistant-message action row.
@@ -14,37 +17,57 @@ import type { ChatMessage } from "@/lib/state/chat-store";
  * AA 2.4.11 Focus Not Obscured). The focus-visible utility class +
  * ``group-hover:opacity-100`` combo delivers that pattern.
  *
- * Task 14 stubs:
- *   - File to wiki → console.log placeholder (Task 20 wires the
- *     FileToWiki dialog through dialogs-store).
- *   - Fork        → console.log placeholder (Task 20).
- *   - Copy        → real clipboard write via navigator.clipboard
- *     (with a safe fallback log when the API is unavailable, e.g.
- *     jsdom in tests).
- *   - Quote       → console.log placeholder (Task 15 wires the
- *     composer; Quote prepends ``> `` to the current composer text).
+ * Task 20 wired the FileToWiki + Fork dialogs through `dialogs-store`.
+ * Copy writes real clipboard text; Quote is still a Task 15-adjacent
+ * stub (TODO: route into composer with "> " prefix).
  */
 
 export interface MsgActionsProps {
   msg: ChatMessage;
+  /** 0-based index of this message in the transcript — used as the
+   *  ``turn_index`` the Fork dialog hands to ``brain_fork_thread``. */
+  turnIndex?: number;
   className?: string;
 }
 
 export function MsgActions({
   msg,
+  turnIndex,
   className,
 }: MsgActionsProps): React.ReactElement {
+  const openDialog = useDialogsStore((s) => s.open);
+  const activeThreadId = useAppStore((s) => s.activeThreadId);
+  const scope = useAppStore((s) => s.scope);
+  const transcriptLength = useChatStore((s) => s.transcript.length);
+
   const onFile = React.useCallback(() => {
-    // TODO(Task 20): open dialogs-store "file-to-wiki" dialog.
-    // eslint-disable-next-line no-console
-    console.log("TODO Task 20: file-to-wiki", { body: msg.body });
-  }, [msg.body]);
+    const threadId = activeThreadId ?? "t-new";
+    openDialog({
+      kind: "file-to-wiki",
+      msg: { body: msg.body, threadId },
+      threadId,
+      defaultDomain: scope[0],
+    });
+  }, [openDialog, activeThreadId, scope, msg.body]);
 
   const onFork = React.useCallback(() => {
-    // TODO(Task 20): open dialogs-store "fork" dialog.
-    // eslint-disable-next-line no-console
-    console.log("TODO Task 20: fork", { body: msg.body });
-  }, [msg.body]);
+    const threadId = activeThreadId;
+    if (!threadId) {
+      // No active thread yet — fork only makes sense once the source
+      // thread exists on the server. Silently no-op.
+      return;
+    }
+    const resolvedTurnIndex =
+      typeof turnIndex === "number"
+        ? turnIndex
+        : Math.max(0, transcriptLength - 1);
+    openDialog({
+      kind: "fork",
+      threadId,
+      turnIndex: resolvedTurnIndex,
+      summary: msg.body.slice(0, 220),
+    });
+  }, [openDialog, activeThreadId, turnIndex, transcriptLength, msg.body]);
 
   const onCopy = React.useCallback(() => {
     const text = msg.body;

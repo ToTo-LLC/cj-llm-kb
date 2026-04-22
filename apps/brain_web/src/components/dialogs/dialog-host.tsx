@@ -4,7 +4,10 @@ import { useDialogsStore } from "@/lib/state/dialogs-store";
 
 import { DocPickerDialog } from "@/components/draft/doc-picker-dialog";
 import { EditApproveDialog } from "./edit-approve-dialog";
+import { FileToWikiDialog } from "./file-to-wiki-dialog";
+import { ForkDialog } from "./fork-dialog";
 import { RejectReasonDialog } from "./reject-reason-dialog";
+import { RenameDomainDialog } from "./rename-domain-dialog";
 import { TypedConfirmDialog } from "./typed-confirm-dialog";
 
 /**
@@ -12,10 +15,9 @@ import { TypedConfirmDialog } from "./typed-confirm-dialog";
  * `<AppShell />` so dialogs inherit the theme + app providers, but sits
  * outside route content so dialogs survive navigation.
  *
- * Task 11 implements three kinds: `reject-reason`, `edit-approve`,
- * `typed-confirm`. Task 19 adds `doc-picker`. Task 20 will add the
- * remaining `file-to-wiki`, `fork`, `rename-domain` kinds — they fall
- * through to `default: return null` until then.
+ * Task 11 landed `reject-reason`, `edit-approve`, `typed-confirm`.
+ * Task 19 wired `doc-picker`. Task 20 completes the set with
+ * `file-to-wiki`, `fork`, `rename-domain`.
  */
 export function DialogHost() {
   const active = useDialogsStore((s) => s.active);
@@ -32,8 +34,19 @@ export function DialogHost() {
       return <TypedConfirmDialog {...active} onClose={close} />;
     case "doc-picker":
       return <DocPickerDialog {...active} onClose={close} />;
-    // Task 20 implements file-to-wiki, fork, rename-domain.
-    default:
+    case "file-to-wiki":
+      return <FileToWikiDialog {...active} onClose={close} />;
+    case "fork":
+      return <ForkDialog {...active} onClose={close} />;
+    case "rename-domain":
+      return <RenameDomainDialog {...active} onClose={close} />;
+    default: {
+      // Exhaustiveness check — adding a new dialog kind must widen the
+      // switch. Without this assignment TypeScript won't flag stale
+      // renderer.
+      const _exhaustive: never = active;
+      void _exhaustive;
       return null;
+    }
   }
 }
