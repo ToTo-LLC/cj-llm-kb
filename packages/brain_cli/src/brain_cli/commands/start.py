@@ -8,17 +8,20 @@ Flow (Plan 08 Task 3):
 4. Spawn uvicorn with the correct env. Write pid file.
 5. Poll /healthz (10s budget).
 6. Open the browser + print the URL.
+7. Spawn a daemon thread that checks GitHub for a newer release and
+   prints a one-line nudge if one exists (Plan 09 Task 4 / Q2a).
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 import typer
 
-from brain_cli.runtime import browser, pidfile, portprobe, supervisor
+from brain_cli.runtime import browser, pidfile, portprobe, release, supervisor
 
 
 def _resolve_install_dir() -> Path:
@@ -169,6 +172,12 @@ def start(
     browser.open_browser(url)
     typer.echo(f"brain running at {url}")
 
+    # Non-blocking update-check nudge (Plan 09 Task 4 / Q2a). Daemon so
+    # it can't hold the process open; short timeout so a slow network
+    # can't stall anything; broad try/except so a failing check never
+    # escapes into ``brain start``'s control flow.
+    threading.Thread(target=_update_check_nudge, daemon=True).start()
+
 
 def _read_port(port_file: Path) -> int | None:
     if not port_file.exists():
@@ -177,3 +186,72 @@ def _read_port(port_file: Path) -> int | None:
         return int(port_file.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         return None
+
+
+def _read_current_version(install_dir: Path) -> str:
+    """Read the current brain version from ``<install>/VERSION``.
+
+    Mirrors the upgrade command's resolver. Priority:
+      1. ``<install>/VERSION`` (written by install.sh / install.ps1).
+      2. ``brain_cli.__version__`` (module-level fallback).
+
+    Returns ``"0.0.0"`` as a last-ditch sentinel so ``check_latest_release``
+    always has a string to compare against — the check will then always
+    report a newer version, which is the safest failure mode for a
+    nudge (the user sees a suggestion, not a crash).
+    """
+    version_file = install_dir / "VERSION"
+    if version_file.exists():
+        try:
+            raw = version_file.read_text(encoding="utf-8").strip()
+            if raw:
+                return raw.lstrip("v")
+        except OSError:
+            pass
+    try:
+        from brain_cli import __version__ as cli_version
+
+        return cli_version
+    except ImportError:  # pragma: no cover — brain_cli is the host package
+        return "0.0.0"
+
+
+def _update_check_nudge() -> None:
+    """Background-thread entry point: check GitHub, print a nudge if newer.
+
+    Hard safety rails:
+
+    * Opt-out via ``BRAIN_NO_UPDATE_CHECK=1`` is enforced BEFORE any
+      imports or network activity. ``check_latest_release`` itself also
+      honors the env var, but we short-circuit here so the test-visible
+      contract ("no call under opt-out") holds for any future wiring.
+    * All exceptions are swallowed. Network timeouts, DNS failures,
+      malformed JSON, GitHub rate-limits — none of them may escape this
+      thread back into the ``brain start`` process.
+    * The 3-second timeout keeps the thread bounded; the host process
+      never waits for it (it's a daemon) but we still don't want the
+      thread lingering.
+    """
+    if os.environ.get("BRAIN_NO_UPDATE_CHECK") == "1":
+        return
+
+    try:
+        install_dir = _resolve_install_dir()
+        current = _read_current_version(install_dir)
+        info = release.check_latest_release(current, timeout_s=3)
+        if info is None:
+            return
+        # ``current`` was already ``lstrip("v")``-ed by the reader; strip
+        # the tag_name defensively so the printed "v{current} → v{latest}"
+        # never ends up with a double-v.
+        latest_clean = info.tag_name.lstrip("v") if info.tag_name else info.version
+        typer.echo(
+            f"A newer version is available: v{current} -> v{latest_clean}. "
+            "Run 'brain upgrade' to update."
+        )
+    except Exception:
+        # Silent failure mode: a nudge is a nice-to-have. Never crash
+        # the host process, never print a traceback, never surface a
+        # "couldn't check for updates" line — that would be noisier
+        # than just staying quiet.
+        return
