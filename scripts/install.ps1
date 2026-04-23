@@ -54,11 +54,135 @@ if ($ScriptPath) {
 }
 $LibDir = Join-Path $ScriptDir "install_lib"
 
+# Defaults used by BOTH the bootstrap branch and the main flow.
+# Duplicated below in the defaults section — keep in sync. These must
+# sit above the bootstrap because the bootstrap fires before we source
+# install_lib/*.ps1 (which is the reason we're bootstrapping at all).
+$BrainDefaultReleaseUrl = "https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
+$BrainDefaultReleaseSha256 = "edf81cbb921437f55c6415402bcf19adcdc4548dfb15a4cfbb05c6c09d72a7c5"
+
+# Track any bootstrap staging dir so we can clean it up on exit.
+$script:BootstrapStaging = ""
+
+# Bootstrap: when install.ps1 was fetched standalone (``irm ... | iex``
+# or ``Invoke-WebRequest -OutFile install.ps1 + pwsh -File``),
+# install_lib/ does not live next to the script. Download the tarball,
+# extract it to a staging dir, and source helpers from there. The main
+# install flow then reuses the same tarball via
+# $env:BRAIN_BOOTSTRAP_TARBALL so nothing is downloaded twice.
 if (-not (Test-Path -LiteralPath $LibDir -PathType Container)) {
-    Write-Host "error: install_lib/ not found at $LibDir" -ForegroundColor Red
-    Write-Host "       (did you run install.ps1 from a partial checkout?)" `
-        -ForegroundColor Red
-    exit 2
+    $_BootstrapUrl = [Environment]::GetEnvironmentVariable("BRAIN_RELEASE_URL", "Process")
+    if ([string]::IsNullOrEmpty($_BootstrapUrl)) {
+        $_BootstrapUrl = $BrainDefaultReleaseUrl
+    }
+    $_BootstrapSha = [Environment]::GetEnvironmentVariable("BRAIN_RELEASE_SHA256", "Process")
+    if ([string]::IsNullOrEmpty($_BootstrapSha)) {
+        if ($_BootstrapUrl -eq $BrainDefaultReleaseUrl) {
+            $_BootstrapSha = $BrainDefaultReleaseSha256
+        } else {
+            $_BootstrapSha = ""
+        }
+    }
+
+    $_BootstrapStaging = Join-Path ([System.IO.Path]::GetTempPath()) `
+        ("brain-bootstrap-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Path $_BootstrapStaging -Force | Out-Null
+    $script:BootstrapStaging = $_BootstrapStaging
+
+    $_BootstrapTarball = Join-Path $_BootstrapStaging "brain.tar.gz"
+
+    Write-Host "==> Bootstrapping install helpers" -ForegroundColor Cyan
+    Write-Host "  downloading $_BootstrapUrl"
+
+    try {
+        if ($_BootstrapUrl -like "file:///*") {
+            $_rawPath = $_BootstrapUrl.Substring("file:///".Length)
+            if ($_rawPath -match '^[A-Za-z]:') {
+                $_localPath = $_rawPath -replace '/', '\'
+            } else {
+                $_localPath = "/" + $_rawPath
+            }
+            if (-not (Test-Path -LiteralPath $_localPath -PathType Leaf)) {
+                throw "local tarball not found: $_localPath"
+            }
+            Copy-Item -LiteralPath $_localPath -Destination $_BootstrapTarball -Force
+        } else {
+            # Force TLS 1.2 on PS 5.1 where the default may still be
+            # SSL3/TLS1.0. This is a no-op on PS 7.
+            try {
+                [System.Net.ServicePointManager]::SecurityProtocol = `
+                    [System.Net.ServicePointManager]::SecurityProtocol -bor `
+                    [System.Net.SecurityProtocolType]::Tls12
+            } catch { }
+            Invoke-WebRequest -Uri $_BootstrapUrl -OutFile $_BootstrapTarball `
+                -UseBasicParsing -ErrorAction Stop | Out-Null
+        }
+    } catch {
+        Write-Host "error: bootstrap download failed for $_BootstrapUrl" -ForegroundColor Red
+        Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
+        Remove-Item -LiteralPath $_BootstrapStaging -Force -Recurse `
+            -ErrorAction SilentlyContinue
+        exit 1
+    }
+
+    if (-not [string]::IsNullOrEmpty($_BootstrapSha)) {
+        Write-Host "  verifying SHA256"
+        $_actual = (Get-FileHash -LiteralPath $_BootstrapTarball -Algorithm SHA256).Hash.ToLowerInvariant()
+        $_expected = $_BootstrapSha.ToLowerInvariant()
+        if ($_actual -ne $_expected) {
+            Write-Host "error: SHA256 mismatch for $_BootstrapUrl" -ForegroundColor Red
+            Write-Host "       expected: $_expected" -ForegroundColor Red
+            Write-Host "       actual:   $_actual" -ForegroundColor Red
+            Write-Host "       the download may be corrupted or tampered with." -ForegroundColor Red
+            Remove-Item -LiteralPath $_BootstrapStaging -Force -Recurse `
+                -ErrorAction SilentlyContinue
+            exit 1
+        }
+        Write-Host "  ok (sha256 $_actual)"
+    } else {
+        Write-Host "  (no SHA256 pin available for bootstrap — skipping verify)"
+    }
+
+    # Extract. Requires tar.exe on PATH (Windows 10 build 17063+).
+    $_tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($null -eq $_tar) { $_tar = Get-Command tar -ErrorAction SilentlyContinue }
+    if ($null -eq $_tar) {
+        Write-Host "error: tar.exe not found on PATH" -ForegroundColor Red
+        Write-Host "       brain needs the bsdtar that ships with Windows 10 build 17063+." -ForegroundColor Red
+        Remove-Item -LiteralPath $_BootstrapStaging -Force -Recurse `
+            -ErrorAction SilentlyContinue
+        exit 2
+    }
+
+    & $_tar.Source -xzf $_BootstrapTarball -C $_BootstrapStaging
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "error: failed to extract bootstrap tarball (exit $LASTEXITCODE)" -ForegroundColor Red
+        Remove-Item -LiteralPath $_BootstrapStaging -Force -Recurse `
+            -ErrorAction SilentlyContinue
+        exit 1
+    }
+
+    # Find the single top-level dir (brain-<version>). Fall back to the
+    # staging dir itself if the tarball was a bare git-archive dump.
+    $_extracted = Get-ChildItem -LiteralPath $_BootstrapStaging -Directory `
+        -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($_extracted -and (Test-Path -LiteralPath (Join-Path $_extracted.FullName "scripts\install_lib") -PathType Container)) {
+        $LibDir = Join-Path $_extracted.FullName "scripts\install_lib"
+    } elseif (Test-Path -LiteralPath (Join-Path $_BootstrapStaging "scripts\install_lib") -PathType Container) {
+        $LibDir = Join-Path $_BootstrapStaging "scripts\install_lib"
+    } else {
+        Write-Host "error: install_lib/ not found in bootstrap tarball" -ForegroundColor Red
+        Write-Host "       looked in $_BootstrapStaging" -ForegroundColor Red
+        Remove-Item -LiteralPath $_BootstrapStaging -Force -Recurse `
+            -ErrorAction SilentlyContinue
+        exit 1
+    }
+
+    # Let the main install flow reuse this tarball instead of fetching
+    # it a second time. Fetch-AndExtract checks for this env var before
+    # hitting the network.
+    $env:BRAIN_BOOTSTRAP_TARBALL = $_BootstrapTarball
+    Write-Host "  bootstrap complete — sourcing helpers"
 }
 
 . (Join-Path $LibDir "fetch_tarball.ps1")
@@ -90,8 +214,10 @@ $BrainInstallForce = _Get-EnvDefault "BRAIN_INSTALL_FORCE" "0"
 # $env:BRAIN_RELEASE_URL (e.g. "file:///C:/tmp/brain-dev.tar.gz") for
 # local/dev installs; the default SHA pin is only used when URL + SHA are
 # both left at their defaults.
-$BrainDefaultReleaseUrl = "https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
-$BrainDefaultReleaseSha256 = "edf81cbb921437f55c6415402bcf19adcdc4548dfb15a4cfbb05c6c09d72a7c5"
+#
+# NOTE: $BrainDefaultReleaseUrl + $BrainDefaultReleaseSha256 are set at
+# the very top of the file (section 0) so the bootstrap branch can use
+# them before install_lib/*.ps1 is sourced. Keep both in sync.
 $BrainReleaseUrl = _Get-EnvDefault "BRAIN_RELEASE_URL" $BrainDefaultReleaseUrl
 $BrainReleaseSha256Raw = _Get-EnvDefault "BRAIN_RELEASE_SHA256" ""
 if ([string]::IsNullOrEmpty($BrainReleaseSha256Raw) -and ($BrainReleaseUrl -eq $BrainDefaultReleaseUrl)) {
@@ -366,19 +492,38 @@ function Fetch-AndExtract {
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
     $tarball = Join-Path $tmpDir "brain.tar.gz"
 
-    try {
-        if (-not [string]::IsNullOrEmpty($BrainReleaseSha256)) {
-            Fetch-Tarball -Url $BrainReleaseUrl -DestPath $tarball `
-                -ExpectedSha256 $BrainReleaseSha256
-        } else {
-            Log-Warn "BRAIN_RELEASE_SHA256 not set — skipping SHA256 verification."
-            Log-Warn "  (acceptable for local dev tarballs; never skip for release builds.)"
-            Invoke-Download -Url $BrainReleaseUrl -DestPath $tarball
+    # Bootstrap reuse: when install.ps1 was curled standalone, section 0
+    # already downloaded + verified the tarball. Reuse it instead of
+    # fetching it a second time. The SHA has already been checked (or
+    # explicitly skipped) during bootstrap, so skip verify.
+    $bootstrapTarball = [Environment]::GetEnvironmentVariable(
+        "BRAIN_BOOTSTRAP_TARBALL", "Process"
+    )
+    if (-not [string]::IsNullOrEmpty($bootstrapTarball) -and `
+        (Test-Path -LiteralPath $bootstrapTarball -PathType Leaf)) {
+        Log-Info "reusing tarball downloaded during bootstrap"
+        try {
+            Copy-Item -LiteralPath $bootstrapTarball -Destination $tarball -Force
+        } catch {
+            Log-Err "failed to copy bootstrap tarball: $($_.Exception.Message)"
+            Remove-Item -LiteralPath $tmpDir -Force -Recurse -ErrorAction SilentlyContinue
+            exit 1
         }
-    } catch {
-        Log-Err $_.Exception.Message
-        Remove-Item -LiteralPath $tmpDir -Force -Recurse -ErrorAction SilentlyContinue
-        exit 1
+    } else {
+        try {
+            if (-not [string]::IsNullOrEmpty($BrainReleaseSha256)) {
+                Fetch-Tarball -Url $BrainReleaseUrl -DestPath $tarball `
+                    -ExpectedSha256 $BrainReleaseSha256
+            } else {
+                Log-Warn "BRAIN_RELEASE_SHA256 not set — skipping SHA256 verification."
+                Log-Warn "  (acceptable for local dev tarballs; never skip for release builds.)"
+                Invoke-Download -Url $BrainReleaseUrl -DestPath $tarball
+            }
+        } catch {
+            Log-Err $_.Exception.Message
+            Remove-Item -LiteralPath $tmpDir -Force -Recurse -ErrorAction SilentlyContinue
+            exit 1
+        }
     }
 
     Log-Step "Extracting to $script:InstallDir"
@@ -585,11 +730,26 @@ function Main {
 }
 
 
+function Cleanup-Bootstrap {
+    # Clean up the bootstrap staging dir (if any). Safe to remove even on
+    # success — Fetch-AndExtract has already copied the tarball into its
+    # own temp dir and extracted it by now.
+    if (-not [string]::IsNullOrEmpty($script:BootstrapStaging) -and `
+        (Test-Path -LiteralPath $script:BootstrapStaging)) {
+        Remove-Item -LiteralPath $script:BootstrapStaging -Force -Recurse `
+            -ErrorAction SilentlyContinue
+        $script:BootstrapStaging = ""
+    }
+}
+
+
 try {
     Main
+    Cleanup-Bootstrap
     exit 0
 } catch {
     Log-Err $_.Exception.Message
     Rollback-Install
+    Cleanup-Bootstrap
     exit 1
 }

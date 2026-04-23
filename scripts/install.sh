@@ -45,10 +45,141 @@ fi
 SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)
 LIB_DIR="$SCRIPT_DIR/install_lib"
 
+# Defaults used by BOTH the bootstrap path and the main install flow.
+# Duplicated here (rather than below) so the bootstrap branch can run
+# before install_lib/*.sh gets sourced. The values MUST match the main
+# defaults block lower down — they are the same release asset.
+BRAIN_DEFAULT_RELEASE_URL="https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
+BRAIN_DEFAULT_RELEASE_SHA256="edf81cbb921437f55c6415402bcf19adcdc4548dfb15a4cfbb05c6c09d72a7c5"
+
+# Bootstrap: when install.sh was fetched standalone (``curl ... | bash``
+# or ``curl -o install.sh && bash install.sh``), install_lib/ does not
+# live next to the script. We download the tarball, extract it to a
+# staging dir, and source helpers from there. The main install flow
+# then reuses the same tarball via BRAIN_BOOTSTRAP_TARBALL so nothing
+# is downloaded twice.
 if [ ! -d "$LIB_DIR" ]; then
-    echo "error: install_lib/ not found at $LIB_DIR" >&2
-    echo "       (did you run install.sh from a partial checkout?)" >&2
-    exit 2
+    BOOTSTRAP_URL="${BRAIN_RELEASE_URL:-$BRAIN_DEFAULT_RELEASE_URL}"
+    if [ -n "${BRAIN_RELEASE_SHA256:-}" ]; then
+        BOOTSTRAP_SHA256="$BRAIN_RELEASE_SHA256"
+    elif [ "$BOOTSTRAP_URL" = "$BRAIN_DEFAULT_RELEASE_URL" ]; then
+        BOOTSTRAP_SHA256="$BRAIN_DEFAULT_RELEASE_SHA256"
+    else
+        BOOTSTRAP_SHA256=""
+    fi
+
+    BOOTSTRAP_STAGING=$(mktemp -d 2>/dev/null || mktemp -d -t brain-bootstrap)
+    # Clean up the staging dir on *any* exit — the main install flow
+    # will copy the tarball out (or fail), and either way we don't need
+    # the staging dir after main() returns. A later trap overrides this
+    # with the rollback logic; we want both to run, so the later trap
+    # chains in the staging cleanup.
+    BRAIN_BOOTSTRAP_STAGING="$BOOTSTRAP_STAGING"
+    export BRAIN_BOOTSTRAP_STAGING
+
+    BOOTSTRAP_TARBALL="$BOOTSTRAP_STAGING/brain.tar.gz"
+
+    echo "==> Bootstrapping install helpers"
+    echo "  downloading $BOOTSTRAP_URL"
+
+    case "$BOOTSTRAP_URL" in
+        file://*)
+            _src="${BOOTSTRAP_URL#file://}"
+            if [ ! -f "$_src" ]; then
+                echo "error: local tarball not found: $_src" >&2
+                rm -rf "$BOOTSTRAP_STAGING"
+                exit 1
+            fi
+            cp "$_src" "$BOOTSTRAP_TARBALL" || {
+                echo "error: failed to copy local tarball" >&2
+                rm -rf "$BOOTSTRAP_STAGING"
+                exit 1
+            }
+            ;;
+        *)
+            if command -v curl >/dev/null 2>&1; then
+                if ! curl -fsSL "$BOOTSTRAP_URL" -o "$BOOTSTRAP_TARBALL"; then
+                    echo "error: download failed for $BOOTSTRAP_URL" >&2
+                    echo "       check your network connection and retry." >&2
+                    rm -rf "$BOOTSTRAP_STAGING"
+                    exit 1
+                fi
+            elif command -v wget >/dev/null 2>&1; then
+                if ! wget -q -O "$BOOTSTRAP_TARBALL" "$BOOTSTRAP_URL"; then
+                    echo "error: download failed for $BOOTSTRAP_URL" >&2
+                    rm -rf "$BOOTSTRAP_STAGING"
+                    exit 1
+                fi
+            else
+                echo "error: need curl or wget for bootstrap download" >&2
+                echo "       Mac: xcode-select --install" >&2
+                echo "       Linux: install curl via your package manager" >&2
+                rm -rf "$BOOTSTRAP_STAGING"
+                exit 2
+            fi
+            ;;
+    esac
+
+    if [ -n "$BOOTSTRAP_SHA256" ]; then
+        echo "  verifying SHA256"
+        if command -v shasum >/dev/null 2>&1; then
+            _actual=$(shasum -a 256 "$BOOTSTRAP_TARBALL" | awk '{print $1}')
+        elif command -v sha256sum >/dev/null 2>&1; then
+            _actual=$(sha256sum "$BOOTSTRAP_TARBALL" | awk '{print $1}')
+        else
+            echo "error: no SHA256 tool found (need shasum or sha256sum)" >&2
+            rm -rf "$BOOTSTRAP_STAGING"
+            exit 1
+        fi
+        _expected_lc=$(printf '%s' "$BOOTSTRAP_SHA256" | tr '[:upper:]' '[:lower:]')
+        _actual_lc=$(printf '%s' "$_actual" | tr '[:upper:]' '[:lower:]')
+        if [ "$_expected_lc" != "$_actual_lc" ]; then
+            echo "error: SHA256 mismatch for $BOOTSTRAP_URL" >&2
+            echo "       expected: $_expected_lc" >&2
+            echo "       actual:   $_actual_lc" >&2
+            echo "       the download may be corrupted or tampered with." >&2
+            rm -rf "$BOOTSTRAP_STAGING"
+            exit 1
+        fi
+        echo "  ok (sha256 $_actual_lc)"
+    else
+        echo "  (no SHA256 pin available for bootstrap — skipping verify)"
+    fi
+
+    # Extract into the staging dir. We don't reuse fetch_tarball.sh's
+    # extract helper because we can't source it yet (that's the whole
+    # reason we're here). The standard-shape tarball has a single
+    # top-level directory named brain-<version>/.
+    if ! tar -xzf "$BOOTSTRAP_TARBALL" -C "$BOOTSTRAP_STAGING"; then
+        echo "error: failed to extract bootstrap tarball" >&2
+        rm -rf "$BOOTSTRAP_STAGING"
+        exit 1
+    fi
+
+    # Find the single top-level dir (brain-<version>). If the tarball
+    # was a bare ``git archive HEAD`` dump the helpers sit directly
+    # under $BOOTSTRAP_STAGING/scripts/install_lib — handle both.
+    EXTRACTED_DIR=$(find "$BOOTSTRAP_STAGING" -mindepth 1 -maxdepth 1 -type d \
+        -not -name 'brain.tar.gz' 2>/dev/null | head -1)
+    if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR/scripts/install_lib" ]; then
+        LIB_DIR="$EXTRACTED_DIR/scripts/install_lib"
+    elif [ -d "$BOOTSTRAP_STAGING/scripts/install_lib" ]; then
+        # Bare tarball (no top-level prefix).
+        EXTRACTED_DIR="$BOOTSTRAP_STAGING"
+        LIB_DIR="$BOOTSTRAP_STAGING/scripts/install_lib"
+    else
+        echo "error: install_lib/ not found in bootstrap tarball" >&2
+        echo "       looked in $BOOTSTRAP_STAGING" >&2
+        rm -rf "$BOOTSTRAP_STAGING"
+        exit 1
+    fi
+
+    # Let the main install flow reuse this tarball instead of downloading
+    # it a second time. fetch_and_extract checks for this env var before
+    # hitting the network.
+    BRAIN_BOOTSTRAP_TARBALL="$BOOTSTRAP_TARBALL"
+    export BRAIN_BOOTSTRAP_TARBALL
+    echo "  bootstrap complete — sourcing helpers"
 fi
 
 # shellcheck source=install_lib/fetch_tarball.sh
@@ -76,8 +207,10 @@ BRAIN_INSTALL_FORCE="${BRAIN_INSTALL_FORCE:-0}"
 # ``BRAIN_RELEASE_URL`` (e.g. ``file:///tmp/brain-dev.tar.gz``) for
 # local/dev installs; the default SHA pin is only used when URL + SHA are
 # both left at their defaults.
-BRAIN_DEFAULT_RELEASE_URL="https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
-BRAIN_DEFAULT_RELEASE_SHA256="edf81cbb921437f55c6415402bcf19adcdc4548dfb15a4cfbb05c6c09d72a7c5"
+#
+# NOTE: BRAIN_DEFAULT_RELEASE_URL + BRAIN_DEFAULT_RELEASE_SHA256 are set
+# at the very top of the file (section 0) so the bootstrap branch can
+# use them before install_lib/*.sh is sourced. Keep both in sync.
 BRAIN_RELEASE_URL="${BRAIN_RELEASE_URL:-$BRAIN_DEFAULT_RELEASE_URL}"
 if [ -z "${BRAIN_RELEASE_SHA256:-}" ] && [ "$BRAIN_RELEASE_URL" = "$BRAIN_DEFAULT_RELEASE_URL" ]; then
     BRAIN_RELEASE_SHA256="$BRAIN_DEFAULT_RELEASE_SHA256"
@@ -317,7 +450,20 @@ rollback_install() {
     BACKUP_DIR=""
 }
 
-trap 'rc=$?; if [ $rc -ne 0 ]; then rollback_install; fi; exit $rc' EXIT
+_on_exit() {
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        rollback_install
+    fi
+    # Clean up the bootstrap staging dir (if any). Safe to rm even on
+    # success — the tarball inside has already been copied into the
+    # install's temp dir by fetch_and_extract and extracted by now.
+    if [ -n "${BRAIN_BOOTSTRAP_STAGING:-}" ] && [ -d "$BRAIN_BOOTSTRAP_STAGING" ]; then
+        rm -rf "$BRAIN_BOOTSTRAP_STAGING" 2>/dev/null || true
+    fi
+    exit $rc
+}
+trap _on_exit EXIT
 
 # ---------------------------------------------------------------------------
 # 9. Tarball fetch + extract
@@ -342,7 +488,18 @@ fetch_and_extract() {
     tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t brain-install)
     local tarball="$tmp_dir/brain.tar.gz"
 
-    if [ -n "$BRAIN_RELEASE_SHA256" ]; then
+    # Bootstrap reuse: when install.sh was curled standalone, section 0
+    # already downloaded + verified the tarball. Reuse that file here
+    # instead of fetching it a second time. The SHA has already been
+    # checked (or explicitly skipped) during bootstrap, so skip verify.
+    if [ -n "${BRAIN_BOOTSTRAP_TARBALL:-}" ] && [ -f "$BRAIN_BOOTSTRAP_TARBALL" ]; then
+        log_info "reusing tarball downloaded during bootstrap"
+        cp "$BRAIN_BOOTSTRAP_TARBALL" "$tarball" || {
+            log_err "failed to copy bootstrap tarball"
+            rm -rf "$tmp_dir"
+            exit 1
+        }
+    elif [ -n "$BRAIN_RELEASE_SHA256" ]; then
         fetch_tarball "$BRAIN_RELEASE_URL" "$tarball" "$BRAIN_RELEASE_SHA256" || {
             rm -rf "$tmp_dir"
             exit 1

@@ -217,6 +217,74 @@ def test_install_corrupt_tarball_aborts(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# (f) Curl-bootstrap: install.sh without install_lib/ adjacent
+# ---------------------------------------------------------------------------
+
+
+@skip_if_not_mac
+def test_install_bootstrap_without_install_lib(
+    install_env: dict[str, str],
+    install_dir: Path,
+    fake_home: Path,
+    tmp_path: Path,
+) -> None:
+    """Simulates the documented curl-bootstrap flow.
+
+    When users run ``curl -fsSL .../install.sh | bash`` (or ``curl -o
+    install.sh && bash install.sh``), the script lands in a temp dir by
+    itself — there is NO install_lib/ directory next to it. Before the
+    bootstrap fix, section 0 errored out immediately with ``install_lib/
+    not found``. After the fix, section 0 should download the tarball,
+    extract it, source install_lib/ from the extracted tree, set
+    BRAIN_BOOTSTRAP_TARBALL, and continue into the main flow reusing
+    the same tarball (no double download).
+
+    We stage install.sh alone in a temp dir and point BRAIN_RELEASE_URL
+    at a local file:// tarball so the test stays offline.
+    """
+    lonely_dir = tmp_path / "curl-staging"
+    lonely_dir.mkdir()
+    lonely_install = lonely_dir / "install.sh"
+    shutil.copy2(INSTALL_SH, lonely_install)
+    # Sanity: install_lib is NOT adjacent to this copy.
+    assert not (lonely_dir / "install_lib").exists()
+
+    result = subprocess.run(
+        ["/bin/bash", str(lonely_install)],
+        env=install_env,
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"bootstrap install failed (rc={result.returncode})\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+    # Log output must show the bootstrap path kicked in.
+    combined = result.stdout + result.stderr
+    assert "Bootstrapping install helpers" in combined, (
+        f"expected bootstrap log in output; got:\n{combined}"
+    )
+    # And the main fetch_and_extract must show tarball reuse (proves we
+    # didn't double-download).
+    assert "reusing tarball downloaded during bootstrap" in combined, (
+        f"expected tarball-reuse log; got:\n{combined}"
+    )
+
+    # Install still completed correctly.
+    assert install_dir.is_dir()
+    assert (install_dir / "pyproject.toml").is_file()
+    assert (install_dir / "packages" / "brain_cli").is_dir()
+    shim = fake_home / ".local" / "bin" / "brain"
+    assert shim.is_file()
+
+
 @skip_if_not_mac
 def test_install_missing_curl_uses_wget_or_errors(
     install_env: dict[str, str],
