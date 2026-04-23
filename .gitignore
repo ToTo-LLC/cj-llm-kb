@@ -11,6 +11,10 @@ htmlcov/
 dist/
 build/
 
+# Release artifacts (scripts/release.sh — Plan 09 Task 7).
+# Tarball + SHA sidecar are produced on demand; never committed.
+release/
+
 # Node
 node_modules/
 .next/

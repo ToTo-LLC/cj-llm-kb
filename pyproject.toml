@@ -27,6 +27,7 @@ brain_api = { workspace = true, editable = false }
 asyncio_mode = "auto"
 markers = [
     "vcr: requires cassette (deferred in Task 21)",
+    "slow: slow integration tests (~30s+ each); run with ``pytest -m slow`` or unmarked",
 ]
 # Include the install-script integration tests under scripts/tests/ in
 # the default discovery set so ``uv run pytest`` picks them up. The
