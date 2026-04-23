@@ -28,7 +28,7 @@ from pathlib import Path
 
 
 def _resample(master: Path, size: int, dest: Path) -> None:
-    """Write ``master`` resampled to ``size``×``size`` at ``dest`` (uses ``sips``)."""
+    """Write ``master`` resampled to ``size`` x ``size`` at ``dest`` (uses ``sips``)."""
     subprocess.run(
         ["sips", "-z", str(size), str(size), str(master), "--out", str(dest)],
         check=True,
@@ -56,14 +56,14 @@ def pack_ico(master_png: Path, out_path: Path, sizes: list[int]) -> None:
         w = size if size < 256 else 0  # 0 encodes "256+" in the ICO spec.
         dir_blob += struct.pack(
             "<BBBBHHII",
-            w,       # width
-            w,       # height
-            0,       # color count (0 = 256+ or true color)
-            0,       # reserved
-            1,       # color planes
-            32,      # bits per pixel
+            w,  # width
+            w,  # height
+            0,  # color count (0 = 256+ or true color)
+            0,  # reserved
+            1,  # color planes
+            32,  # bits per pixel
             len(data),  # byte size of image data
-            offset,     # offset to image data
+            offset,  # offset to image data
         )
         data_blob += data
         offset += len(data)

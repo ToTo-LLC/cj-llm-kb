@@ -8,6 +8,7 @@ Shell's default-association resolver.
 
 from __future__ import annotations
 
+import os
 import sys
 import webbrowser
 
@@ -18,7 +19,14 @@ def open_browser(url: str) -> bool:
     Returns True on success, False if every strategy fails. Does NOT raise
     — ``brain start`` still considers itself successful if only the
     browser launch misfired (the URL is printed to stdout as a fallback).
+
+    Honors the ``BRAIN_NO_BROWSER=1`` env var as an opt-out. Used by the
+    Plan 08 demo + CI flows that don't want a GUI browser popping up.
+    Returns True in that case so callers treat it as a no-op success.
     """
+    if os.environ.get("BRAIN_NO_BROWSER") == "1":
+        return True
+
     try:
         if webbrowser.open(url):
             return True
@@ -30,8 +38,6 @@ def open_browser(url: str) -> bool:
     # Windows — guard with ``sys.platform``.
     if sys.platform == "win32":
         try:
-            import os
-
             os.startfile(url)  # type: ignore[attr-defined]
             return True
         except OSError:

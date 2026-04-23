@@ -679,4 +679,112 @@ Main loop pushes main + tag after review.
 
 ## Review
 
-_To be appended by Task 12._
+**Plan 08 — Install + Packaging: complete.**
+
+- **Tag:** `plan-08-install`
+- **Completed:** 2026-04-23
+- **Task count:** 12 planned / 12 actual — 10 fully shipped + 2 harnessed-deferred (Tasks 10 + 11 clean-VM dry runs; harness landed in commit `80d4b15`, actual VM executions deferred to Plan 09 pre-release sweep)
+- **Commits since `plan-07-frontend`:** 11 (10 task commits + 1 close)
+- **Test counts:**
+  - brain_core **535 + 5 skipped**
+  - brain_cli **109 passed**
+  - brain_mcp **126 + 3 skipped**
+  - brain_api **149 + 3 skipped**
+  - scripts **11 + 5 skipped**
+  - Python total: **930 + 16 skipped** (unchanged from plan-07-frontend close; install layer touches code but adds no new product tests beyond the harness)
+  - brain_web (Vitest): **224 + 1 skipped** (unchanged)
+  - Playwright e2e: **14 / 14**
+- **Coverage:** held at plan-07-frontend baseline — no package dropped below target. brain_cli coverage bumped by the supervisor / doctor / upgrade / uninstall / backup command test files (Tasks 3–6 + 9).
+- **Gates:** mypy strict clean (brain_api conftest-duplicate warning is pre-existing and documented), ruff + format clean, pnpm type-check clean, eslint clean, pnpm build green (≥11 HTML routes in `apps/brain_web/out/`), Playwright 14/14 green, axe-core WCAG 2.2 AA 0 violations, ghost-file 0.
+- **Tool surface:** still **34** (Plan 08 is install-layer — no new tools introduced).
+- **Demo receipt:**
+
+```
+brain · plan 08 demo · 20260423-075420
+======================================
+
+[gate 0] pre-flight: static UI bundle present
+  OK  apps/brain_web/out/index.html present (7260 bytes)
+[gate 1] cut dev tarball from git HEAD
+  OK  cut_local_tarball.py exited 0 (rc=0)
+  OK  exactly one tarball produced (got 1)
+  OK  sha256 sidecar written at brain-dev-80d4b15.tar.gz.sha256
+  OK  sha256 digest is 64 hex chars
+[gate 2] install.sh runs end-to-end against local tarball
+  OK  install.sh exited 0 (rc=0)
+  OK  install dir created at /tmp/demo08-<ts>/install
+  OK  pyproject.toml extracted
+  OK  brain_cli source extracted
+  OK  apps/brain_web/out/index.html copied into install (simulates prebuilt release tarball)
+  OK  brain doctor runs cleanly (rc=1)
+  OK  doctor printed its header
+[gate 3] brain start probes port + /healthz=200 + URL printed
+  OK  brain start exited 0 (rc=0)
+  OK  brain start printed the running URL
+  OK  port file written
+  OK  port 4317 in expected 4317..4330 range
+  OK  /healthz=200
+  OK  token file populated (64 chars)
+  OK  brain_api process alive
+[gate 4] bootstrap loads + /api/setup-status reports first-run
+  OK  /api/setup-status -> 200 (got 200)
+  OK  is_first_run=true (got True)
+  OK  has_token=true (token written at startup)
+  OK  vault_path matches
+  OK  GET / -> 200 (got 200)
+  OK  GET / returned HTML (SPA shell)
+[gate 5] Playwright walks setup wizard → /chat
+  OK  landed on /setup step 1
+  OK  landed on /chat
+[gate 6] brain_ingest stages a patch
+  OK  brain_ingest -> 200 (got 200)
+  OK  ingest status in {'ok', 'skipped_duplicate', 'pending'} (got 'pending')
+  OK  patch_id present
+[gate 7] propose_note → apply_patch via REST (file on disk)
+  OK  propose_note -> 200 (got 200)
+  OK  patch_id returned
+  OK  target file NOT on disk before apply
+  OK  list_pending_patches -> 200 (got 200)
+  OK  patch_id visible in pending list
+  OK  apply_patch -> 200 (got 200)
+  OK  status=applied (got 'applied')
+  OK  target file ON disk after apply
+[gate 8] brain stop → pid + port files gone; no orphan uvicorn
+  OK  brain stop exited 0 (rc=0)
+  OK  pid file removed
+  OK  port file removed
+  OK  no orphan brain_api processes (got 0)
+[gate 9] start+stop round-trip #2 (idempotency)
+  OK  second start rc=0 (got 0)
+  OK  second start wrote port file
+  OK  second start /healthz=200
+  OK  second start setup-status -> 200
+  OK  second start issued a token
+  OK  second stop rc=0 (got 0)
+  OK  vault .md files identical across cycle (before=3, after=3)
+[gate 10] brain uninstall --yes (code gone; vault preserved)
+  OK  vault has .md files before uninstall (got 3)
+  OK  brain uninstall rc=0 (got 0)
+  OK  uninstall summary printed
+  OK  install dir removed
+  OK  vault preserved
+  OK  vault .md files unchanged by uninstall (before=3, after=3)
+[gate 11] post-uninstall: shim gone; install dir absent
+  OK  shim removed
+  OK  install dir removed
+  OK  probe completed — shim-dir check above is authoritative
+
+Passed gates:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+Skipped gates: []
+Failed gates:  []
+
+PLAN 08 DEMO OK
+```
+
+- **Handoff to Plan 09 (ship):**
+  - Cut the first real GitHub release tarball — update `BRAIN_RELEASE_URL` defaults in install.sh + install.ps1 from the placeholder to the real release URL; wire SHA256 into the release description per the `SHA256: <64-hex>` line convention the `brain upgrade` flow parses.
+  - Run clean-Mac VM (Task 10) + clean-Windows VM (Task 11) dry runs against the shipped harness: `scripts/serve-local-tarball.py` + `docs/testing/clean-{mac,windows}-vm-host-instructions.md` + receipt templates. These surface the last class of bugs no local demo can catch — Defender SmartScreen prompts, first-boot PATH propagation, browser launch against a restricted default.
+  - Version bump to v0.1.0 + write the `VERSION` file during install.sh (already plumbed; needs the real value).
+  - Release notes automation — suggested filter: `git log --oneline plan-07-frontend..v0.1.0 | grep -E "^[a-f0-9]+ (feat|fix|docs)"` grouped by commit-message prefix.
+  - Complete `docs/testing/manual-qa.md` on the user's primary machine (check every screen, drag-drop 5 real sources, bulk-import a 50-file folder, run the full chat + approve + undo loop, verify `brain uninstall` leaves the vault intact + `brain start` works again after re-install).
+  - Close the **ingest E2E-mode `new_files=[]`** caveat surfaced by gate 7 (see lessons): either populate the canned integrate response's `new_files` with a vault-relative path in `brain_core.llm.fake`, or make `brain_apply_patch` tolerate absolute paths that resolve under `vault_root`. Option (b) is cleaner; ~15 LoC + 2 tests.
