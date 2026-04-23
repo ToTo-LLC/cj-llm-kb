@@ -10,7 +10,7 @@ def test_version_flag() -> None:
     result = CliRunner().invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "brain" in result.stdout.lower()
-    assert "0.0.1" in result.stdout
+    assert "0.1.0" in result.stdout
 
 
 def test_help_shows_app_name() -> None:

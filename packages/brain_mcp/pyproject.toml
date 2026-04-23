@@ -1,6 +1,6 @@
 [project]
 name = "brain_mcp"
-version = "0.0.1"
+version = "0.1.0"
 description = "brain MCP server — exposes brain_core primitives over the Model Context Protocol"
 requires-python = ">=3.12"
 dependencies = [

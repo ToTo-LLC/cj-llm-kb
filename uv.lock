@@ -134,7 +134,7 @@ dev = [
 
 [[package]]
 name = "brain-api"
-version = "0.0.1"
+version = "0.1.0"
 source = { directory = "packages/brain_api" }
 dependencies = [
     { name = "brain-core" },
@@ -151,7 +151,7 @@ requires-dist = [
 
 [[package]]
 name = "brain-cli"
-version = "0.0.1"
+version = "0.1.0"
 source = { directory = "packages/brain_cli" }
 dependencies = [
     { name = "brain-core" },
@@ -207,7 +207,7 @@ requires-dist = [
 
 [[package]]
 name = "brain-mcp"
-version = "0.0.1"
+version = "0.1.0"
 source = { directory = "packages/brain_mcp" }
 dependencies = [
     { name = "brain-core" },
