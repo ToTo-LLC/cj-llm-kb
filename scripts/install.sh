@@ -70,8 +70,20 @@ if [ "$BRAIN_INSTALL_VERBOSE" = "1" ]; then
 fi
 
 BRAIN_INSTALL_FORCE="${BRAIN_INSTALL_FORCE:-0}"
-BRAIN_RELEASE_URL="${BRAIN_RELEASE_URL:-}"
-BRAIN_RELEASE_SHA256="${BRAIN_RELEASE_SHA256:-}"
+# Default tarball URL + pinned SHA256 for the currently-shipping GitHub
+# release asset. ``curl -fsSL install.sh | bash`` on a clean machine Just
+# Works and is integrity-verified out of the box. Override by exporting
+# ``BRAIN_RELEASE_URL`` (e.g. ``file:///tmp/brain-dev.tar.gz``) for
+# local/dev installs; the default SHA pin is only used when URL + SHA are
+# both left at their defaults.
+BRAIN_DEFAULT_RELEASE_URL="https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
+BRAIN_DEFAULT_RELEASE_SHA256="edf81cbb921437f55c6415402bcf19adcdc4548dfb15a4cfbb05c6c09d72a7c5"
+BRAIN_RELEASE_URL="${BRAIN_RELEASE_URL:-$BRAIN_DEFAULT_RELEASE_URL}"
+if [ -z "${BRAIN_RELEASE_SHA256:-}" ] && [ "$BRAIN_RELEASE_URL" = "$BRAIN_DEFAULT_RELEASE_URL" ]; then
+    BRAIN_RELEASE_SHA256="$BRAIN_DEFAULT_RELEASE_SHA256"
+else
+    BRAIN_RELEASE_SHA256="${BRAIN_RELEASE_SHA256:-}"
+fi
 BRAIN_NODE_VERSION="${BRAIN_NODE_VERSION:-20}"
 # Skip the heavy Node-dependent build steps. Useful for tests and for
 # offline installs where the tarball already ships a prebuilt UI under
@@ -315,8 +327,12 @@ fetch_and_extract() {
     log_step "Fetching release tarball"
 
     if [ -z "$BRAIN_RELEASE_URL" ]; then
+        # This branch only fires if the caller explicitly blanked
+        # ``BRAIN_RELEASE_URL``. The default above points at the real
+        # GitHub release asset, so normal ``curl | bash`` never lands here.
         log_err "no release URL configured"
-        log_err "  no GitHub release is published yet."
+        log_err "  BRAIN_RELEASE_URL was explicitly set empty."
+        log_err "  unset it to use the default GitHub release, or"
         log_err "  set BRAIN_RELEASE_URL=file:///path/to/brain-dev.tar.gz"
         log_err "  (cut one with: scripts/cut-local-tarball.sh)"
         exit 1

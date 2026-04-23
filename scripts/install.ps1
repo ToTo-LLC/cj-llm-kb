@@ -84,8 +84,21 @@ if ($BrainInstallVerbose -eq "1") {
 }
 
 $BrainInstallForce = _Get-EnvDefault "BRAIN_INSTALL_FORCE" "0"
-$BrainReleaseUrl = _Get-EnvDefault "BRAIN_RELEASE_URL" ""
-$BrainReleaseSha256 = _Get-EnvDefault "BRAIN_RELEASE_SHA256" ""
+# Default tarball URL + pinned SHA256 for the currently-shipping GitHub
+# release asset. ``irm install.ps1 | iex`` on a clean machine Just Works
+# and is integrity-verified out of the box. Override by setting
+# $env:BRAIN_RELEASE_URL (e.g. "file:///C:/tmp/brain-dev.tar.gz") for
+# local/dev installs; the default SHA pin is only used when URL + SHA are
+# both left at their defaults.
+$BrainDefaultReleaseUrl = "https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
+$BrainDefaultReleaseSha256 = "edf81cbb921437f55c6415402bcf19adcdc4548dfb15a4cfbb05c6c09d72a7c5"
+$BrainReleaseUrl = _Get-EnvDefault "BRAIN_RELEASE_URL" $BrainDefaultReleaseUrl
+$BrainReleaseSha256Raw = _Get-EnvDefault "BRAIN_RELEASE_SHA256" ""
+if ([string]::IsNullOrEmpty($BrainReleaseSha256Raw) -and ($BrainReleaseUrl -eq $BrainDefaultReleaseUrl)) {
+    $BrainReleaseSha256 = $BrainDefaultReleaseSha256
+} else {
+    $BrainReleaseSha256 = $BrainReleaseSha256Raw
+}
 $BrainNodeVersion = _Get-EnvDefault "BRAIN_NODE_VERSION" "20"
 
 # Skip the heavy Node build step (offline + test mode).
@@ -333,8 +346,12 @@ function Fetch-AndExtract {
     Log-Step "Fetching release tarball"
 
     if ([string]::IsNullOrEmpty($BrainReleaseUrl)) {
+        # This branch only fires if the caller explicitly blanked
+        # $env:BRAIN_RELEASE_URL. The default above points at the real
+        # GitHub release asset, so normal ``irm ... | iex`` never lands here.
         Log-Err "no release URL configured"
-        Log-Err "  no GitHub release is published yet."
+        Log-Err "  `$env:BRAIN_RELEASE_URL was explicitly set empty."
+        Log-Err "  unset it to use the default GitHub release, or"
         Log-Err "  set `$env:BRAIN_RELEASE_URL = 'file:///C:/path/to/brain-dev.tar.gz'"
         Log-Err "  (cut one with: python scripts\cut_local_tarball.py)"
         exit 1
