@@ -1,7 +1,8 @@
-/* TomorrowToday design tokens — ported from v3 design zip (2026-04-21)
+/* brain design tokens — v3 design pass (2026-04-21)
    Two layers merged:
-     1. TT brand palette + marketing type/radii/motion (tt-tokens.css)
-     2. brain app-surface layer: surfaces, text, domain accents, density, ui-* sizes (app.css)
+     1. Brand palette + marketing type/radii/motion (derived from the
+        TomorrowToday design system, used with permission; see assets/README.md).
+     2. brain app-surface layer: surfaces, text, domain accents, density, ui-* sizes.
    Only the 6 fonts actually shipped in /public/fonts/ are declared here.
 */
 

@@ -11,13 +11,13 @@ Committed binaries consumed by the install scripts:
 
 ## Source + license
 
-Placeholder glyph designed for Plan 08: a rounded-square tile with the
-TomorrowToday orange gradient (`#FDEB9E → #FF6321`, from
-`/tmp/brain-design-v3/assets/tt-tokens.css`) and a white lowercase "b"
-wordmark. Authored for the `brain` project and licensed under the
-repository's root `LICENSE`. Plan 09 will likely replace this with a
-brand-designed glyph — if so, drop the new `brain-glyph.svg` in place
-and rerun the commands below.
+Placeholder glyph designed for Plan 08: a rounded-square tile with an
+orange gradient (`#FDEB9E → #FF6321`) and a white lowercase "b" wordmark.
+The gradient is derived from the TomorrowToday design system and is used
+here with permission from TomorrowToday; the SVG authored for the `brain`
+project is licensed under the repository's root `LICENSE`. A brand-designed
+replacement glyph may land in a future release — if so, drop the new
+`brain-glyph.svg` in place and rerun the commands below.
 
 ## Regeneration (macOS — the committed bins were made this way)
 

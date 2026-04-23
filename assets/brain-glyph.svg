@@ -2,7 +2,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!--
     brain launcher glyph — placeholder.
-    Palette: TomorrowToday orange gradient (#FDEB9E -> #FF6321) from tt-tokens.css.
+    Palette: orange gradient (#FDEB9E -> #FF6321), derived from the TomorrowToday
+    design system (used with permission; see assets/README.md for provenance).
     Shape: rounded-square background, centered white lowercase "b" wordmark.
     Regenerate rasters with the commands in assets/README.md.
   -->

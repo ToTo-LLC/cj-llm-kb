@@ -45,3 +45,11 @@ out/
 .env.*
 !.env.example
 *.log
+
+# Certificate + private-key material (defense in depth; none tracked today)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
