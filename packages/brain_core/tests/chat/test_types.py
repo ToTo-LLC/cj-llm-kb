@@ -18,13 +18,21 @@ from pydantic import ValidationError
 
 
 class TestChatMode:
-    def test_members_are_ask_brainstorm_draft(self) -> None:
-        assert set(ChatMode) == {ChatMode.ASK, ChatMode.BRAINSTORM, ChatMode.DRAFT}
+    def test_members_are_ask_brainstorm_draft_mcp(self) -> None:
+        # ASK / BRAINSTORM / DRAFT are session modes; MCP is a tagging value
+        # for MCP-origin pending patches (issue #30) — not a chat session.
+        assert set(ChatMode) == {
+            ChatMode.ASK,
+            ChatMode.BRAINSTORM,
+            ChatMode.DRAFT,
+            ChatMode.MCP,
+        }
 
     def test_values_are_lowercase_strings(self) -> None:
         assert ChatMode.ASK.value == "ask"
         assert ChatMode.BRAINSTORM.value == "brainstorm"
         assert ChatMode.DRAFT.value == "draft"
+        assert ChatMode.MCP.value == "mcp"
 
     def test_str_enum_equality(self) -> None:
         # StrEnum members compare equal to their string value at runtime.

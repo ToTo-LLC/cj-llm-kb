@@ -116,6 +116,13 @@ async def test_ingest_default_stages_patch(
     # Staging store has the envelope under the brain_ingest tool name.
     pending = ctx.pending_store.list()
     assert any(env.tool == "brain_ingest" for env in pending)
+    # Issue #30: brain_ingest-staged patches carry ChatMode.MCP so the patch-
+    # queue UI can distinguish them from chat-origin patches.
+    from brain_core.chat.types import ChatMode
+    ingest_envs = [env for env in pending if env.tool == "brain_ingest"]
+    assert all(env.mode is ChatMode.MCP for env in ingest_envs), (
+        f"expected ChatMode.MCP, got {[env.mode for env in ingest_envs]}"
+    )
 
 
 async def test_ingest_autonomous_applies_immediately(

@@ -11,7 +11,18 @@ from brain_core.llm.types import ToolDef
 
 
 def test_all_modes_present() -> None:
+    """MODES is keyed by the SESSION modes only — ChatMode.MCP is a tagging
+    value (issue #30) and intentionally has no MODES entry."""
     assert set(MODES.keys()) == {ChatMode.ASK, ChatMode.BRAINSTORM, ChatMode.DRAFT}
+
+
+def test_mcp_mode_has_no_session_policy() -> None:
+    """``ChatMode.MCP`` exists for tagging MCP-origin patches (issue #30) but
+    must not be mistakable for a chat session mode — there is no MODES entry
+    and any code path that tries to start a session with MCP should KeyError.
+    """
+    assert ChatMode.MCP not in MODES
+    assert ChatMode.MCP.value == "mcp"
 
 
 def test_ask_policy() -> None:
@@ -66,8 +77,14 @@ def test_tool_to_tooldef() -> None:
 
 
 def test_prompts_are_non_trivial() -> None:
-    """Every mode prompt should be substantive (>200 chars), not a placeholder stub."""
+    """Every SESSION mode prompt should be substantive (>200 chars).
+
+    ``ChatMode.MCP`` is excluded — it's a tagging value with no chat session
+    policy (issue #30).
+    """
     for mode in ChatMode:
+        if mode is ChatMode.MCP:
+            continue
         assert len(MODES[mode].prompt_text) > 200, (
             f"mode {mode} prompt is too short — did you seed it with a real prompt?"
         )

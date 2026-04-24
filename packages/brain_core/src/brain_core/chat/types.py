@@ -14,6 +14,13 @@ class ChatMode(StrEnum):
     ASK = "ask"
     BRAINSTORM = "brainstorm"
     DRAFT = "draft"
+    # MCP is a tagging value, not a session mode (issue #30). It identifies
+    # patches staged via the MCP transport (``brain_propose_note`` /
+    # ``brain_ingest``) so the patch-queue UI and transcripts can tell them
+    # apart from chat-origin patches that happen to land in BRAINSTORM. There
+    # is no entry in :data:`brain_core.chat.modes.MODES` for MCP — attempting
+    # to start a chat session with this mode is intentionally undefined.
+    MCP = "mcp"
 
 
 class TurnRole(StrEnum):

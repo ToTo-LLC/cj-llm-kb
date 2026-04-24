@@ -150,11 +150,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     envelope = ctx.pending_store.put(
         patchset=patchset,
         source_thread="mcp-ingest",
-        # ChatMode.BRAINSTORM is the closest semantic match for "staged for
-        # human approval". TODO(plan-05+): consider a dedicated
-        # ChatMode.INGEST value so ingest-origin pending patches are
-        # distinguishable from brainstorm-origin ones in the patch queue UI.
-        mode=ChatMode.BRAINSTORM,
+        # MCP-origin tag — distinguishes ingest-origin pending patches from
+        # chat-origin ones in the patch-queue UI (issue #30).
+        mode=ChatMode.MCP,
         tool="brain_ingest",
         target_path=target_path,
         reason=reason,

@@ -40,7 +40,12 @@ async def test_stages_a_pending_patch(
     # Vault unchanged.
     assert not (seeded_vault / "research" / "notes" / "new-idea.md").exists()
     # One pending patch.
-    assert len(ctx.pending_store.list()) == 1
+    pending = ctx.pending_store.list()
+    assert len(pending) == 1
+    # Issue #30: MCP-staged patches carry ChatMode.MCP so the patch-queue UI
+    # can distinguish them from chat-origin (BRAINSTORM/DRAFT) patches.
+    from brain_core.chat.types import ChatMode
+    assert pending[0].mode is ChatMode.MCP
 
 
 async def test_out_of_scope_path_raises(

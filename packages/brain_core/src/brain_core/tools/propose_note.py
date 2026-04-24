@@ -6,12 +6,9 @@ the envelope later through ``brain_apply_patch``. The approval-gated flow here
 mirrors the web app exactly (spec principle #3: LLM writes are always staged).
 
 Rate limiter consumes from the ``patches`` bucket (cost=1) BEFORE any other
-work so a refused call is cheap and deterministic. ChatMode.BRAINSTORM is the
-closest semantic match for "staged for human approval"; MCP has no chat mode,
-so we reuse it (same placeholder used by ``brain_ingest``).
-TODO(plan-05+): consider a dedicated ``ChatMode.MCP`` value so MCP-origin
-pending patches are distinguishable from brainstorm-origin ones in the
-patch queue UI.
+work so a refused call is cheap and deterministic. The pending envelope is
+tagged ``mode=ChatMode.MCP`` so the patch-queue UI and transcripts can tell
+MCP-origin patches apart from chat-origin ones (issue #30).
 """
 
 from __future__ import annotations
@@ -85,9 +82,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     envelope = ctx.pending_store.put(
         patchset=patchset,
         source_thread="mcp-propose",
-        # ChatMode.BRAINSTORM is the closest semantic match for "staged for
-        # human approval". TODO(plan-05+): dedicated ``ChatMode.MCP`` value.
-        mode=ChatMode.BRAINSTORM,
+        # MCP-origin tag — distinguishes from chat (BRAINSTORM/DRAFT) staging
+        # in the patch-queue UI (issue #30).
+        mode=ChatMode.MCP,
         tool="brain_propose_note",
         target_path=p,
         reason=str(arguments["reason"]),
