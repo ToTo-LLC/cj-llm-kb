@@ -393,4 +393,139 @@
 
 ## Review
 
-_To be appended by Task 13._
+**Completed 2026-04-24, tags `plan-09-ship` + `v0.1.0`.**
+
+### At-a-glance
+
+- **Task count:** 13 planned / 11 fully shipped + 2 harnessed-deferred (Tasks 9 + 10 clean-Mac / clean-Windows VM dry runs; harness committed, actual VM runs deferred per user decision).
+- **Commits since `plan-08-install`:** 25.
+- **Test counts at close:** brain_core + brain_cli + brain_mcp + brain_api = **947 pass + 18 skip** (Python); brain_web **231 pass + 1 skip** (Vitest); Playwright **14/14**.
+- **Gates green:** `ruff check .` clean, `pnpm -F brain_web type-check` clean, `pnpm -F brain_web lint` clean, `pnpm -F brain_web build` clean, Playwright + axe-core WCAG 2.2 AA clean. (`mypy packages/brain_core/src` inherits 2 pre-existing `import-untyped` warnings from `rank_bm25` + `webvtt` — unchanged since Plan 03.)
+- **Tool surface:** 34 (unchanged since Plan 07 — ship plan added no new tools).
+- **Demo:** 12 gates (0..11) all passing; `PLAN 09 DEMO OK`.
+- **Release:** v0.1.0 live at https://github.com/ToTo-LLC/cj-llm-kb/releases/tag/v0.1.0. Tarball SHA256 `657f9feaab04fc2a54fe9089b226ae7d118a6c523cc6c03b72dbaba829592c1a` (post-sweep). install.sh / install.ps1 default URLs point at this release.
+
+### Known issues shipped (5 RELEASE_NOTE items)
+
+See `docs/v0.1.0-known-issues.md` + `docs/release-notes/v0.1.0.md` for the full list. Headline items:
+
+- **F6** — A11y label concatenation on theme cards + autonomy rows (medium; screen readers read concatenated labels).
+- **Windows token file** — Read-only bit used in lieu of proper ACL via `pywin32`.
+- **Broken-wikilink detection** — Open since Plan 07 deferral; not gating v0.1.0.
+- **Real PDF web-upload** — Current endpoint accepts text only; PDF parse path exists in CLI.
+- **Ingest E2E-mode `new_files=[]` caveat** — FakeLLM canned integrate response returns empty `new_files`, which causes scope-derivation to fall back to the absolute note path. Demo gate 8 works around via `brain_propose_note`; real LLM runs don't hit the caveat. Lessons captures both repair options.
+
+### Post-sweep fixes (delivered in-task-11)
+
+**Install-path BLOCKERs (IP1–IP4).** Fixed via tarball re-uploads with `gh release upload --clobber` (preserves the v0.1.0 tag + URL):
+
+- **IP1** — install_lib bootstrap failure when `install.sh` curled standalone (no adjacent `install_lib/` dir).
+- **IP2** — `uv` resolved as bare name inside generated shims; not on PATH for `.app` launches. Fixed by resolving to absolute path at install time.
+- **IP3** — Supervisor `uv run` nesting: the shim re-entered `uv run` which thrashed the lock file. Fixed by calling the venv Python directly.
+- **IP4** — `BRAIN_INSTALL_DIR` not exported from the shim + `.app` wrapper; fixed.
+
+**Setup-status + wizard fixes.** Shipped in `b7e7a47`:
+
+- **F5/F7** (BLOCKER) — `is_first_run` required BRAIN.md presence, which looped users back to the wizard after the "Skip this →" step. Fixed by dropping BRAIN.md from the rule; the `no-BRAIN.md` test case flipped to `is_first_run=False`.
+- **F2** (MEDIUM) — Wizard API-key Test button was a stub with "later update" copy; replaced with a live 3-second test against the provider's `/v1/messages` endpoint.
+- **F9** — Autonomy danger copy.
+- **F11** — MCP snippet absolute-path flip.
+- **F8** — `brain doctor --move-vault` copy.
+- **F3** — Drop-overlay inert when not dragging.
+
+Tarball SHA rotated 4× across these fixes (`edf81cb...` → `1e14c9e...` → `fc8722d...` → `657f9fe...`). Every re-upload used `--clobber` to preserve the v0.1.0 tag + asset URLs.
+
+### Demo receipt (`/tmp/plan-09-demo-final.txt`)
+
+```
+brain · plan 09 demo · 20260424-121636
+======================================
+
+[gate 0] pre-flight: v0.1.0 install at ~/Applications/brain-v0.1.0/
+  OK  install dir present at /Users/chrisjohnson/Applications/brain-v0.1.0
+  OK  VERSION file present (contents: '0.1.0')
+  OK  venv brain binary present
+  OK  prebuilt UI bundle present in install
+[gate 1] `brain --version` prints 0.1.0 (NEW — Task 1 regression)
+  OK  brain --version rc=0 (got 0)
+  OK  output == 'brain 0.1.0' (got 'brain 0.1.0', stderr='')
+  OK  VERSION file == '0.1.0' (got '0.1.0')
+[gate 2] `brain doctor` runs cleanly (no crash)
+  OK  brain doctor rc in {0,1} (got 1)
+  OK  doctor printed its header
+[gate 3] brain start → port + /healthz=200 + URL printed
+  OK  brain start rc=0 (got 0)
+  OK  brain start printed the running URL
+  OK  port file written
+  OK  port 4321 in 4317..4330 range
+  OK  /healthz=200
+  OK  token populated (64 chars)
+  OK  brain_api process alive
+[gate 4] /api/setup-status reports first-run on fresh vault
+  OK  /api/setup-status -> 200 (got 200)
+  OK  has_token=True (got True)
+  OK  vault_exists=True (got True)
+[gate 5] F5/F7 regression: is_first_run=False when BRAIN.md absent (NEW)
+  OK  BRAIN.md NOT present
+  OK  /api/setup-status -> 200 (got 200)
+  OK  has_token=True (got True)
+  OK  vault_exists=True (got True)
+  OK  is_first_run=False (F5/F7 regression — BRAIN.md absence must not force first-run; got False)
+[gate 6] update-check nudge pathway via local HTTP stub (NEW)
+  OK  check_latest_release returned ReleaseInfo (not None)
+  OK  info.version == '0.2.0' (got '0.2.0')
+  OK  info.tag_name == 'v0.2.0' (got 'v0.2.0')
+  OK  info.tarball_url points at stub asset
+  OK  info.sha256 parsed from body
+  OK  same-version returns None (got None)
+  OK  BRAIN_NO_UPDATE_CHECK=1 returns None (got None)
+[gate 7] brain_ingest stages a patch
+  OK  brain_ingest -> 200 (got 200)
+  OK  ingest status in {'skipped_duplicate', 'ok', 'pending'} (got 'pending')
+  OK  patch_id present
+[gate 8] propose_note → apply_patch via REST (file on disk)
+  OK  propose_note -> 200 (got 200)
+  OK  patch_id returned
+  OK  target file NOT on disk before apply
+  OK  list_pending_patches -> 200 (got 200)
+  OK  patch_id visible in pending list
+  OK  apply_patch -> 200 (got 200)
+  OK  status=applied (got 'applied')
+  OK  target file ON disk after apply
+[gate 9] brain stop → pid + port files gone; no orphan uvicorn
+  OK  brain stop rc=0 (got 0)
+  OK  pid file removed
+  OK  port file removed
+  OK  no orphan brain_api processes (got 0)
+[gate 10] start+stop round-trip #2 (idempotency)
+  OK  second start rc=0 (got 0)
+  OK  second start wrote port file
+  OK  second start /healthz=200
+  OK  second start setup-status -> 200
+  OK  second start issued a token
+  OK  second stop rc=0 (got 0)
+  OK  vault .md files identical across cycle (before=3, after=3)
+[gate 11] post-demo state: install intact, no orphans, gate-8 artifact on disk
+  OK  install dir still present
+  OK  venv brain binary still present
+  OK  no orphan brain_api processes (got 0)
+  OK  gate-8 artifact preserved across gates 9+10
+  OK  post-demo `brain --version` == 'brain 0.1.0'
+
+Passed gates:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+Skipped gates: []
+Failed gates:  []
+
+PLAN 09 DEMO OK
+```
+
+### Handoff to v0.1.1
+
+- README screenshot embeds — capture during the next QA pass.
+- Clean-Mac + clean-Windows VM dry runs against the live v0.1.0 release URL (harness at `scripts/serve-local-tarball.py` + `docs/testing/clean-{mac,windows}-vm-*` ready to run).
+- F6 a11y label concatenation on theme cards + autonomy rows.
+- Windows token file — replace read-only bit with proper ACL via `pywin32`.
+- Broken-wikilink detection (Plan 07 deferral; still open).
+- Real PDF web-upload path.
+- `BRAIN_UPDATE_CHECK_URL` env override on `runtime/release.py` so `brain start`'s live update-check thread can be integration-tested against a local stub (today only unit-tested + in-process-demo-stubbed).
+
