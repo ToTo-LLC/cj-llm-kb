@@ -12,14 +12,21 @@ import { cn } from "@/lib/utils";
  * ## Visibility idiom
  *
  * The overlay stays in the DOM in both states — the `visible` prop flips
- * the `aria-hidden` flag and Tailwind `pointer-events-none` / opacity
- * utilities. We do NOT unmount on hide: keeping the overlay mounted lets a
- * fade animation run in both directions without `transitionend` glue, and
+ * `aria-hidden` + the `inert` attribute and Tailwind `pointer-events-none`
+ * / opacity utilities. `aria-hidden` alone does not pull inner headings
+ * out of the a11y heading tree in every browser, so the hidden state also
+ * sets `inert` which (per WHATWG) takes the subtree out of the tab order,
+ * removes it from the accessibility tree entirely, and ignores pointer +
+ * focus events. Supported in every Chromium >= 102 and Safari >= 15.5.
+ *
+ * We do NOT unmount on hide: keeping the overlay mounted lets a fade
+ * animation run in both directions without `transitionend` glue, and
  * guarantees drag targets underneath aren't briefly captured while React
  * reconciles the tree.
  *
  * The `data-testid` hook exists so component tests can assert
- * `aria-hidden` toggles correctly; production CSS does the visual gating.
+ * `aria-hidden` + `inert` toggle correctly; production CSS does the
+ * visual gating.
  */
 
 export interface DropOverlayProps {
@@ -27,10 +34,19 @@ export interface DropOverlayProps {
 }
 
 export function DropOverlay({ visible }: DropOverlayProps) {
+  // React 18.3 type defs don't officially ship `inert` on HTMLAttributes;
+  // the runtime (+ browsers) accept it fine. We conditionally spread so
+  // the attribute is simply absent when visible — avoids React re-emitting
+  // `inert={false}` which is a noop either way.
+  const inertProp = visible
+    ? {}
+    : ({ inert: "" } as unknown as Record<string, string>);
+
   return (
     <div
       data-testid="drop-overlay"
       aria-hidden={visible ? "false" : "true"}
+      {...inertProp}
       className={cn(
         "fixed inset-0 z-50 flex items-center justify-center transition-opacity duration-150",
         visible

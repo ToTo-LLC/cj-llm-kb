@@ -110,8 +110,11 @@ export function PanelGeneral(): React.ReactElement {
           </span>
         </div>
         <p className="mt-2 text-[11px] text-[var(--text-muted)]">
-          Move the vault via the ``brain doctor --move-vault`` command. Not a
-          click operation — content is sacred.
+          The vault path is fixed at install time. To move it, edit{" "}
+          <code className="font-mono">&lt;vault&gt;/.brain/config.json</code> or
+          re-install setting{" "}
+          <code className="font-mono">BRAIN_VAULT_ROOT</code> to the new
+          location. Not a click operation — content is sacred.
         </p>
       </section>
     </div>

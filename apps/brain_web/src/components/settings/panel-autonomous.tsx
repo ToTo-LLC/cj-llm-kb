@@ -50,7 +50,7 @@ const ROWS: readonly Row[] = [
   {
     key: "index_rewrites",
     label: "Domain index rewrites",
-    hint: "brain edits your index.md files without review.",
+    hint: "brain edits your index.md files without review. Not recommended — leave this one for manual review.",
     danger: true,
   },
   {

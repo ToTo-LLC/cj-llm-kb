@@ -23,6 +23,7 @@ const {
   brainMcpSelftestMock,
   brainMcpInstallMock,
   brainMcpUninstallMock,
+  configGetMock,
   pushToastStub,
   openDialogMock,
 } = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ const {
   brainMcpSelftestMock: vi.fn(),
   brainMcpInstallMock: vi.fn(),
   brainMcpUninstallMock: vi.fn(),
+  configGetMock: vi.fn(),
   pushToastStub: vi.fn(),
   openDialogMock: vi.fn(),
 }));
@@ -39,6 +41,7 @@ vi.mock("@/lib/api/tools", () => ({
   brainMcpSelftest: brainMcpSelftestMock,
   brainMcpInstall: brainMcpInstallMock,
   brainMcpUninstall: brainMcpUninstallMock,
+  configGet: configGetMock,
 }));
 
 vi.mock("@/lib/state/system-store", () => ({
@@ -64,8 +67,13 @@ beforeEach(() => {
   brainMcpSelftestMock.mockReset();
   brainMcpInstallMock.mockReset();
   brainMcpUninstallMock.mockReset();
+  configGetMock.mockReset();
   pushToastStub.mockReset();
   openDialogMock.mockReset();
+  configGetMock.mockResolvedValue({
+    text: "",
+    data: { key: "vault_path", value: "/Users/x/Documents/brain" },
+  });
   brainMcpStatusMock.mockResolvedValue({
     text: "",
     data: {
@@ -151,6 +159,36 @@ describe("PanelIntegrations", () => {
       expect(brainMcpInstallMock).toHaveBeenCalled();
     });
     expect(pushToastStub).toHaveBeenCalled();
+  });
+
+  test("MCP snippet substitutes the resolved vault path (no ~ trap)", async () => {
+    render(<PanelIntegrations />);
+    await waitFor(() => expect(configGetMock).toHaveBeenCalled());
+    const snippet = await screen.findByTestId("mcp-snippet");
+    await waitFor(() => {
+      expect(snippet.textContent).toContain(
+        '"BRAIN_VAULT_ROOT": "/Users/x/Documents/brain"',
+      );
+    });
+    // When the resolved path is present, no tilde warning renders.
+    expect(
+      screen.queryByTestId("mcp-snippet-tilde-warning"),
+    ).not.toBeInTheDocument();
+  });
+
+  test("MCP snippet falls back to ~ literal + shows warning when configGet fails", async () => {
+    configGetMock.mockReset();
+    configGetMock.mockRejectedValueOnce(new Error("network"));
+    render(<PanelIntegrations />);
+    const snippet = await screen.findByTestId("mcp-snippet");
+    await waitFor(() => {
+      expect(snippet.textContent).toContain(
+        '"BRAIN_VAULT_ROOT": "~/Documents/brain"',
+      );
+    });
+    expect(
+      await screen.findByTestId("mcp-snippet-tilde-warning"),
+    ).toBeInTheDocument();
   });
 
   test('"Uninstall" opens typed-confirm (word "UNINSTALL") and calls brainMcpUninstall on confirm', async () => {

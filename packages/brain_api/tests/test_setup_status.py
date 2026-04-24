@@ -57,10 +57,10 @@ def _client_for(vault_root: Path) -> TestClient:
 def test_fresh_state_reports_first_run_no_vault_no_token(fresh_vault: Path) -> None:
     """No vault dir, no token file → is_first_run=True, both flags False."""
     # build_app_context creates ``<vault>/.brain`` during lifespan, so at
-    # startup ``vault_root`` exists but we'll delete the token + BRAIN.md to
-    # simulate "brand new". The endpoint checks ``vault_root.is_dir()`` so we
-    # report vault_exists=True here; the "no vault" combination is exercised
-    # inside the fully-set-up inverse below.
+    # startup ``vault_root`` exists but we'll delete the token to simulate
+    # "brand new". The endpoint checks ``vault_root.is_dir()`` so we report
+    # vault_exists=True here; the "no vault" combination is exercised inside
+    # the fully-set-up inverse below.
     app = create_app(vault_root=fresh_vault, allowed_domains=("research",))
     with TestClient(app, base_url="http://localhost") as client:
         # Remove the token file the lifespan minted so has_token flips False.
@@ -73,7 +73,7 @@ def test_fresh_state_reports_first_run_no_vault_no_token(fresh_vault: Path) -> N
         body = r.json()
         assert body["has_token"] is False
         assert body["vault_exists"] is True  # lifespan created it
-        assert body["is_first_run"] is True  # no token OR no BRAIN.md → True
+        assert body["is_first_run"] is True  # no token → True regardless of BRAIN.md
         assert body["vault_path"] == str(fresh_vault)
 
 
@@ -98,11 +98,17 @@ def test_vault_exists_but_no_token_reports_first_run(tmp_path: Path) -> None:
         assert body["is_first_run"] is True
 
 
-def test_vault_and_token_but_no_brain_md_reports_first_run(tmp_path: Path) -> None:
-    """Vault + token present, BRAIN.md missing → first_run stays True."""
+def test_vault_and_token_but_no_brain_md_reports_not_first_run(tmp_path: Path) -> None:
+    """Vault + token present, BRAIN.md missing → is_first_run=False.
+
+    Plan 09 Task 11 QA sweep fix: BRAIN.md is no longer part of the
+    first-run rule. Users who skip the wizard's BRAIN.md step (step 5)
+    or click "Already set up → open app" from the Welcome step land here,
+    and they MUST NOT be forced back into the wizard on every navigation.
+    """
     vault = tmp_path / "vault"
     _make_vault_scaffold(vault)
-    # Deliberately DO NOT write BRAIN.md.
+    # Deliberately DO NOT write BRAIN.md — the rule no longer requires it.
 
     app = create_app(vault_root=vault, allowed_domains=("research",))
     with TestClient(app, base_url="http://localhost") as client:
@@ -111,7 +117,8 @@ def test_vault_and_token_but_no_brain_md_reports_first_run(tmp_path: Path) -> No
         body = r.json()
         assert body["has_token"] is True  # lifespan wrote it
         assert body["vault_exists"] is True
-        assert body["is_first_run"] is True  # missing BRAIN.md → True
+        # BRAIN.md missing but still not_first_run — no redirect loop.
+        assert body["is_first_run"] is False
 
 
 def test_fully_set_up_reports_not_first_run(tmp_path: Path) -> None:

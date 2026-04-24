@@ -34,7 +34,16 @@ describe("DropOverlay", () => {
     render(<DropOverlay visible={false} />);
     const root = screen.getByTestId("drop-overlay");
     expect(root).toHaveAttribute("aria-hidden", "true");
+    // Plan 09 Task 11 QA sweep: `inert` pulls the subtree out of the a11y
+    // heading tree + focus order entirely (aria-hidden alone doesn't).
+    expect(root).toHaveAttribute("inert");
     // Tailwind utility `pointer-events-none` enforces non-interactivity too.
     expect(root.className).toMatch(/pointer-events-none/);
+  });
+
+  test("visible state does NOT set the inert attribute", () => {
+    render(<DropOverlay visible />);
+    const root = screen.getByTestId("drop-overlay");
+    expect(root).not.toHaveAttribute("inert");
   });
 });

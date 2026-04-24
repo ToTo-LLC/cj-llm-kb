@@ -9,6 +9,7 @@ import {
   brainMcpSelftest,
   brainMcpStatus,
   brainMcpUninstall,
+  configGet,
 } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
@@ -31,14 +32,26 @@ import { useSystemStore } from "@/lib/state/system-store";
 const DEFAULT_INSTALL_COMMAND = "python";
 const DEFAULT_INSTALL_ARGS = ["-m", "brain_mcp"];
 
-const MCP_SNIPPET = `"brain": {
+/**
+ * Build the JSON snippet Cursor / Zed / Continue paste into their MCP config
+ * file. Plan 09 Task 11 QA sweep caught that `~` does not expand inside
+ * subprocess env vars — the tilde is passed literal to Python and
+ * `Path("~/Documents/brain").exists()` returns False. We resolve the actual
+ * vault path via `brain_config_get("vault_path")` on mount, then fall back
+ * to the literal tilde with an explicit note so the user knows to swap it.
+ */
+const FALLBACK_VAULT_PATH = "~/Documents/brain";
+
+function buildMcpSnippet(vaultPath: string): string {
+  return `"brain": {
   "command": "python",
   "args": ["-m", "brain_mcp"],
   "env": {
-    "BRAIN_VAULT_ROOT": "~/Documents/brain",
+    "BRAIN_VAULT_ROOT": "${vaultPath}",
     "BRAIN_ALLOWED_DOMAINS": "research,work"
   }
 }`;
+}
 
 interface McpStatus {
   status: string;
@@ -333,15 +346,40 @@ function ClaudeDesktopCard(): React.ReactElement {
 function OtherClientsCard(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
   const [copied, setCopied] = React.useState(false);
+  const [vaultPath, setVaultPath] = React.useState<string | null>(null);
+
+  // Resolve the actual vault path on mount so the emitted snippet is
+  // paste-ready (no tilde expansion trap for subprocess env vars).
+  React.useEffect(() => {
+    let cancelled = false;
+    configGet({ key: "vault_path" })
+      .then((r) => {
+        if (!cancelled) {
+          const v = r.data?.value;
+          setVaultPath(typeof v === "string" ? v : null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setVaultPath(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const resolvedPath = vaultPath ?? FALLBACK_VAULT_PATH;
+  const snippet = buildMcpSnippet(resolvedPath);
+  // Only warn about the tilde when we actually had to fall back to it.
+  const showTildeWarning = vaultPath === null;
 
   const copy = async () => {
     try {
       if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-        await navigator.clipboard.writeText(MCP_SNIPPET);
+        await navigator.clipboard.writeText(snippet);
       } else {
         // Last-resort fallback for environments without the Clipboard API.
         const ta = document.createElement("textarea");
-        ta.value = MCP_SNIPPET;
+        ta.value = snippet;
         document.body.appendChild(ta);
         ta.select();
         document.execCommand("copy");
@@ -379,7 +417,7 @@ function OtherClientsCard(): React.ReactElement {
           data-testid="mcp-snippet"
           className="overflow-x-auto p-3 pr-12 font-mono text-[11px] text-[var(--text)]"
         >
-          {MCP_SNIPPET}
+          {snippet}
         </pre>
         <Button
           variant="ghost"
@@ -399,6 +437,17 @@ function OtherClientsCard(): React.ReactElement {
           )}
         </Button>
       </div>
+
+      {showTildeWarning && (
+        <p
+          data-testid="mcp-snippet-tilde-warning"
+          className="mt-2 text-[10px] text-amber-500 dark:text-amber-300"
+        >
+          Replace <code className="font-mono">~/Documents/brain</code> with the
+          absolute path shown in Settings → General if your vault is elsewhere
+          (Python subprocesses don&apos;t expand <code className="font-mono">~</code>).
+        </p>
+      )}
 
       <p className="mt-2 text-[10px] text-[var(--text-dim)]">
         Tip: change <code className="font-mono">BRAIN_ALLOWED_DOMAINS</code>{" "}

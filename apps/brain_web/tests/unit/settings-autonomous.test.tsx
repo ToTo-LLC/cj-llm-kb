@@ -65,6 +65,22 @@ describe("PanelAutonomous", () => {
     expect(danger).toHaveAttribute("data-danger", "true");
   });
 
+  test("only index_rewrites carries the danger attribute; other 4 rows do not", () => {
+    render(<PanelAutonomous />);
+    const safeRows = ["ingest", "entities", "concepts", "draft"];
+    for (const key of safeRows) {
+      const row = screen.getByTestId(`autonomous-row-${key}`);
+      expect(row).toHaveAttribute("data-danger", "false");
+    }
+  });
+
+  test("index_rewrites row surfaces the 'not recommended' subcopy", () => {
+    render(<PanelAutonomous />);
+    const row = screen.getByTestId("autonomous-row-index_rewrites");
+    expect(row).toHaveTextContent(/not recommended/i);
+    expect(row).toHaveTextContent(/leave this one for manual review/i);
+  });
+
   test("toggling a switch calls configSet with `autonomous.<cat>`", async () => {
     const user = userEvent.setup();
     render(<PanelAutonomous />);

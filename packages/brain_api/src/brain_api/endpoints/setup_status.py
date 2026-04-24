@@ -9,10 +9,17 @@ Contract::
 
     {
       "has_token":    bool,   # <vault>/.brain/run/api-secret.txt exists
-      "is_first_run": bool,   # !has_token OR !vault_exists OR !BRAIN.md
+      "is_first_run": bool,   # !has_token OR !vault_exists
       "vault_exists": bool,   # vault_root is a directory
       "vault_path":   str,    # str(vault_root)
     }
+
+``is_first_run`` intentionally does NOT require a BRAIN.md. Plan 09 Task 11
+QA sweep caught a redirect loop: the wizard step 5 "Skip this →" action
+(and the Welcome step's "Already set up → open app") both leave a vault
+without BRAIN.md, and the old first-run rule forced the user straight back
+into the wizard on every navigation. BRAIN.md is optional content — the
+user can author it later from Settings → BRAIN.md.
 
 Endpoint-level Origin gate on top of the shared middleware (GET is otherwise
 Origin-exempt; see :mod:`brain_api.endpoints._origin`).
@@ -52,9 +59,10 @@ async def get_setup_status(
     vault_exists = vault_root.is_dir()
     token_path = vault_root / ".brain" / "run" / "api-secret.txt"
     has_token = token_path.exists()
-    brain_md_exists = (vault_root / "BRAIN.md").exists()
 
-    is_first_run = (not has_token) or (not vault_exists) or (not brain_md_exists)
+    # BRAIN.md is NOT part of the first-run rule — see module docstring.
+    # Users may skip the BRAIN.md step in the wizard and author it later.
+    is_first_run = (not has_token) or (not vault_exists)
 
     return SetupStatusResponse(
         has_token=has_token,
