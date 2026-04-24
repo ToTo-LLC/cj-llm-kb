@@ -95,6 +95,10 @@ class VaultWriter:
             try:
                 for nf, abs_path in zip(patch.new_files, nf_abs_paths, strict=True):
                     undo_records.append((abs_path, None))
+                    # Persist the undo record BEFORE the mutation so a process
+                    # death between this point and atomic_write still leaves a
+                    # recoverable undo trail (issue #26).
+                    self._write_undo_record(undo_id, undo_records)
                     self._atomic_write(abs_path, nf.content)
                     receipt.applied_files.append(abs_path)
                 for e, abs_path in zip(patch.edits, edit_abs_paths, strict=True):
@@ -102,6 +106,7 @@ class VaultWriter:
                     if e.old not in prev_text:
                         raise ValueError(f"edit old-text not found in {abs_path}")
                     undo_records.append((abs_path, prev_text))
+                    self._write_undo_record(undo_id, undo_records)
                     self._atomic_write(abs_path, prev_text.replace(e.old, e.new, 1))
                     receipt.applied_files.append(abs_path)
                 for ie in patch.index_entries:
@@ -122,15 +127,34 @@ class VaultWriter:
                             summary=summary,
                         )
                     )
+                # Final undo record write (idempotent w.r.t. the per-mutation
+                # writes above; ensures any post-mutation index/log changes
+                # have a clean trailing record).
                 self._write_undo_record(undo_id, undo_records)
                 receipt.undo_id = undo_id
-            except BaseException:
+            except BaseException as exc:
+                rollback_errors: list[BaseException] = []
                 for path, prev in reversed(undo_records):
-                    if prev is None:
-                        if path.exists():
-                            path.unlink()
-                    else:
-                        self._atomic_write(path, prev)
+                    # Wrap each rollback step so one bad rollback does not
+                    # abort the rest of the chain (issue #26).
+                    try:
+                        if prev is None:
+                            if path.exists():
+                                path.unlink()
+                        else:
+                            self._atomic_write(path, prev)
+                    except BaseException as rb_exc:
+                        rollback_errors.append(rb_exc)
+                # Defense-in-depth: scrub the receipt so any caller that
+                # accidentally reads it after the raise sees a clean slate
+                # (issue #26).
+                receipt.applied_files.clear()
+                receipt.undo_id = None
+                if rollback_errors:
+                    exc.add_note(
+                        f"VaultWriter rollback hit {len(rollback_errors)} error(s); "
+                        f"vault may be partially mutated. First: {rollback_errors[0]!r}"
+                    )
                 raise
         return receipt
 
