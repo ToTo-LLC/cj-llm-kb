@@ -1,0 +1,220 @@
+/* ==========================================================================
+   TomorrowToday — Design Tokens
+   Source of truth: TT_Style Guide_v2.pdf + Figma "Web Style Guide" (604:3084)
+   ========================================================================== */
+
+/* ---------- Local brand fonts (Roboto family, self-hosted) ---------- */
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 100; font-display: swap;
+  src: url("./fonts/Roboto-Thin.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 100; font-display: swap;
+  src: url("./fonts/Roboto-ThinItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 200; font-display: swap;
+  src: url("./fonts/Roboto-ExtraLight.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 200; font-display: swap;
+  src: url("./fonts/Roboto-ExtraLightItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 300; font-display: swap;
+  src: url("./fonts/Roboto-Light.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 300; font-display: swap;
+  src: url("./fonts/Roboto-LightItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("./fonts/Roboto-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 400; font-display: swap;
+  src: url("./fonts/Roboto-Italic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("./fonts/Roboto-Medium.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 500; font-display: swap;
+  src: url("./fonts/Roboto-MediumItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("./fonts/Roboto-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 600; font-display: swap;
+  src: url("./fonts/Roboto-SemiBoldItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("./fonts/Roboto-Bold.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 700; font-display: swap;
+  src: url("./fonts/Roboto-BoldItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 800; font-display: swap;
+  src: url("./fonts/Roboto-ExtraBold.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 800; font-display: swap;
+  src: url("./fonts/Roboto-ExtraBoldItalic.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: normal; font-weight: 900; font-display: swap;
+  src: url("./fonts/Roboto-Black.ttf") format("truetype"); }
+@font-face { font-family: "Roboto"; font-style: italic; font-weight: 900; font-display: swap;
+  src: url("./fonts/Roboto-BlackItalic.ttf") format("truetype"); }
+
+/* Roboto Condensed — reserved for utility / compact UI */
+@font-face { font-family: "Roboto Condensed"; font-style: normal; font-weight: 300; font-display: swap;
+  src: url("./fonts/Roboto_Condensed-Light.ttf") format("truetype"); }
+@font-face { font-family: "Roboto Condensed"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("./fonts/Roboto_Condensed-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Roboto Condensed"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("./fonts/Roboto_Condensed-Medium.ttf") format("truetype"); }
+@font-face { font-family: "Roboto Condensed"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("./fonts/Roboto_Condensed-Bold.ttf") format("truetype"); }
+@font-face { font-family: "Roboto Condensed"; font-style: normal; font-weight: 900; font-display: swap;
+  src: url("./fonts/Roboto_Condensed-Black.ttf") format("truetype"); }
+
+:root {
+  /* ---------- Brand color palette (from PDF style guide) ---------- */
+  /* Primary */
+  --tt-cream:       #FDEB9E;   /* C02 M04 Y46 K0  */
+  --tt-teal:        #3E7D89;   /* C78 M38 Y40 K7  */
+  --tt-sky:         #479BD1;   /* C69 M26 Y02 K0  */
+  --tt-orange:      #FF4503;   /* C00 M87 Y100 K0 */
+  --tt-sage:        #96B6A6;   /* C43 M16 Y37 K0  */
+  --tt-cyan:        #00AFF0;   /* C69 M13 Y00 K0  */
+  --tt-navy:        #354362;   /* C86 M74 Y38 K26 */
+  --tt-graphite:    #414042;   /* C68 M62 Y58 K46 */
+
+  /* Neutrals used throughout the product (from Figma) */
+  --tt-ink:         #141414;   /* page background, near-black */
+  --tt-black:       #000000;
+  --tt-white:       #FFFFFF;
+  --tt-offwhite:    #F1F2F2;   /* light logo plate */
+  --tt-steel:       #7391AA;   /* section underline */
+  --tt-line:        rgba(255,255,255,0.20);
+  --tt-line-ink:    rgba(20,20,20,0.20);
+  --tt-muted:       rgba(255,255,255,0.80);
+  --tt-muted-2:     rgba(255,255,255,0.50);
+  --tt-overlay-10:  rgba(255,255,255,0.10);
+  --tt-overlay-04:  rgba(255,255,255,0.04);
+
+  /* ---------- Gradients ---------- */
+  --tt-grad-cream-cyan:   linear-gradient(180deg, #FDEB9E 0%, #00AFF0 100%);
+  --tt-grad-orange-cream: linear-gradient(180deg, #FF4503 0%, #FDEB9E 100%);
+  --tt-grad-cream-orange: linear-gradient(180deg, #FDEB9E 0%, #FF6321 100%);
+  /* vignette used on hero + service backgrounds */
+  --tt-vignette: linear-gradient(180deg, #141414 0%, rgba(0,0,0,0) 36%, #141414 73%);
+
+  /* ---------- Semantic surfaces ---------- */
+  --bg:          var(--tt-ink);
+  --bg-elevated: #1E1E1E;
+  --bg-invert:   var(--tt-white);
+  --fg:          var(--tt-white);
+  --fg-muted:    var(--tt-muted);
+  --fg-ink:      #141414;
+  --border:      var(--tt-line);
+  --border-ink:  var(--tt-line-ink);
+
+  /* ---------- Accent / CTA ---------- */
+  --cta-primary:   var(--tt-cyan);   /* Blue CTA  — most common */
+  --cta-secondary: var(--tt-cream);  /* Yellow CTA */
+  --cta-white:     var(--tt-white);  /* White CTA (gradient-filled) */
+  --cta-hover:     var(--tt-grad-orange-cream);
+
+  /* ---------- Type families ---------- */
+  --font-sans:    "Roboto", system-ui, sans-serif;
+  --font-serif:   Georgia, "Times New Roman", serif; /* Roboto Serif not self-hosted — fallback */
+  --font-display: "Roboto", system-ui, sans-serif; /* display = Roboto Light, big */
+  --font-condensed: "Roboto Condensed", "Roboto", sans-serif;
+
+  /* ---------- Type scale (desktop) ---------- */
+  --h1-size:   80px;   --h1-lh: 1.10; --h1-weight: 300; /* Light */
+  --h2-size:   48px;   --h2-lh: 1.00; --h2-weight: 300;
+  --h3-size:   24px;   --h3-lh: 1.00; --h3-weight: 700; /* SemiBold/Bold */
+  --h4-size:   18px;   --h4-lh: 1.50; --h4-weight: 700;
+  --h5-size:   14px;   --h5-lh: 1.00; --h5-weight: 900; /* Black, uppercase */
+  --h6-size:   14px;   --h6-lh: 1.20; --h6-weight: 400; /* Regular, uppercase */
+  --sub-size:  18px;   --sub-lh: 1.20; --sub-weight: 700; --sub-tracking: 0.04em;
+  --body-size: 20px;   --body-lh: 1.50;
+  --small-size:16px;   --small-lh: 1.50;
+  --micro-size:14px;   --micro-lh: 1.20;
+
+  /* ---------- Spacing ---------- */
+  --s-2:  2px;  --s-4:  4px;  --s-8:  8px;  --s-12: 12px;
+  --s-16:16px;  --s-24:24px;  --s-32:32px;  --s-40: 40px;
+  --s-60:60px;  --s-80:80px;  --s-100:100px;
+
+  /* ---------- Radii ---------- */
+  --r-sm: 5px;    /* container examples */
+  --r-md: 12px;   /* cards inside hero */
+  --r-lg: 16px;   /* UI-element blocks */
+  --r-xl: 24px;   /* service cards, color swatch panels */
+  --r-pill: 60px; /* CTA buttons */
+  --r-full: 999px;
+
+  /* ---------- Elevation ---------- */
+  --shadow-card:   0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px rgba(0,0,0,0.40);
+  --shadow-cta:    0 4px 16px rgba(0,175,240,0.25);
+  --shadow-cta-y:  0 4px 16px rgba(253,235,158,0.25);
+
+  /* ---------- Motion ---------- */
+  --dur-fast: 160ms;
+  --dur:      240ms;
+  --dur-slow: 420ms;
+  --ease:     cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ==========================================================================
+   Base element styles
+   ========================================================================== */
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  line-height: var(--body-lh);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1 { font-family: var(--font-sans); font-weight: var(--h1-weight);
+     font-size: var(--h1-size); line-height: var(--h1-lh); margin: 0; letter-spacing: -0.01em; }
+h2 { font-family: var(--font-sans); font-weight: var(--h2-weight);
+     font-size: var(--h2-size); line-height: var(--h2-lh); margin: 0; }
+h3 { font-family: var(--font-sans); font-weight: var(--h3-weight);
+     font-size: var(--h3-size); line-height: var(--h3-lh); margin: 0; }
+h4 { font-family: var(--font-sans); font-weight: var(--h4-weight);
+     font-size: var(--h4-size); line-height: var(--h4-lh); margin: 0; }
+h5 { font-family: var(--font-sans); font-weight: var(--h5-weight);
+     font-size: var(--h5-size); line-height: var(--h5-lh);
+     text-transform: uppercase; margin: 0; }
+h6 { font-family: var(--font-sans); font-weight: var(--h6-weight);
+     font-size: var(--h6-size); line-height: var(--h6-lh);
+     text-transform: uppercase; margin: 0; }
+
+.tt-sub    { font-weight: var(--sub-weight); font-size: var(--sub-size);
+             line-height: var(--sub-lh); letter-spacing: var(--sub-tracking);
+             text-transform: uppercase; }
+.tt-eyebrow { font-weight: 700; font-size: 18px; letter-spacing: 0.04em; line-height: 1; }
+.tt-body    { font-size: var(--body-size); line-height: var(--body-lh); }
+.tt-small   { font-size: var(--small-size); line-height: var(--small-lh); }
+.tt-micro   { font-size: var(--micro-size); line-height: var(--micro-lh); }
+
+p { margin: 0 0 1em 0; }
+a { color: inherit; text-decoration: none; }
+
+/* Semantic helpers */
+.tt-muted { opacity: 0.8; }
+
+/* ==========================================================================
+   Primitives: CTAs (buttons)
+   ========================================================================== */
+.tt-cta {
+  --cta-bg: var(--cta-primary);
+  --cta-fg: var(--tt-ink);
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 10px;
+  height: 49px;
+  padding: 12px 24px;
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+  background: var(--cta-bg);
+  color: var(--cta-fg);
+  font: 400 18px/1.4 var(--font-sans);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease),
+              color    var(--dur) var(--ease),
+              border-color var(--dur) var(--ease),
+              transform var(--dur-fast) var(--ease);
+  white-space: nowrap;
+}
+.tt-cta:hover { background: var(--cta-hover); color: var(--tt-ink); border-color: rgba(255,255,255,0.2); }
+.tt-cta:active { transform: translateY(1px); }
+.tt-cta:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.tt-cta--yellow { --cta-bg: var(--tt-cream); --cta-fg: var(--tt-ink); }
+.tt-cta--blue   { --cta-bg: var(--tt-cyan);  --cta-fg: var(--tt-ink); }
+.tt-cta--white  { --cta-bg: var(--tt-white); --cta-fg: var(--tt-ink); }
+.tt-cta--ghost  { background: transparent; color: var(--tt-white); border-color: var(--tt-line); }
+.tt-cta--ghost:hover { background: var(--tt-overlay-10); }

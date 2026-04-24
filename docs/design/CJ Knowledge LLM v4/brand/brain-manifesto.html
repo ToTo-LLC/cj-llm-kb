@@ -1,0 +1,1332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>brain — a knowledge base that grows with you, and stays yours</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #111111;
+    --ink-2: #1C1C1B;
+    --graphite: #3A3A38;
+    --pencil: #6F6E68;
+    --rule: #D9D4C6;
+    --paper: #F3EFE4;
+    --paper-2: #EDE8DB;
+    --paper-3: #FBF8F0;
+    --bone: #FFFDF6;
+    --ember: #B8472A;
+    --ember-2: #94331C;
+    --ember-3: #F2D7C9;
+    --sage: #6B7A53;
+    --wine: #7A2E3B;
+    --dusk: #4C5872;
+    --serif: "EB Garamond", Georgia, serif;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--serif);
+    font-size: 19px;
+    line-height: 1.65;
+    color: var(--ink);
+    background: var(--paper);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-color: var(--ember); }
+  a:hover { color: var(--ember); }
+  img, svg { display: block; max-width: 100%; }
+  em { font-style: italic; }
+  strong { font-weight: 600; }
+
+  /* ===== layout ===== */
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 32px; }
+  .wrap--wide { max-width: 1080px; }
+
+  /* ===== masthead ===== */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    padding: 20px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--pencil);
+  }
+  .masthead__left { display: flex; align-items: center; gap: 14px; }
+  .masthead__mark {
+    font-family: var(--serif);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    text-transform: none;
+    font-style: italic;
+  }
+  .masthead__mark .dot { color: var(--ember); font-style: normal; }
+  .masthead__right strong { color: var(--ink); font-weight: 500; }
+
+  /* ===== hero ===== */
+  .hero {
+    padding: 120px 32px 100px;
+    border-bottom: 1px solid var(--ink);
+    position: relative;
+  }
+  .hero__label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin: 0 0 32px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .hero__label::before {
+    content: "";
+    width: 40px;
+    height: 1px;
+    background: var(--ink);
+  }
+  .hero__word {
+    font-family: var(--serif);
+    font-size: clamp(96px, 18vw, 240px);
+    line-height: 0.85;
+    letter-spacing: -0.04em;
+    font-weight: 500;
+    margin: 0 0 40px;
+    color: var(--ink);
+  }
+  .hero__word .dot { color: var(--ember); }
+  .hero__tag {
+    font-family: var(--serif);
+    font-size: clamp(26px, 3.4vw, 40px);
+    font-style: italic;
+    line-height: 1.3;
+    color: var(--graphite);
+    margin: 0 0 64px;
+    max-width: 820px;
+    font-weight: 400;
+  }
+  .hero__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 48px 64px;
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--pencil);
+  }
+  .hero__meta div strong {
+    display: block;
+    font-family: var(--sans);
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-top: 4px;
+  }
+
+  /* ===== chapter ===== */
+  .chapter {
+    padding: 96px 32px 64px;
+  }
+  .chapter--cream { background: var(--paper); }
+  .chapter--bone { background: var(--bone); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+  .chapter--ink { background: var(--ink); color: var(--paper); }
+  .chapter--ink a { color: var(--paper); text-decoration-color: var(--ember); }
+  .chapter--ink .chapter__label { color: #aaa; }
+  .chapter--ink .chapter__label::before { background: var(--ember); }
+
+  .chapter__label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin: 0 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .chapter__label::before {
+    content: "";
+    width: 40px;
+    height: 1px;
+    background: var(--ink);
+  }
+  .chapter__title {
+    font-family: var(--serif);
+    font-size: clamp(36px, 5.4vw, 64px);
+    font-weight: 500;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    margin: 0 0 32px;
+    max-width: 880px;
+  }
+  .chapter--ink .chapter__title { color: var(--paper); }
+  .chapter__lede {
+    font-family: var(--serif);
+    font-size: 26px;
+    font-style: italic;
+    line-height: 1.45;
+    color: var(--graphite);
+    max-width: 760px;
+    margin: 0 0 48px;
+    font-weight: 400;
+  }
+  .chapter--ink .chapter__lede { color: #D4D4CE; }
+
+  /* ===== prose ===== */
+  .prose { max-width: 680px; }
+  .prose p {
+    font-size: 19px;
+    line-height: 1.7;
+    margin: 0 0 22px;
+    color: var(--ink);
+  }
+  .chapter--ink .prose p { color: var(--paper); }
+  .prose p.muted { color: var(--graphite); }
+  .chapter--ink .prose p.muted { color: #C0C0BC; }
+  .prose p.lede {
+    font-size: 24px;
+    font-style: italic;
+    color: var(--graphite);
+    line-height: 1.5;
+    margin-bottom: 32px;
+  }
+  .prose blockquote {
+    margin: 32px 0;
+    padding: 0 0 0 32px;
+    border-left: 2px solid var(--ember);
+    font-style: italic;
+    font-size: 22px;
+    line-height: 1.5;
+    color: var(--graphite);
+  }
+  .chapter--ink .prose blockquote { color: var(--paper); border-left-color: var(--ember); }
+  .prose code, .prose .code {
+    font-family: var(--mono);
+    font-size: 15px;
+    background: var(--paper-2);
+    padding: 2px 7px;
+    border-radius: 2px;
+    color: var(--ink);
+  }
+  .chapter--ink .prose code, .chapter--ink .prose .code {
+    background: var(--ink-2);
+    color: var(--ember-3);
+  }
+  .prose .wl {
+    font-family: var(--mono);
+    color: var(--ember);
+    font-size: 16px;
+  }
+  .prose h3 {
+    font-family: var(--serif);
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    margin: 48px 0 12px;
+    line-height: 1.2;
+  }
+  .chapter--ink .prose h3 { color: var(--paper); }
+
+  /* ===== drop cap ===== */
+  .prose > p:first-of-type::first-letter {
+    font-family: var(--serif);
+    font-size: 5.5em;
+    float: left;
+    line-height: 0.85;
+    margin: 0.08em 0.08em 0 -0.04em;
+    color: var(--ember);
+    font-weight: 500;
+    font-style: normal;
+  }
+
+  /* ===== pull quote ===== */
+  .pullquote {
+    padding: 64px 32px;
+    text-align: center;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    background: var(--paper-2);
+  }
+  .pullquote p {
+    font-family: var(--serif);
+    font-size: clamp(28px, 4vw, 44px);
+    font-style: italic;
+    line-height: 1.3;
+    color: var(--ink);
+    max-width: 900px;
+    margin: 0 auto;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+  .pullquote__cite {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin-top: 24px;
+  }
+
+  /* ===== the halves (problem) ===== */
+  .halves {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border: 1px solid var(--rule);
+    margin: 48px 0;
+  }
+  .half {
+    padding: 32px;
+    background: var(--paper-3);
+  }
+  .half + .half { border-left: 1px solid var(--rule); background: var(--paper-2); }
+  .half__label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ember);
+    margin: 0 0 14px;
+  }
+  .half h4 {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 500;
+    margin: 0 0 12px;
+    letter-spacing: -0.01em;
+  }
+  .half p {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--graphite);
+    margin: 0;
+  }
+  .half__verdict {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--rule);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: var(--pencil);
+    text-transform: uppercase;
+  }
+
+  /* ===== three modes ===== */
+  .modes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    margin: 0;
+  }
+  .mode {
+    padding: 48px 32px;
+    border-right: 1px solid var(--rule);
+    position: relative;
+  }
+  .mode:last-child { border-right: 0; }
+  .mode__no {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ember);
+    letter-spacing: 0.12em;
+    margin-bottom: 10px;
+  }
+  .mode__name {
+    font-family: var(--serif);
+    font-size: 44px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    margin: 0 0 6px;
+  }
+  .mode__name .em { color: var(--ember); font-style: italic; }
+  .mode__sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin: 0 0 32px;
+  }
+  .mode__prompt {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink);
+    background: var(--paper-2);
+    border-left: 2px solid var(--ember);
+    padding: 12px 14px;
+    margin: 0 0 20px;
+  }
+  .mode__prompt::before {
+    content: "you";
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .mode__body {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--graphite);
+    margin: 0 0 20px;
+  }
+  .mode__think {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 15px;
+    color: var(--pencil);
+    padding-top: 16px;
+    border-top: 1px dashed var(--rule);
+  }
+  .mode__think::before {
+    content: "think:";
+    font-family: var(--mono);
+    font-style: normal;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ember);
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  /* ===== differentiators list ===== */
+  .diff {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 0;
+    border-bottom: 1px solid var(--rule);
+    padding: 40px 0;
+  }
+  .diff__n {
+    font-family: var(--serif);
+    font-size: 60px;
+    font-weight: 500;
+    color: var(--ember);
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+  .diff__body {}
+  .diff__body h3 {
+    font-family: var(--serif);
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    margin: 0 0 16px;
+    line-height: 1.15;
+  }
+  .diff__body p {
+    font-size: 18px;
+    line-height: 1.7;
+    color: var(--graphite);
+    margin: 0 0 14px;
+    max-width: 640px;
+  }
+  .diff__list {
+    margin: 16px 0 0;
+    padding: 0;
+    list-style: none;
+    max-width: 640px;
+  }
+  .diff__list li {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--graphite);
+    padding: 8px 0 8px 24px;
+    position: relative;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .diff__list li:last-child { border-bottom: 0; }
+  .diff__list li::before {
+    content: "—";
+    position: absolute;
+    left: 0;
+    color: var(--ember);
+    font-family: var(--mono);
+  }
+  .diff__list li strong { color: var(--ink); font-weight: 600; font-family: var(--mono); font-size: 14px; }
+
+  /* ===== architecture diagram ===== */
+  .archwrap {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 48px 32px;
+    margin: 48px -32px;
+    overflow-x: auto;
+  }
+  .archwrap__label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ember);
+    margin: 0 0 24px;
+  }
+  .ascii {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--paper);
+    white-space: pre;
+    margin: 0;
+  }
+  .ascii .hot { color: var(--ember); }
+  .ascii .dim { color: #888; }
+
+  /* ===== pipeline ===== */
+  .pipeline {
+    counter-reset: pipestep;
+    margin: 32px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .step {
+    counter-increment: pipestep;
+    display: grid;
+    grid-template-columns: 80px 200px 1fr;
+    gap: 0;
+    border-bottom: 1px solid var(--rule);
+    padding: 20px 0;
+    align-items: baseline;
+  }
+  .step__n {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--pencil);
+  }
+  .step__n::before {
+    content: counter(pipestep, decimal-leading-zero);
+  }
+  .step__name {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .step__desc {
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--graphite);
+    max-width: 560px;
+  }
+  .step__desc code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--paper-2);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  /* ===== what it isn't (negative space) ===== */
+  .notlist {
+    border-top: 1px solid var(--rule);
+    margin: 32px 0 0;
+  }
+  .notitem {
+    padding: 24px 0;
+    border-bottom: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 32px;
+    align-items: baseline;
+  }
+  .notitem__head {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .notitem__head::before {
+    content: "not";
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--wine);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: line-through;
+  }
+  .notitem__body {
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--graphite);
+  }
+
+  /* ===== fit check ===== */
+  .fit {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border: 1px solid var(--rule);
+    margin-top: 32px;
+  }
+  .fitcol {
+    padding: 32px;
+  }
+  .fitcol + .fitcol { border-left: 1px solid var(--rule); }
+  .fitcol h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin: 0 0 20px;
+    font-weight: 500;
+  }
+  .fitcol--yes { background: var(--paper-3); }
+  .fitcol--yes h4 { color: var(--sage); }
+  .fitcol--no { background: var(--paper-2); }
+  .fitcol--no h4 { color: var(--wine); }
+  .fitcol ul { list-style: none; padding: 0; margin: 0; }
+  .fitcol li {
+    font-size: 16px;
+    line-height: 1.55;
+    padding: 12px 0 12px 28px;
+    border-bottom: 1px dashed var(--rule);
+    position: relative;
+    color: var(--graphite);
+  }
+  .fitcol li:last-child { border-bottom: 0; }
+  .fitcol li::before {
+    position: absolute;
+    left: 0;
+    font-family: var(--mono);
+    font-size: 14px;
+  }
+  .fitcol--yes li::before { content: "✓"; color: var(--sage); }
+  .fitcol--no li::before { content: "✗"; color: var(--wine); }
+
+  /* ===== install ===== */
+  .install-card {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 40px;
+    margin: 32px 0;
+    position: relative;
+  }
+  .install-card::before {
+    content: attr(data-os);
+    position: absolute;
+    top: 16px; left: 20px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ember);
+  }
+  .install-card pre {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.7;
+    margin: 16px 0 0;
+    color: var(--paper);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .install-card pre .prompt { color: var(--ember); }
+
+  .install-meta {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    margin-top: 32px;
+  }
+  .install-meta__item h5 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin: 0 0 6px;
+    font-weight: 500;
+  }
+  .install-meta__item p {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.15;
+  }
+  .install-meta__item span {
+    display: block;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--graphite);
+    margin-top: 2px;
+  }
+
+  /* ===== roadmap ===== */
+  .roadmap {
+    list-style: none;
+    padding: 0;
+    margin: 32px 0 0;
+    border-top: 1px solid var(--rule);
+  }
+  .roadmap li {
+    padding: 20px 0;
+    border-bottom: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 24px;
+    align-items: baseline;
+  }
+  .roadmap li span {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ember);
+  }
+  .roadmap li p {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--graphite);
+  }
+  .roadmap li p strong {
+    font-family: var(--serif);
+    font-weight: 500;
+    color: var(--ink);
+    font-size: 20px;
+    display: block;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+
+  /* ===== trust section ===== */
+  .trust {
+    counter-reset: trust;
+    list-style: none;
+    padding: 0;
+    margin: 32px 0 0;
+  }
+  .trust li {
+    counter-increment: trust;
+    padding: 24px 0 24px 56px;
+    border-bottom: 1px dashed rgba(255,255,255,0.15);
+    position: relative;
+    font-size: 18px;
+    line-height: 1.65;
+    color: #D4D4CE;
+  }
+  .trust li::before {
+    content: counter(trust);
+    position: absolute;
+    left: 0; top: 24px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ember);
+    letter-spacing: 0.1em;
+    width: 40px;
+  }
+  .trust li strong {
+    font-family: var(--serif);
+    font-weight: 500;
+    color: var(--paper);
+    font-size: 22px;
+    display: block;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .trust li code {
+    font-family: var(--mono);
+    font-size: 14px;
+    background: var(--ink-2);
+    color: var(--ember-3);
+    padding: 1px 6px;
+    border-radius: 2px;
+  }
+
+  /* ===== closer ===== */
+  .closer {
+    padding: 120px 32px 100px;
+    text-align: center;
+  }
+  .closer__pitch {
+    font-family: var(--serif);
+    font-size: clamp(28px, 4vw, 44px);
+    font-style: italic;
+    line-height: 1.3;
+    max-width: 920px;
+    margin: 0 auto 48px;
+    color: var(--ink);
+    font-weight: 400;
+  }
+  .closer__pitch .em { color: var(--ember); font-style: normal; font-weight: 500; }
+
+  /* ===== colophon ===== */
+  .colophon {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 64px 32px 80px;
+    text-align: center;
+    border-top: 1px solid var(--ink);
+  }
+  .colophon__mark {
+    font-family: var(--serif);
+    font-size: 48px;
+    font-weight: 500;
+    font-style: italic;
+    letter-spacing: -0.03em;
+  }
+  .colophon__mark .dot { color: var(--ember); font-style: normal; }
+  .colophon__meta {
+    margin-top: 24px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #888;
+    line-height: 2;
+  }
+  .colophon__links { margin-top: 24px; display: flex; justify-content: center; gap: 32px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .colophon__links a { color: var(--paper); text-decoration-color: var(--ember); }
+
+  /* ===== responsive ===== */
+  @media (max-width: 820px) {
+    .hero, .chapter, .closer { padding-left: 24px; padding-right: 24px; }
+    .halves, .modes, .fit { grid-template-columns: 1fr; }
+    .half + .half, .mode, .fitcol + .fitcol { border-left: 0; border-top: 1px solid var(--rule); }
+    .mode { border-right: 0; border-bottom: 1px solid var(--rule); }
+    .install-meta { grid-template-columns: repeat(2, 1fr); }
+    .diff { grid-template-columns: 60px 1fr; }
+    .step { grid-template-columns: 60px 1fr; }
+    .step__desc { grid-column: 1 / -1; padding-left: 60px; }
+    .notitem { grid-template-columns: 1fr; gap: 8px; }
+    .roadmap li { grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== MASTHEAD ==================== -->
+<header class="masthead">
+  <div class="masthead__left">
+    <span class="masthead__mark">brain<span class="dot">.</span></span>
+    <span>manifesto</span>
+  </div>
+  <div class="masthead__right">
+    <strong>v0.1.0</strong> · April 24, 2026
+  </div>
+</header>
+
+<!-- ==================== HERO ==================== -->
+<div class="hero">
+  <div class="wrap wrap--wide">
+    <div class="hero__label">a manifesto in nine movements</div>
+    <h1 class="hero__word">brain<span class="dot">.</span></h1>
+    <p class="hero__tag">A knowledge base that grows with you — and stays yours.</p>
+    <div class="hero__meta">
+      <div>Runtime<strong>localhost only</strong></div>
+      <div>Vault<strong>plain Markdown, yours</strong></div>
+      <div>Compatible<strong>Obsidian, Finder, vim, git</strong></div>
+      <div>License<strong>MIT · open source</strong></div>
+      <div>Telemetry<strong>none · verifiable</strong></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 01 · THE PROBLEM ==================== -->
+<section class="chapter">
+  <div class="wrap">
+    <div class="chapter__label">01 · the problem</div>
+    <h2 class="chapter__title">Your knowledge tools have a split personality.</h2>
+
+    <div class="prose">
+      <p>The note-taking half — Obsidian, Apple Notes, Notion, a folder of Markdown — is where you actually <em>own</em> your thinking. It's searchable, portable, durable. It survives the company that made it. But it's inert. Notes sit there until you dig them up. Connections between ideas happen only when you remember to make them.</p>
+
+      <p>The AI-assistant half — ChatGPT, Claude, Cursor — is where the synthesis happens. It can summarize, connect, argue with you, rewrite. But it doesn't know what you've already written. It doesn't remember what you said three weeks ago. And whatever you tell it is a one-way deposit: into their servers, their training data, their retention policies. The more useful it becomes, the less it feels like yours.</p>
+
+      <div class="halves">
+        <div class="half">
+          <div class="half__label">Half one · the vault</div>
+          <h4>Durable. Inert.</h4>
+          <p>Your Markdown notes are already yours. They survive the company. They open in any tool. They are, however, dumb as a brick. They never read themselves back to you. They never notice the argument you're having with yourself across three folders.</p>
+          <div class="half__verdict">Trustworthy · unhelpful</div>
+        </div>
+        <div class="half">
+          <div class="half__label">Half two · the assistant</div>
+          <h4>Alive. Forgetful.</h4>
+          <p>The chat window is smart. It can connect ideas, argue, rewrite. But it starts every conversation from zero — and whatever you feed it is a one-way deposit into someone else's servers, training data, retention policies. Useful, but never yours.</p>
+          <div class="half__verdict">Helpful · untrustworthy</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== PULL QUOTE ==================== -->
+<div class="pullquote">
+  <p>brain collapses the two halves.</p>
+  <div class="pullquote__cite">— the thesis, in four words —</div>
+</div>
+
+<!-- ==================== 02 · WHAT IT IS ==================== -->
+<section class="chapter">
+  <div class="wrap">
+    <div class="chapter__label">02 · what it is</div>
+    <h2 class="chapter__title">A local LLM-maintained wiki, with you in the loop.</h2>
+
+    <div class="prose">
+      <p>brain is a knowledge base you run on your own machine, maintained by an LLM. You give it a folder. You tell it what to remember. It reads, classifies, summarizes, and files the things you care about — as plain Markdown files with YAML frontmatter and <span class="wl">[[wikilinks]]</span>. You can chat with it, brainstorm against it, draft inside it. Everything the LLM proposes is staged for your approval before it touches disk. Nothing leaves your computer except the LLM API calls <em>you</em> configure.</p>
+
+      <p>Point <a href="https://obsidian.md">Obsidian</a> at the same folder if you want. brain won't fight you. The vault is a filesystem, not a database. If brain disappears tomorrow, your notes survive because they never stopped being plain files.</p>
+
+      <blockquote>The pattern was popularized by Andrej Karpathy as the "LLM wiki" — a second brain maintained by a first brain. brain is an opinionated, shippable, local-first take on that idea.</blockquote>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 03 · THE THREE MODES ==================== -->
+<section class="chapter chapter--bone">
+  <div class="wrap wrap--wide">
+    <div class="chapter__label">03 · what it feels like to use</div>
+    <h2 class="chapter__title">Three modes. One discipline. One vault.</h2>
+    <p class="chapter__lede">brain has three modes, one for each mental motion most knowledge workers actually do. They share a single memory: your vault.</p>
+  </div>
+
+  <div class="modes">
+    <div class="mode">
+      <div class="mode__no">i.</div>
+      <div class="mode__name"><span class="em">Ask</span></div>
+      <div class="mode__sub">synthesis with citations</div>
+      <div class="mode__prompt">What has the vault said this year about silent-buyer patterns?</div>
+      <div class="mode__body">brain searches your notes, pulls the three most relevant, cross-references two concept files, and composes a short synthesis with <span class="wl">[[wikilinks]]</span> back to the source material. Every claim cites a file. If your notes don't have an answer, it tells you so plainly instead of making one up.</div>
+      <div class="mode__think">a research assistant who has read every note you've ever written and never forgets which one said what.</div>
+    </div>
+
+    <div class="mode">
+      <div class="mode__no">ii.</div>
+      <div class="mode__name"><span class="em">Brainstorm</span></div>
+      <div class="mode__sub">adversarial co-development</div>
+      <div class="mode__prompt">Argue with me about compounding curiosity as a meta-practice.</div>
+      <div class="mode__body">brain takes the opposing position, pressure-tests your reasoning, proposes three angles you haven't considered, and flags where your own prior notes disagree with themselves. It's not a validator. It's not a cheerleader.</div>
+      <div class="mode__think">the friend who reads your drafts and asks <em>but have you thought about —?</em></div>
+    </div>
+
+    <div class="mode">
+      <div class="mode__no">iii.</div>
+      <div class="mode__name"><span class="em">Draft</span></div>
+      <div class="mode__sub">inline document edits</div>
+      <div class="mode__prompt">Rewrite the intro for a non-expert reader.</div>
+      <div class="mode__body">brain proposes inline edits — actual word-level changes, highlighted in the live document. You see what it wants to change before it changes anything. You approve the edits you like, reject the ones you don't. Nothing touches disk until you say so.</div>
+      <div class="mode__think">a copy editor who works at the speed of thought but never overrides your voice without permission.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 04 · DIFFERENTIATORS ==================== -->
+<section class="chapter">
+  <div class="wrap">
+    <div class="chapter__label">04 · what makes it different</div>
+    <h2 class="chapter__title">Six commitments, in descending order of how much they matter.</h2>
+
+    <div class="diff">
+      <div class="diff__n">1.</div>
+      <div class="diff__body">
+        <h3>Your vault is yours. Forever.</h3>
+        <p>The vault is <code style="font-family: var(--mono); background: var(--paper-2); padding: 1px 5px; font-size: 16px;">~/Documents/brain/</code> — a regular folder of Markdown files. Open it in Finder. Open it in Obsidian. Open it in <code style="font-family: var(--mono); background: var(--paper-2); padding: 1px 5px; font-size: 16px;">vim</code>. Commit it to a git repo of your own. Sync it through Dropbox. When brain writes, it writes plain text with YAML frontmatter and <span class="wl">[[wikilinks]]</span> — the format you'd use yourself if you were doing it by hand.</p>
+        <p>If brain shuts down tomorrow, you don't lose your knowledge. You lose the assistant. The knowledge is already on your disk in a format every tool in the world can read.</p>
+      </div>
+    </div>
+
+    <div class="diff">
+      <div class="diff__n">2.</div>
+      <div class="diff__body">
+        <h3>Every change is staged. You're always in the loop.</h3>
+        <p>The LLM doesn't get write access to your vault. It gets write access to a <em>pending patch queue</em>. Every proposed note, every edit, every wikilink addition lands in a queue you review — with a diff, a reason, and one-click approve, edit, or reject.</p>
+        <p>You can flip individual categories to auto-apply (source ingest, entity updates, concept notes) once you trust them. Index rewrites stay manual-by-default with a visible warning before you enable automation — because letting an LLM rewrite your domain indexes without review is the kind of decision you want to make consciously.</p>
+        <ul class="diff__list">
+          <li>The LLM cannot <strong>delete</strong> a file without a typed confirmation ("type <code style="font-family: var(--mono); color: var(--ember)">DELETE-VAULT</code> to permanently remove all your notes")</li>
+          <li>The LLM cannot <strong>bypass</strong> your domain scope (the <code style="font-family: var(--mono);">personal</code> domain never surfaces in default queries)</li>
+          <li>The LLM cannot <strong>exceed</strong> your budget (hard dollar caps stop all LLM calls; no soft warnings)</li>
+          <li>The LLM cannot <strong>log</strong> your prompt or response bodies (opt-in via <code style="font-family: var(--mono);">log_llm_payloads=true</code> only)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="diff">
+      <div class="diff__n">3.</div>
+      <div class="diff__body">
+        <h3>One runtime. Truly local.</h3>
+        <p>Most "AI-powered" tools sit on top of an SDK from an AI company plus a backend service they operate. Your data moves through at least two middlemen before it reaches the model.</p>
+        <p>brain is different. <code style="font-family: var(--mono);">brain start</code> launches one Python process on your machine. That process serves the web UI, the REST API, the WebSocket stream, and the MCP server — all on <code style="font-family: var(--mono);">localhost:4317</code>. When you ask the LLM a question, your browser talks to that local process, which makes a direct HTTPS call to your chosen API provider. No intermediary backend. No account. No cloud sync. No telemetry. No analytics. Not even crash reporting.</p>
+        <p class="muted" style="font-size: 16px; margin-top: 16px;">The only outbound non-LLM calls brain ever makes:</p>
+        <ul class="diff__list">
+          <li><strong>The LLM API calls you configure.</strong> Your prompts go from your machine to Anthropic. That's between you and Anthropic.</li>
+          <li><strong>An opt-out update check</strong> on <code>brain start</code> — one GET to github.com/releases/latest, no identifying headers. Disable with <code>BRAIN_NO_UPDATE_CHECK=1</code>.</li>
+          <li><strong>Tarball downloads</strong> when you run <code>brain upgrade</strong>, if a new version exists.</li>
+        </ul>
+        <p class="muted" style="font-size: 15px; margin-top: 16px;">That's it. You can verify with <code style="font-family: var(--mono);">tcpdump</code> on any network.</p>
+      </div>
+    </div>
+
+    <div class="diff">
+      <div class="diff__n">4.</div>
+      <div class="diff__body">
+        <h3>Three modes, one discipline.</h3>
+        <p><em>Ask</em> / <em>Brainstorm</em> / <em>Draft</em> aren't marketing categories. They're separate system prompts with separate tool policies and — if you want — separate LLM models. Run Ask on Haiku for speed, Brainstorm on Sonnet for depth, Draft on Opus for care. Per-mode cost tracking is built in so you see exactly where your LLM spend goes.</p>
+        <p>The modes share a single memory: your vault. A thread you started in Ask can fork to Brainstorm at any turn. Any mode can propose a note filing or an inline edit. The modes are lenses, not silos.</p>
+      </div>
+    </div>
+
+    <div class="diff">
+      <div class="diff__n">5.</div>
+      <div class="diff__body">
+        <h3>MCP-native. Talk to it from any Claude.</h3>
+        <p>brain ships a Model Context Protocol server out of the box. One command during setup wires it into Claude Desktop. Any conversation in Claude Desktop can read your vault, search your notes, propose patches, and approve them — same safety rails, same scope guards, same cost tracking.</p>
+        <p>You don't have to choose between "talk to the LLM in a nice UI" and "talk to the LLM from your preferred chat client." You get both. If you live in Claude Desktop, brain meets you there. If you live in the web UI, brain is there too. If you live in the terminal, <code>brain chat</code> is there too. Same vault, same patch queue, same knowledge.</p>
+      </div>
+    </div>
+
+    <div class="diff">
+      <div class="diff__n">6.</div>
+      <div class="diff__body">
+        <h3>Obsidian-friendly by design.</h3>
+        <p>The wiki format is the same format Obsidian uses: Markdown + YAML frontmatter + <span class="wl">[[wikilinks]]</span>. Point Obsidian at <code>~/Documents/brain/</code> and everything just works — backlinks, graph view, templates, the whole Obsidian ecosystem. brain becomes the LLM layer on top of your existing Obsidian workflow.</p>
+        <p>Or flip it: keep brain as the primary UI and never touch Obsidian. The vault doesn't care. It's plain text.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 05 · HOW IT WORKS ==================== -->
+<section class="chapter chapter--ink">
+  <div class="wrap wrap--wide">
+    <div class="chapter__label">05 · how it works</div>
+    <h2 class="chapter__title">One process. Four surfaces. Zero middlemen.</h2>
+    <p class="chapter__lede">brain is a Python + TypeScript monorepo. At runtime, one Python process serves everything — UI, API, WebSocket, MCP.</p>
+
+    <div class="archwrap">
+      <div class="archwrap__label">— runtime topology —</div>
+<pre class="ascii">┌────────────────────────────────────────────────────────────┐
+│                   <span class="hot">brain_api</span> <span class="dim">(uvicorn, :4317)</span>               │
+│                                                            │
+│   REST /api/*    ──┬──►  <span class="hot">34-tool surface</span>                   │
+│   WebSocket /ws/*  ├──►  chat streaming, patch events      │
+│   Static /        ─┴──►  Next.js SPA <span class="dim">(brain_web)</span>            │
+│                                                            │
+│                   ▲                                        │
+│                   │ imports                                │
+│                                                            │
+│                <span class="hot">brain_core</span>                                  │
+│   ┌─────────────────────────────────────────┐              │
+│   │   vault I/O · ingest · LLM abstraction  │              │
+│   │   chat · lint · cost · config · scope   │              │
+│   └─────────────────────────────────────────┘              │
+│                   ▲                                        │
+│                   │ imports                                │
+│                                                            │
+│         ┌─────────┼─────────┐                              │
+│         │         │         │                              │
+│     brain_cli  brain_mcp  <span class="dim">(your tests)</span>                    │
+└────────────────────────────────────────────────────────────┘</pre>
+    </div>
+
+    <div class="prose" style="max-width: 760px;">
+      <p>The core library (<code>brain_core</code>) has zero web dependencies. It's where the vault writer, the ingest pipeline, the LLM provider abstraction, the chat loop, the lint checks, the cost ledger, and the scope guard live. Everything — the CLI, the MCP server, the REST API — is a thin wrapper over it.</p>
+    </div>
+
+    <!-- Pipeline -->
+    <div style="color: var(--paper); max-width: 1000px; margin-top: 64px;">
+      <h3 style="font-family: var(--serif); font-size: 32px; font-weight: 500; margin: 0 0 8px; letter-spacing: -0.015em;">The ingest pipeline</h3>
+      <p style="font-size: 17px; color: #C0C0BC; margin: 0 0 24px; max-width: 640px;">Nine stages. Resumable — if step 3 fails, you retry from step 3, not the whole thing. LLM calls are cached by content hash. Nothing re-charges.</p>
+
+      <div class="pipeline" style="border-top-color: rgba(255,255,255,0.15);">
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Claim</div>
+          <div class="step__desc" style="color: #C0C0BC;">The source is claimed and deduped by content hash — safe to re-run on the same URL.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Extract</div>
+          <div class="step__desc" style="color: #C0C0BC;">Handlers for <code style="background: var(--ink-2); color: var(--ember-3);">.txt</code>, <code style="background: var(--ink-2); color: var(--ember-3);">.md</code>, URLs (via trafilatura), PDFs (via pymupdf), <code style="background: var(--ink-2); color: var(--ember-3);">.vtt</code> / <code style="background: var(--ink-2); color: var(--ember-3);">.srt</code> / <code style="background: var(--ink-2); color: var(--ember-3);">.docx</code> transcripts, email, X/Twitter archives.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Classify</div>
+          <div class="step__desc" style="color: #C0C0BC;">Into <code style="background: var(--ink-2); color: var(--ember-3);">research</code> / <code style="background: var(--ink-2); color: var(--ember-3);">work</code> / <code style="background: var(--ink-2); color: var(--ember-3);">personal</code> via a small LLM call. Confidence threshold triggers human review.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Summarize</div>
+          <div class="step__desc" style="color: #C0C0BC;">To a ~200-word abstract. The shape brain uses to file against and surface later.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Integrate</div>
+          <div class="step__desc" style="color: #C0C0BC;">The LLM proposes a typed patch set — new files to create, existing files to edit, index entries to add, a log entry to write.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Validate</div>
+          <div class="step__desc" style="color: #C0C0BC;">Patches run through the scope guard, the wikilink resolver, the frontmatter validator.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Stage</div>
+          <div class="step__desc" style="color: #C0C0BC;">The patch lands in the pending queue — with a diff, a reason, and a cost estimate.</div>
+        </div>
+        <div class="step" style="border-bottom-color: rgba(255,255,255,0.15);">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Review</div>
+          <div class="step__desc" style="color: #C0C0BC;">Human or autonomous mode. Your choice per category, per domain.</div>
+        </div>
+        <div class="step" style="border-bottom: 0;">
+          <div class="step__n" style="color: #888;"></div>
+          <div class="step__name" style="color: var(--paper);">Apply</div>
+          <div class="step__desc" style="color: #C0C0BC;">Atomic temp-and-rename write, with an undo log record so you can revert.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 72px;">
+      <div>
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ember); margin-bottom: 10px;">— patch discipline —</div>
+        <h4 style="font-family: var(--serif); font-size: 22px; font-weight: 500; color: var(--paper); margin: 0 0 10px; letter-spacing: -0.01em;">A single choke point.</h4>
+        <p style="font-size: 15px; line-height: 1.6; color: #C0C0BC; margin: 0;">Every vault mutation goes through <code style="background: var(--ink-2); color: var(--ember-3); padding: 1px 5px; border-radius: 2px; font-family: var(--mono); font-size: 13px;">VaultWriter</code>. Writes are atomic. Every applied change is recorded in an undo log. The only delete path is typed-confirmation with the literal word <code style="background: var(--ink-2); color: var(--ember-3); padding: 1px 5px; border-radius: 2px; font-family: var(--mono); font-size: 13px;">DELETE-VAULT</code>. Even uninstall defaults to <em>keep the vault</em>.</p>
+      </div>
+      <div>
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ember); margin-bottom: 10px;">— scope guard —</div>
+        <h4 style="font-family: var(--serif); font-size: 22px; font-weight: 500; color: var(--paper); margin: 0 0 10px; letter-spacing: -0.01em;">No bypass path.</h4>
+        <p style="font-size: 15px; line-height: 1.6; color: #C0C0BC; margin: 0;">Every vault read and write passes through a function that enforces your current domain scope. There is no code path that skips it. Turn off <code style="background: var(--ink-2); color: var(--ember-3); padding: 1px 5px; border-radius: 2px; font-family: var(--mono); font-size: 13px;">personal</code>, and the LLM cannot see, search, or reference a note in <code style="background: var(--ink-2); color: var(--ember-3); padding: 1px 5px; border-radius: 2px; font-family: var(--mono); font-size: 13px;">personal/*</code> until you turn it back on.</p>
+      </div>
+      <div>
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ember); margin-bottom: 10px;">— cost + budget —</div>
+        <h4 style="font-family: var(--serif); font-size: 22px; font-weight: 500; color: var(--paper); margin: 0 0 10px; letter-spacing: -0.01em;">Hard stops, not warnings.</h4>
+        <p style="font-size: 15px; line-height: 1.6; color: #C0C0BC; margin: 0;">Every LLM call writes a row to <code style="background: var(--ink-2); color: var(--ember-3); padding: 1px 5px; border-radius: 2px; font-family: var(--mono); font-size: 13px;">costs.sqlite</code>: operation, model, tokens, dollar cost, domain. Budget caps are hard stops. Hit your daily cap → all LLM calls pause. You always know what you're spending. You never get a surprise bill.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 06 · WHAT IT ISN'T ==================== -->
+<section class="chapter">
+  <div class="wrap">
+    <div class="chapter__label">06 · what it isn't</div>
+    <h2 class="chapter__title">Honest positioning, because you're smart enough to tell.</h2>
+    <p class="chapter__lede">A brand that claims everything is a brand that promises nothing. Here is what brain deliberately is not.</p>
+
+    <div class="notlist">
+      <div class="notitem">
+        <div class="notitem__head">a Notion or Obsidian replacement</div>
+        <div class="notitem__body">It's an LLM layer on top of the vault you already have (or the one it creates for you). If you love your current note-taking tool, keep using it — just point brain at the same folder.</div>
+      </div>
+      <div class="notitem">
+        <div class="notitem__head">a cloud SaaS</div>
+        <div class="notitem__body">No account. No subscription. No dashboard. You pay Anthropic (or whichever provider you configure) for API use. That's the only recurring cost.</div>
+      </div>
+      <div class="notitem">
+        <div class="notitem__head">a team tool</div>
+        <div class="notitem__body">v0.1.0 is single-user. Collaboration / multi-user is a later-version decision. The vault is yours — sharing is intentionally not frictionless.</div>
+      </div>
+      <div class="notitem">
+        <div class="notitem__head">a research agent</div>
+        <div class="notitem__body">brain doesn't autonomously crawl the web. It ingests the specific sources you point it at — URLs, files, text you drop in. Curation is yours.</div>
+      </div>
+      <div class="notitem">
+        <div class="notitem__head">an agent framework</div>
+        <div class="notitem__body">brain has agent-like qualities (34 tools, the patch-proposal loop), but it's a purpose-built knowledge tool, not a general-purpose agent runtime. Use Claude Desktop + MCP for that pattern.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 07 · FIT ==================== -->
+<section class="chapter chapter--bone">
+  <div class="wrap">
+    <div class="chapter__label">07 · who it's for</div>
+    <h2 class="chapter__title">Some people will love brain. Others shouldn't install it.</h2>
+    <p class="chapter__lede">Two honest lists. Read them before the curl command.</p>
+
+    <div class="fit">
+      <div class="fitcol fitcol--yes">
+        <h4>Probably a fit</h4>
+        <ul>
+          <li>You already maintain notes — Obsidian, a git-versioned Markdown folder, Apple Notes you wish was Markdown.</li>
+          <li>You think about what you read. You write to think. You reread your own notes.</li>
+          <li>You want AI help with synthesis, pushback, and editing, without handing the keys to a third party.</li>
+          <li>You work in a domain where raw thinking is sensitive — strategy, client work, research-in-progress, legal, journals.</li>
+          <li>You care about <em>still works in five years</em> more than <em>newest thing</em>.</li>
+          <li>You have, or can get, an Anthropic API key, and you're comfortable running a local app.</li>
+        </ul>
+      </div>
+      <div class="fitcol fitcol--no">
+        <h4>Probably not a fit</h4>
+        <ul>
+          <li>You want a cloud tool your team can share a URL to.</li>
+          <li>You want something that runs on your phone primarily. brain is desktop-first; mobile is roadmap.</li>
+          <li>You want cheap-and-infinite use. LLM API costs scale with use. Budget caps exist for a reason.</li>
+          <li>You want something with zero technical setup. Install is one line, but it is a terminal line.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 08 · GETTING STARTED ==================== -->
+<section class="chapter">
+  <div class="wrap">
+    <div class="chapter__label">08 · getting started</div>
+    <h2 class="chapter__title">One command. No sudo. No admin.</h2>
+
+    <div class="prose" style="max-width: 680px;">
+      <p>You'll need an <a href="https://console.anthropic.com">Anthropic API key</a> — the wizard will ask for it. Everything else is defaults you can change later.</p>
+    </div>
+
+    <div class="install-card" data-os="macOS 13+">
+      <pre><span class="prompt">$</span> curl -fsSL https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/install.sh | bash</pre>
+    </div>
+
+    <div class="install-card" data-os="Windows 11">
+      <pre><span class="prompt">&gt;</span> irm https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/install.ps1 | iex</pre>
+    </div>
+
+    <div class="prose" style="max-width: 680px;">
+      <p>Then <code>brain start</code>. Your browser opens the setup wizard.</p>
+    </div>
+
+    <div class="install-meta">
+      <div class="install-meta__item">
+        <h5>Install time</h5>
+        <p>~30s<span>on a warm network</span></p>
+      </div>
+      <div class="install-meta__item">
+        <h5>First turn</h5>
+        <p>~3s<span>to first streamed token</span></p>
+      </div>
+      <div class="install-meta__item">
+        <h5>Disk footprint</h5>
+        <p>~500 MB<span>for the app itself</span></p>
+      </div>
+      <div class="install-meta__item">
+        <h5>Ongoing cost</h5>
+        <p>~$3–10/mo<span>typical single-user use</span></p>
+      </div>
+    </div>
+
+    <div class="prose" style="max-width: 680px; margin-top: 48px;">
+      <p>Uninstall is honest: <code>brain uninstall</code> asks four typed-confirmation questions. Your vault is preserved by default. Typing <code>DELETE-VAULT</code> is the only way to remove your notes.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 09 · ROADMAP ==================== -->
+<section class="chapter chapter--bone">
+  <div class="wrap">
+    <div class="chapter__label">09 · what's next</div>
+    <h2 class="chapter__title">v0.1.0 is the shippable first release.</h2>
+    <p class="chapter__lede">Here's what's in motion. The roadmap is public. The spec is public. The lessons from every prior release cycle are public.</p>
+
+    <ul class="roadmap">
+      <li>
+        <span>v0.2.0</span>
+        <p><strong>Mobile-side read</strong>Read-only iOS/Android view at <code style="background: var(--paper-2); padding: 1px 5px; font-family: var(--mono); font-size: 13px;">http://&lt;your-mac&gt;:4317/</code> so you can read notes from your phone.</p>
+      </li>
+      <li>
+        <span>v0.3.0</span>
+        <p><strong>Bulk migration</strong>Bring a 5-year Obsidian vault or Notion export in one pass. Dry-run → review → apply.</p>
+      </li>
+      <li>
+        <span>v0.4.0</span>
+        <p><strong>Broken-wikilink detection</strong>Visual flag on <span class="wl">[[links]]</span> that point nowhere yet.</p>
+      </li>
+      <li>
+        <span>v0.5.0</span>
+        <p><strong>Native PDF upload via web UI</strong>Today PDFs work through the CLI / MCP path; web upload is text-only for v0.1.0.</p>
+      </li>
+      <li>
+        <span>v0.6.0</span>
+        <p><strong>More LLM providers</strong>OpenAI, Google, local-only via Ollama. The <code style="background: var(--paper-2); padding: 1px 5px; font-family: var(--mono); font-size: 13px;">LLMProvider</code> abstraction was built for this.</p>
+      </li>
+      <li>
+        <span>v1.0.0</span>
+        <p><strong>Desktop wrapper</strong>A Tart / Tauri shell so double-clicking an app icon just works, no terminal needed.</p>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 10 · TRUST ==================== -->
+<section class="chapter chapter--ink">
+  <div class="wrap">
+    <div class="chapter__label">10 · a note on trust</div>
+    <h2 class="chapter__title">You have no reason to trust a document like this.</h2>
+    <p class="chapter__lede">Every word above could be a marketing lie. Here's what isn't.</p>
+
+    <ol class="trust">
+      <li>
+        <strong>The code is open source under MIT.</strong>
+        Read it. Grep it for <code>requests.post</code>. Count the outbound call sites. Run <code>tcpdump</code> while brain is running. The <a href="#" style="color: var(--paper); text-decoration-color: var(--ember);">privacy document</a> makes specific, falsifiable claims.
+      </li>
+      <li>
+        <strong>The design document is public.</strong>
+        See <code>docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md</code>. Two thousand lines written before a line of code landed. The architecture in this document isn't a retrofit.
+      </li>
+      <li>
+        <strong>Every release has a public known-issues document.</strong>
+        See <code>docs/v0.1.0-known-issues.md</code>. It lists what's broken, what's deferred, what ships with caveats. If a tool can't honestly tell you what it can't do yet, that's a tell.
+      </li>
+      <li>
+        <strong>The release notes admit the limits.</strong>
+        v0.1.0 ships with five known user-facing shortfalls documented in the release notes — no glossing. If any of those claims turn out wrong, you have the receipts.
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ==================== 11 · CLOSER ==================== -->
+<section class="closer">
+  <p class="closer__pitch">
+    brain turns a folder of Markdown files into an <span class="em">LLM-maintained wiki</span> you own end-to-end — three chat modes <em>(Ask, Brainstorm, Draft)</em>, staged changes with human approval, Obsidian-compatible vault, zero telemetry, Mac + Windows.
+  </p>
+  <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pencil);">— the one-line pitch, for when you need it —</div>
+</section>
+
+<!-- ==================== COLOPHON ==================== -->
+<footer class="colophon">
+  <div class="colophon__mark">brain<span class="dot">.</span></div>
+  <div class="colophon__meta">
+    an open-source project by chris johnson &nbsp;·&nbsp; tomorrow today<br/>
+    mit licensed &nbsp;·&nbsp; v0.1.0 released april 24, 2026<br/>
+    set in eb garamond, inter, jetbrains mono
+  </div>
+  <div class="colophon__links">
+    <a href="https://github.com/ToTo-LLC/cj-llm-kb">github</a>
+    <a href="https://github.com/ToTo-LLC/cj-llm-kb/issues">issues</a>
+    <a href="https://tomorrowtoday.com">@totollc</a>
+  </div>
+</footer>
+
+</body>
+</html>

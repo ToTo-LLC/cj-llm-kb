@@ -1,0 +1,684 @@
+/* ============================================================
+   brand-skin.css — applies the brain. brand to the app chrome
+   Loads AFTER app.css / chat.css / screens.css / dialogs.css / v3.css.
+
+   DESIGN RULE for this file:
+     • Brand PRIMITIVES (--brand-ember, --brand-sage, --brand-wheat, --brand-sky,
+       --brand-ink, --brand-paper) are only used for:
+         (a) pure accent color — dots, focus rings, underline hover, ember bracket
+         (b) on-accent text (e.g. paper text on ember button)
+     • Every SURFACE and every BODY text color must flow through the app's
+       remapped tokens: --surface-0..4, --text, --text-muted, --text-dim,
+       --hairline, --hairline-strong. These tokens are re-defined below for
+       light and dark themes so they flip correctly.
+   ============================================================ */
+
+/* ---- Fonts ---- */
+@import url("https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+/* ============================================================
+   Brand primitives (theme-agnostic) + LIGHT-mode token remap
+   ============================================================ */
+:root,
+[data-theme="light"] {
+  /* Brand primitives */
+  --brand-ink:      #111111;
+  --brand-ink-2:    #1C1C1B;
+  --brand-graphite: #3A3A38;
+  --brand-pencil:   #6F6E68;
+  --brand-rule:     #D9D4C6;
+  --brand-paper:    #F3EFE4;
+  --brand-paper-2:  #EDE8DB;
+  --brand-paper-3:  #FBF8F0;
+  --brand-bone:     #FFFDF6;
+  --brand-ember:    #C64B2E;
+  --brand-ember-2:  #AC3D23;
+  --brand-sage:     #6E7F5B;
+  --brand-wheat:    #D6A34E;
+  --brand-sky:      #6A8CAA;
+
+  /* LIGHT theme — paper canvas */
+  --surface-0: var(--brand-paper);     /* outer page */
+  --surface-1: var(--brand-bone);      /* topbar, main, rail */
+  --surface-2: var(--brand-paper-3);   /* cards, tool-calls */
+  --surface-3: var(--brand-paper-2);   /* hover, nav active, inputs */
+  --surface-4: #E3DDCE;                /* deep input */
+
+  --hairline:         rgba(17, 17, 17, 0.09);
+  --hairline-strong:  rgba(17, 17, 17, 0.20);
+
+  --text:       var(--brand-ink);
+  --text-muted: var(--brand-graphite);
+  --text-dim:   var(--brand-pencil);
+
+  --ok:      var(--brand-sage);
+  --warn:    var(--brand-wheat);
+  --danger:  var(--brand-ember);
+  --info:    var(--brand-sky);
+
+  --dom-research:      var(--brand-sky);
+  --dom-work:          var(--brand-sage);
+  --dom-personal:      var(--brand-ember);
+  --dom-research-soft: rgba(106, 140, 170, 0.12);
+  --dom-work-soft:     rgba(110, 127, 91, 0.14);
+  --dom-personal-soft: rgba(198, 75, 46, 0.10);
+
+  --tt-cyan:   var(--brand-ember);
+  --tt-ink:    var(--brand-paper);
+  --tt-orange: var(--brand-ember);
+  --tt-green:  var(--brand-sage);
+  --tt-yellow: var(--brand-wheat);
+  --tt-blue:   var(--brand-sky);
+
+  /* Typography */
+  --font-sans:    "Inter", "Söhne", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Inter", "Söhne", system-ui, sans-serif;
+  --font-serif:   "EB Garamond", Georgia, "Times New Roman", serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --mono:         var(--font-mono);
+  --serif:        var(--font-serif);
+  --sans:         var(--font-sans);
+
+  /* Radii — brand favors crisp corners */
+  --r-sm:   2px;
+  --r-md:   3px;
+  --r-lg:   4px;
+  --r-pill: 999px;
+
+  /* On-accent text colors — these DO NOT flip with theme
+     (white text stays white on ember in both modes)      */
+  --on-ember: #FBF8F0;
+  --on-ink:   #FBF8F0;
+}
+
+/* ============================================================
+   DARK-mode tokens — ink canvas
+   ============================================================ */
+html[data-theme="dark"],
+[data-theme="dark"] {
+  --surface-0: #0D0D0C;
+  --surface-1: #141412;
+  --surface-2: #1A1A18;
+  --surface-3: #23221F;
+  --surface-4: #2C2B27;
+
+  --hairline:         rgba(243, 239, 228, 0.08);
+  --hairline-strong:  rgba(243, 239, 228, 0.18);
+
+  --text:       var(--brand-paper);
+  --text-muted: rgba(243, 239, 228, 0.62);
+  --text-dim:   rgba(243, 239, 228, 0.38);
+
+  --dom-research:      #88B0D4;
+  --dom-work:          #9BAE86;
+  --dom-personal:      #E06A4A;
+  --dom-research-soft: rgba(136, 176, 212, 0.14);
+  --dom-work-soft:     rgba(155, 174, 134, 0.16);
+  --dom-personal-soft: rgba(224, 106, 74, 0.14);
+}
+
+/* ============================================================
+   Base typography
+   ============================================================ */
+html, body {
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  color: var(--text);
+  background: var(--surface-0);
+}
+
+.brand-wordmark,
+.brand .brand-wordmark {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: -0.01em;
+}
+.brand-wordmark .dot { color: var(--brand-ember); }
+
+.mono, .ts, .turn-meta .ts, .tool-call .name, .cite .mono, .kbd {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero", "ss02";
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-sans);
+  letter-spacing: -0.01em;
+  font-weight: 600;
+  color: var(--text);
+}
+.section-label,
+.rail-header .title,
+.nav-section,
+.nav-thread-date,
+.tweaks-section-label {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   Topbar
+   ============================================================ */
+.topbar {
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+/* Brand block: mark + wordmark + version, all baseline-aligned */
+.topbar .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 8px;
+}
+.topbar .brand .brand-mark {
+  width: 22px;
+  height: 22px;
+  color: var(--text);          /* outline circle + connector pick this up */
+  flex: none;
+  display: block;
+}
+.topbar .brand .name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1;
+}
+.topbar .brand .name .wm {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.topbar .brand .name .wm .dot {
+  color: var(--brand-ember);
+  font-weight: 600;
+  margin-left: 1px;
+}
+.topbar .brand .name .ver {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.10em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  /* sit just above the wordmark baseline as a small caps mark */
+  align-self: center;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+}
+
+/* Larger version of the mark for the empty-state splash */
+.brain-intro .orbs {
+  background: none !important;
+  position: relative;
+  width: 72px !important;
+  height: 72px !important;
+}
+.brain-intro .orbs::before {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(circle 6px at 70% 50%, var(--brand-ember) 0 6px, transparent 7px),
+    radial-gradient(circle 13px at 30% 50%, transparent 0 9px, var(--text) 10px 13px, transparent 14px),
+    linear-gradient(to right, transparent 46%, var(--text) 46% 54%, transparent 54%) center / 100% 4px no-repeat;
+}
+
+/* ============================================================
+   Nav rail
+   ============================================================ */
+.nav {
+  background: var(--surface-1);
+  border-right: 1px solid var(--hairline-strong);
+}
+.nav-section {
+  color: var(--text-dim);
+  font-size: 10px;
+  padding-top: 16px;
+}
+.nav-item { border-radius: var(--r-md); color: var(--text-muted); }
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item.active {
+  background: var(--surface-3);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--brand-ember);
+}
+
+.nav-thread { border-left: 2px solid transparent; }
+.nav-thread:hover { background: var(--surface-2); }
+.nav-thread.active {
+  background: var(--surface-3);
+  border-left-color: var(--brand-ember) !important;
+}
+.nav-thread .t-title { color: var(--text); }
+.nav-thread .t-meta  { color: var(--text-dim); }
+.nav-thread .mode-chip {
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-dim);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.nav-thread.active .mode-chip {
+  background: rgba(198, 75, 46, 0.10);
+  color: var(--brand-ember);
+  border-color: rgba(198, 75, 46, 0.35);
+}
+
+.nav-new,
+.new-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 16px;
+  margin: 6px 2px 12px;
+  background: var(--brand-ember);
+  border: 1px solid var(--brand-ember);
+  color: var(--on-ember);
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  box-shadow: 0 1px 0 rgba(17,17,17,0.04), 0 0 0 1px rgba(255,253,246,0.06) inset;
+  transition: background .14s, border-color .14s, transform .06s;
+}
+.nav-new:hover,
+.new-chat-btn:hover {
+  background: var(--brand-ember-2);
+  border-color: var(--brand-ember-2);
+  color: var(--on-ember);
+}
+.nav-new:active,
+.new-chat-btn:active { transform: translateY(1px); }
+/* Make the "+" glyph a touch larger and aligned */
+.nav-new svg,
+.new-chat-btn svg { width: 14px; height: 14px; }
+
+/* ============================================================
+   Main + rail surfaces
+   ============================================================ */
+.main { background: var(--surface-1); }
+.rail { background: var(--surface-1); border-left: 1px solid var(--hairline-strong); }
+
+/* ============================================================
+   Cost meter
+   ============================================================ */
+.cost-meter {
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  padding: 0 10px;
+  height: 28px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+.cost-meter:hover { background: var(--surface-2); }
+.cost-meter .gauge { background: var(--surface-3); }
+.cost-meter .gauge > span { background: var(--brand-ember); }
+.cost-meter .gauge.warn > span   { background: var(--brand-wheat); }
+.cost-meter .gauge.danger > span { background: var(--brand-ember-2); }
+.cost-meter .label { color: var(--text-dim); }
+
+/* ============================================================
+   Scope picker / segmented
+   ============================================================ */
+.scope-picker {
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  height: 28px;
+}
+.seg {
+  background: var(--surface-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  padding: 2px;
+}
+.seg button { border-radius: var(--r-sm); font-weight: 500; color: var(--text-muted); }
+.seg button:hover { color: var(--text); }
+.seg button.on {
+  background: var(--surface-1);
+  color: var(--text);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.08);
+}
+.seg.mode button.on[data-mode="ask"] .dot        { background: var(--brand-ember); }
+.seg.mode button.on[data-mode="brainstorm"] .dot { background: var(--brand-sky); }
+.seg.mode button.on[data-mode="draft"] .dot      { background: var(--brand-sage); }
+
+.nav-thread .dot.mode-ask,
+.dot.ask        { background: var(--brand-ember) !important; }
+.nav-thread .dot.mode-brainstorm,
+.dot.brainstorm { background: var(--brand-sky) !important; }
+.nav-thread .dot.mode-draft,
+.dot.draft      { background: var(--brand-sage) !important; }
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn {
+  border-radius: var(--r-md);
+  font-weight: 500;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.btn:hover { background: var(--surface-3); border-color: var(--hairline-strong); }
+.btn.primary {
+  background: var(--brand-ember);
+  color: var(--on-ember);
+  border-color: var(--brand-ember);
+}
+.btn.primary:hover { background: var(--brand-ember-2); border-color: var(--brand-ember-2); }
+.btn.ghost {
+  background: transparent;
+  border-color: var(--hairline);
+  color: var(--text-muted);
+}
+.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+.btn.danger {
+  background: transparent;
+  color: var(--brand-ember);
+  border-color: rgba(198, 75, 46, 0.35);
+}
+.btn.danger:hover { background: rgba(198, 75, 46, 0.08); }
+
+.iconbtn { border-radius: var(--r-md); color: var(--text-muted); }
+.iconbtn:hover { background: var(--surface-3); color: var(--text); }
+.iconbtn.active { background: var(--surface-3); color: var(--brand-ember); }
+
+/* ============================================================
+   Chips / pills
+   ============================================================ */
+.chip {
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-muted);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+.chip.dom-research { background: var(--dom-research-soft); color: var(--dom-research); border-color: rgba(106,140,170,0.30); }
+.chip.dom-work     { background: var(--dom-work-soft);     color: var(--dom-work);     border-color: rgba(110,127,91,0.30); }
+.chip.dom-personal { background: var(--dom-personal-soft); color: var(--dom-personal); border-color: rgba(198,75,46,0.30); }
+
+.tiny-pill {
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+}
+.tiny-pill:hover { color: var(--text); border-color: var(--text-muted); background: var(--surface-2); }
+
+/* ============================================================
+   Right rail — PENDING cards
+   ============================================================ */
+.rail-header {
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+.rail-header .title { color: var(--text-dim); font-weight: 600; font-size: 10px; letter-spacing: 0.12em; }
+.rail-header .count {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+}
+
+.pending-card,
+.rail .card {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+}
+.pending-card .kind,
+.rail .card .kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--text);
+  text-transform: uppercase;
+}
+.pending-card .path,
+.rail .card .path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  display: inline-block;
+}
+.pending-card .tag-work     { background: var(--dom-work-soft);     color: var(--dom-work);     }
+.pending-card .tag-research { background: var(--dom-research-soft); color: var(--dom-research); }
+.pending-card .tag-personal { background: var(--dom-personal-soft); color: var(--dom-personal); }
+
+.pending-card .actions .btn,
+.pending-card .act {
+  height: 28px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: 500;
+}
+.pending-card .act.approve,
+.pending-card .btn.approve {
+  background: var(--brand-ember);
+  color: var(--on-ember);
+  border-color: var(--brand-ember);
+}
+.pending-card .act.approve:hover { background: var(--brand-ember-2); border-color: var(--brand-ember-2); }
+.pending-card .act.reject,
+.pending-card .btn.reject {
+  color: var(--brand-ember);
+  border-color: rgba(198,75,46,0.35);
+  background: transparent;
+}
+.pending-card .act.reject:hover { background: rgba(198,75,46,0.08); }
+
+/* ============================================================
+   Chat stream
+   ============================================================ */
+.thread-header,
+.turn-header {
+  border-bottom: 1px solid var(--hairline-strong);
+}
+.thread-header .title,
+.turn-header .title,
+.turn-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.thread-header .meta,
+.turn-header .meta,
+.turn-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.speaker,
+.turn .role,
+.msg-author {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.speaker .mode-tag,
+.turn .mode-tag,
+.msg-author .mode-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-muted);
+  border: 1px solid var(--hairline);
+}
+
+.msg-body,
+.turn-body,
+.prose {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.prose a,
+.msg-body a {
+  color: var(--brand-ember);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.prose a:hover { color: var(--brand-ember-2); }
+[data-theme="dark"] .prose a:hover { color: #E06A4A; }
+
+.tool-call,
+.tool-invoke {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.tool-call .name,
+.tool-invoke .name { color: var(--brand-ember); font-weight: 500; }
+[data-theme="dark"] .tool-call .name,
+[data-theme="dark"] .tool-invoke .name { color: #E06A4A; }
+
+.avatar,
+.cj-avatar {
+  background: var(--brand-ember);
+  color: var(--on-ember);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-sm);
+}
+
+/* ============================================================
+   Composer
+   ============================================================ */
+.composer,
+.composer-wrap,
+.composer-box {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+  color: var(--text);
+}
+.composer:focus-within,
+.composer-wrap:focus-within,
+.composer-box:focus-within {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px var(--hairline);
+}
+.composer textarea,
+.composer [contenteditable],
+.composer-input {
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.composer textarea::placeholder,
+.composer-input::placeholder,
+.composer [contenteditable]:empty::before {
+  color: var(--text-dim);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 17px;
+}
+
+.composer .scope-pill,
+.composer .context-meter {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  color: var(--text-muted);
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.composer .send-btn,
+.send-btn {
+  background: var(--brand-ember);
+  color: var(--on-ember);
+  border: 0;
+  border-radius: var(--r-sm);
+}
+.send-btn:hover { background: var(--brand-ember-2); }
+
+/* ============================================================
+   Citations / wikilinks
+   ============================================================ */
+.wikilink,
+a.wikilink,
+.citation,
+.cite {
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--text-dim);
+  transition: border-color .12s, color .12s;
+}
+.wikilink:hover,
+a.wikilink:hover,
+.citation:hover,
+.cite:hover {
+  color: var(--brand-ember);
+  border-bottom-color: var(--brand-ember);
+  border-bottom-style: solid;
+}
+.wikilink::before { content: "[["; color: var(--brand-ember); margin-right: 1px; font-family: var(--font-mono); }
+.wikilink::after  { content: "]]"; color: var(--brand-ember); margin-left: 1px; font-family: var(--font-mono); }
+.wikilink.no-brackets::before,
+.wikilink.no-brackets::after { content: none; }
+
+/* ============================================================
+   Scrollbars
+   ============================================================ */
+* { scrollbar-width: thin; scrollbar-color: var(--hairline-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--hairline-strong); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-dim); background-clip: padding-box; border: 2px solid transparent; }
+
+/* ============================================================
+   Focus ring + selection
+   ============================================================ */
+:focus-visible { outline: 2px solid var(--brand-ember); outline-offset: 2px; }
+::selection { background: rgba(198, 75, 46, 0.22); color: var(--text); }
+[data-theme="dark"] ::selection { background: rgba(198, 75, 46, 0.35); color: var(--brand-paper); }
