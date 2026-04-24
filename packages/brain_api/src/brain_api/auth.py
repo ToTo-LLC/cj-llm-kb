@@ -27,11 +27,35 @@ _TOKEN_FILENAME = "api-secret.txt"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Accepted hostnames for Host header (any port) and Origin parsing.
-# TODO(Plan 08): add ``"::1"`` once uvicorn's ``--host`` config exposes IPv6
-# on any default port. Current tests + demo run IPv4 only, and production
-# defaults to ``127.0.0.1:4317``; adding ``"::1"`` preemptively is harmless
-# but would create a false sense that IPv6 was tested in Plan 05.
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+# Issue #33: ``"::1"`` is the IPv6 loopback address. The Host-header parser
+# in ``OriginHostMiddleware`` strips the surrounding ``[...]`` so the
+# membership check sees ``::1`` (not ``[::1]``) — see ``_extract_hostname``.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _extract_hostname(host_header: str) -> str:
+    """Extract the hostname (without port) from a ``Host`` header value.
+
+    Handles three shapes:
+    - ``localhost`` → ``localhost`` (no port)
+    - ``127.0.0.1:4317`` → ``127.0.0.1`` (IPv4 with port)
+    - ``[::1]:4317`` → ``::1`` (IPv6 with port; brackets stripped)
+    - ``[::1]`` → ``::1`` (IPv6 without port)
+
+    Returns the empty string for an empty input. The naive ``split(":", 1)``
+    that previously sufficed for IPv4 returns ``"["`` for the bracketed
+    IPv6 form — issue #33 fixes this so the membership check against
+    ``_LOOPBACK_HOSTS`` matches for IPv6 callers too.
+    """
+    if not host_header:
+        return ""
+    if host_header.startswith("["):
+        end = host_header.find("]")
+        if end == -1:
+            # Malformed — return empty so the check fails.
+            return ""
+        return host_header[1:end]
+    return host_header.split(":", 1)[0]
 
 
 def generate_token() -> str:
@@ -151,7 +175,7 @@ class OriginHostMiddleware:
 
         # --- Host header check (always) ---------------------------------
         host = _header_value(scope, "host")
-        hostname = host.split(":", 1)[0] if host else ""
+        hostname = _extract_hostname(host)
         if hostname not in _LOOPBACK_HOSTS:
             await _send_refusal(
                 scope_type,

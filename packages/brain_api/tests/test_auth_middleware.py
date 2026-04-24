@@ -55,6 +55,61 @@ class TestHostValidation:
         response = client.get("/healthz", headers={"Host": "203.0.113.10:4317"})
         assert response.status_code == 403
 
+    def test_accepts_ipv6_loopback_with_port(self, client: TestClient) -> None:
+        """Issue #33: ``[::1]:4317`` is the IPv6 loopback Host form.
+
+        The bracket-stripping in ``_extract_hostname`` lets the membership
+        check against ``_LOOPBACK_HOSTS`` (which holds ``"::1"`` without
+        brackets) succeed.
+        """
+        response = client.get("/healthz", headers={"Host": "[::1]:4317"})
+        assert response.status_code == 200
+
+    def test_accepts_ipv6_loopback_no_port(self, client: TestClient) -> None:
+        """Issue #33: bare ``[::1]`` (no port) is also a valid loopback Host."""
+        response = client.get("/healthz", headers={"Host": "[::1]"})
+        assert response.status_code == 200
+
+    def test_rejects_public_ipv6_host(self, client: TestClient) -> None:
+        """Issue #33: a non-loopback IPv6 address is refused like any other host."""
+        response = client.get("/healthz", headers={"Host": "[2001:db8::1]:4317"})
+        assert response.status_code == 403
+
+
+class TestExtractHostname:
+    """Pure-function unit tests for the IPv6-aware hostname parser (issue #33)."""
+
+    def test_ipv4_with_port(self) -> None:
+        from brain_api.auth import _extract_hostname
+
+        assert _extract_hostname("127.0.0.1:4317") == "127.0.0.1"
+
+    def test_ipv4_no_port(self) -> None:
+        from brain_api.auth import _extract_hostname
+
+        assert _extract_hostname("localhost") == "localhost"
+
+    def test_ipv6_with_port(self) -> None:
+        from brain_api.auth import _extract_hostname
+
+        assert _extract_hostname("[::1]:4317") == "::1"
+
+    def test_ipv6_no_port(self) -> None:
+        from brain_api.auth import _extract_hostname
+
+        assert _extract_hostname("[::1]") == "::1"
+
+    def test_empty(self) -> None:
+        from brain_api.auth import _extract_hostname
+
+        assert _extract_hostname("") == ""
+
+    def test_unterminated_bracket_returns_empty(self) -> None:
+        """Malformed input fails closed — no hostname → membership check fails → 403."""
+        from brain_api.auth import _extract_hostname
+
+        assert _extract_hostname("[::1") == ""
+
 
 class TestOriginValidation:
     def test_get_with_no_origin_allowed(self, client: TestClient) -> None:
