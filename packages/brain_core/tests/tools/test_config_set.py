@@ -67,6 +67,100 @@ def test_settable_keys_match_plan_07_task_4() -> None:
     )
 
 
+def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
+    """Issue #10 regression test — drift watchdog for ``_SETTABLE_KEYS``.
+
+    For every dotted key in the allowlist, walk the path against the live
+    Config / ChatSessionConfig pydantic models and assert the leaf is a
+    real ``model_fields`` entry. Catches the kind of drift that bit Plan
+    04 (commit ``3b107cd``): an allowlist entry that points at a renamed
+    or removed schema field is silently allowed past the security check
+    and only fails at apply time when persistence finally lands.
+
+    Exceptions are documented inline below — they're keys whose
+    persistence path is intentionally deferred (``domain_order`` waits on
+    Plan 07 Task 5) or which live on a non-Config schema (the
+    ``{ask,brainstorm,draft}_model`` overrides live on ChatSessionConfig
+    because they're per-session, not global).
+    """
+    from brain_core.chat.types import ChatSessionConfig
+    from brain_core.config.schema import Config
+
+    # Keys that legitimately don't resolve against Config — see test
+    # docstring. Adding to this set requires a comment justifying why the
+    # key is allowlisted but not on Config.
+    _KNOWN_NOT_ON_CONFIG = {
+        # Per-session chat-mode model overrides — live on
+        # ``ChatSessionConfig.{ask,brainstorm,draft}_model``, not on the
+        # global Config. brain_config_set surfaces them so the Settings
+        # UI can write them, but they're applied per-session at chat
+        # construction time, not persisted on Config.
+        "ask_model": ("ChatSessionConfig", "ask_model"),
+        "brainstorm_model": ("ChatSessionConfig", "brainstorm_model"),
+        "draft_model": ("ChatSessionConfig", "draft_model"),
+        # Plan 07 Task 4: ``domain_order`` is documented as a list[str] of
+        # the user's preferred sidebar order; the persistence path is
+        # explicitly deferred to Plan 07 Task 5 (see create_domain.py:108).
+        # The allowlist entry exists so the Settings page can call
+        # brain_config_set on it without raising; the in-memory write is
+        # currently a no-op acknowledgement. Resolves to Config when Task
+        # 5 lands; until then this exception keeps the drift watchdog
+        # honest about WHY it's allowlisted.
+        "domain_order": ("PENDING", "Config.domain_order (Plan 07 Task 5)"),
+    }
+
+    def _resolve(model: type, dotted: str) -> object:
+        """Walk a dotted path against pydantic model_fields. Returns the
+        leaf field info or raises KeyError with the failing segment."""
+        parts = dotted.split(".")
+        current_model: type = model
+        for i, part in enumerate(parts):
+            fields = getattr(current_model, "model_fields", None)
+            if fields is None or part not in fields:
+                raise KeyError(
+                    f"key {dotted!r} does not resolve: "
+                    f"segment {parts[i]!r} not in {current_model.__name__}.model_fields"
+                )
+            field_info = fields[part]
+            if i == len(parts) - 1:
+                return field_info
+            # Descend into nested model.
+            annotation = field_info.annotation
+            if not isinstance(annotation, type):
+                raise KeyError(
+                    f"key {dotted!r}: cannot descend through non-class "
+                    f"annotation {annotation!r} at segment {part!r}"
+                )
+            current_model = annotation
+        return None  # pragma: no cover — loop always returns
+
+    unresolved: list[str] = []
+    for key in sorted(_SETTABLE_KEYS):
+        if key in _KNOWN_NOT_ON_CONFIG:
+            continue
+        try:
+            _resolve(Config, key)
+        except KeyError as exc:
+            unresolved.append(f"{key!r} → {exc}")
+
+    assert not unresolved, (
+        "Some keys in _SETTABLE_KEYS no longer resolve to real schema "
+        "fields. Add the field to Config (or document the exception in "
+        f"_KNOWN_NOT_ON_CONFIG with a justification):\n  "
+        + "\n  ".join(unresolved)
+    )
+
+    # Sanity-check the exceptions still resolve where they're documented
+    # to live (so the exception itself doesn't rot).
+    for key, (where, _explanation) in _KNOWN_NOT_ON_CONFIG.items():
+        if where == "ChatSessionConfig":
+            assert key in ChatSessionConfig.model_fields, (
+                f"exception for {key!r} claims it lives on ChatSessionConfig "
+                f"but the field is no longer there"
+            )
+        # PENDING entries don't resolve anywhere yet — that's the point.
+
+
 async def test_allows_handler_config_keys(tmp_path: Path) -> None:
     """Issue #23: ``handlers.<handler>.<field>`` paths flow through the
     allowlist + secret-substring check without raising. Persistence is
