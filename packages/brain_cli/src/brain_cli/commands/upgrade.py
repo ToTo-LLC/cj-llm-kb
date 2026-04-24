@@ -117,8 +117,19 @@ def _run_uv_sync(staging_dir: Path) -> None:
     No ``--dev``: we install production deps only, same as the install
     script. Errors surface as a :class:`SwapError` so the caller's
     try/except logic has one type to catch.
+
+    We resolve ``uv`` via :func:`shutil.which` so this works even when
+    ``brain upgrade`` itself is spawned under ``uv run`` (nested
+    invocation) — children of ``uv run`` have the venv's ``bin/`` on
+    PATH but not ``~/.local/bin/`` where uv lives.
     """
-    cmd = ["uv", "sync", "--project", str(staging_dir), "--no-dev"]
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        raise SwapError(
+            "`uv` not found on PATH. Install uv first (https://astral.sh/uv) "
+            "and re-run `brain upgrade`."
+        )
+    cmd = [uv_path, "sync", "--project", str(staging_dir), "--no-dev"]
     try:
         result = subprocess.run(cmd, check=False, capture_output=True, text=True)
     except FileNotFoundError as exc:

@@ -214,6 +214,67 @@ def test_upgrade_rolls_back_when_uv_sync_fails(
     assert (install / "old_file").exists()
 
 
+def test_upgrade_uv_sync_resolves_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_run_uv_sync`` must invoke uv via an absolute path from
+    ``shutil.which`` so it works when brain_cli itself runs under
+    ``uv run`` (nested subprocess — ~/.local/bin/ not on PATH).
+
+    Regression guard for Plan 09 Task 11 install-path bug.
+    """
+
+    class _Ok:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    captured_cmd: list[list[str]] = []
+
+    def _fake_run(args: Any, **_kwargs: object) -> _Ok:
+        captured_cmd.append(list(args))
+        return _Ok()
+
+    # shutil.which returns different absolute paths for uv vs pnpm; both
+    # must propagate verbatim to the subprocess call.
+    def _fake_which(name: str) -> str | None:
+        if name == "uv":
+            return "/opt/uv/bin/uv"
+        if name == "pnpm":
+            return "/opt/node/bin/pnpm"
+        return None
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(upgrade_mod.shutil, "which", _fake_which)
+
+    upgrade_mod._run_uv_sync(tmp_path)
+
+    assert len(captured_cmd) == 1
+    assert captured_cmd[0][0] == "/opt/uv/bin/uv"
+    assert captured_cmd[0][1] == "sync"
+
+
+def test_upgrade_uv_sync_errors_when_uv_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``shutil.which("uv")`` returns ``None`` → SwapError before any
+    subprocess call, so we can surface the install-uv hint cleanly.
+    """
+
+    def _should_not_run(*_a: object, **_kw: object) -> Any:
+        raise AssertionError("subprocess.run must not be invoked when uv is missing")
+
+    monkeypatch.setattr(upgrade_mod.subprocess, "run", _should_not_run)
+    monkeypatch.setattr(upgrade_mod.shutil, "which", lambda _name: None)
+
+    from brain_cli.runtime.swap import SwapError
+
+    with pytest.raises(SwapError) as excinfo:
+        upgrade_mod._run_uv_sync(tmp_path)
+    assert "uv" in str(excinfo.value)
+    assert "astral.sh" in str(excinfo.value)
+
+
 def test_upgrade_rolls_back_when_migration_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

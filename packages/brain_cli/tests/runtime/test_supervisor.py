@@ -8,6 +8,7 @@ exercised fast + deterministically.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,58 @@ def test_start_brain_api_spawns_with_correct_env(
     assert env["BRAIN_API_PORT"] == "4317"
     # Port appears on the argv (uvicorn --port <n>).
     assert "4317" in " ".join(str(a) for a in captured["args"])
+    # argv invokes the venv Python directly as ``<sys.executable> -m
+    # uvicorn ...`` — never a nested ``uv run`` (which would fail under
+    # a PATH that doesn't include ~/.local/bin/). Regression guard for
+    # the Plan 09 Task 11 install-path bug.
+    args = captured["args"]
+    assert args[0] == sys.executable
+    assert args[1:3] == ["-m", "uvicorn"]
+    assert "uv" not in args
+    assert "--project" not in args
+
+
+def test_start_brain_api_does_not_require_uv_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: with PATH stripped of ``~/.local/bin/`` (where uv
+    lives), ``start_brain_api`` must still spawn the child. Before the
+    fix, the bare ``["uv", ...]`` Popen raised FileNotFoundError here.
+
+    Surfaced by Plan 09 Task 11 on 2026-04-24: the install shim runs
+    ``uv run brain ...``, which gives the child Python a PATH that
+    includes the venv's ``bin/`` but not ``~/.local/bin/``. The nested
+    ``subprocess.Popen(["uv", ...])`` failed because ``uv`` itself
+    wasn't discoverable from that PATH.
+    """
+    vault = tmp_path / "vault"
+    install = tmp_path / "install"
+    log_dir = vault / ".brain" / "logs"
+    log_dir.mkdir(parents=True)
+
+    # Simulate the uv-run child env: strip ~/.local/bin/ from PATH.
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    captured: dict[str, Any] = {}
+
+    def fake_popen(args: list[str], **kwargs: Any) -> _FakePopen:
+        captured["args"] = args
+        return _FakePopen(args, **kwargs)
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", fake_popen)
+
+    # No exception — we invoke sys.executable directly, not a bare
+    # "uv" that the restricted PATH can't resolve.
+    proc = supervisor.start_brain_api(
+        port=4317,
+        install_dir=install,
+        vault_root=vault,
+        web_out_dir=install / "web" / "out",
+        log_path=log_dir / "brain-api.log",
+    )
+
+    assert proc.pid == 98765
+    assert captured["args"][0] == sys.executable
 
 
 def test_stop_brain_api_terminates_then_kills(monkeypatch: pytest.MonkeyPatch) -> None:

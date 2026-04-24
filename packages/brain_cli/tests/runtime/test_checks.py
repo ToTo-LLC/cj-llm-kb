@@ -74,12 +74,19 @@ def test_check_venv_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     install = tmp_path / "brain"
     (install / ".venv").mkdir(parents=True)
 
+    captured: dict[str, Any] = {}
+
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, "OK\n", "")
 
+    monkeypatch.setattr(checks.shutil, "which", lambda name: "/fake/bin/uv")
     monkeypatch.setattr(checks.subprocess, "run", fake_run)
     result = checks.check_venv(install_dir=install)
     assert result.status == "pass"
+    # Must use the absolute ``uv`` path from shutil.which, not a bare
+    # ``"uv"`` — regression guard for the Plan 09 Task 11 PATH bug.
+    assert captured["cmd"][0] == "/fake/bin/uv"
 
 
 def test_check_venv_fail_import_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,11 +97,31 @@ def test_check_venv_fail_import_error(tmp_path: Path, monkeypatch: pytest.Monkey
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(cmd, 1, "", "ModuleNotFoundError: brain_core\n")
 
+    monkeypatch.setattr(checks.shutil, "which", lambda name: "/fake/bin/uv")
     monkeypatch.setattr(checks.subprocess, "run", fake_run)
     result = checks.check_venv(install_dir=install)
     assert result.status == "fail"
     assert result.fix_hint is not None
     assert "uv sync" in result.fix_hint
+
+
+def test_check_venv_fail_uv_not_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``shutil.which("uv")`` returns ``None`` → FAIL with install hint.
+
+    Regression: before the Plan 09 Task 11 fix, this relied on the bare
+    ``["uv", ...]`` Popen raising FileNotFoundError at runtime. We now
+    detect it up front via ``shutil.which`` so doctor reports a clean
+    error instead of a subprocess traceback.
+    """
+    install = tmp_path / "brain"
+    (install / ".venv").mkdir(parents=True)
+
+    monkeypatch.setattr(checks.shutil, "which", lambda name: None)
+    result = checks.check_venv(install_dir=install)
+    assert result.status == "fail"
+    assert "uv not on PATH" in result.message
 
 
 # ---------- check_node -----------------------------------------------------

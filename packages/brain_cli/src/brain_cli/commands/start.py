@@ -142,10 +142,13 @@ def start(
             log_path=log_file,
         )
     except FileNotFoundError as exc:
-        # ``uv`` not on PATH — surface a plain-English next-action.
+        # sys.executable missing or uvicorn not installed in the venv —
+        # both point at a broken install. Surface a plain-English next
+        # action.
         typer.echo(
-            "error: `uv` not found on PATH. Install uv first "
-            "(https://astral.sh/uv) or run `brain doctor`.",
+            "error: could not launch brain_api. The venv Python or "
+            "uvicorn is missing — run `brain doctor` to diagnose or "
+            "reinstall.",
             err=True,
         )
         if port_file.exists():

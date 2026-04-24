@@ -2,9 +2,17 @@
 
 Spawns ``uvicorn --factory brain_cli.runtime.backend_factory:build_app``
 with the correct env so brain_api picks up the vault, web-out dir, and
-port. Kill is psutil-backed so we don't have to branch on POSIX signals
-vs Windows termination semantics. Health check uses httpx against
-``/healthz`` with a 200ms poll.
+port. We invoke uvicorn directly via ``sys.executable -m uvicorn`` —
+brain_cli is always launched from a uv-managed venv (the install shim
+runs ``uv run brain ...``), so ``sys.executable`` already points at a
+Python with uvicorn installed. Going through the venv Python instead of
+a nested ``uv run`` call drops one layer of indirection and avoids the
+PATH trap: when brain_cli is itself spawned under ``uv run``, the child
+process's PATH includes the venv's ``bin/`` but NOT ``~/.local/bin/``
+where ``uv`` lives, so a bare ``["uv", ...]`` Popen would fail with
+``FileNotFoundError``. Kill is psutil-backed so we don't have to branch
+on POSIX signals vs Windows termination semantics. Health check uses
+httpx against ``/healthz`` with a 200ms poll.
 """
 
 from __future__ import annotations
@@ -56,11 +64,21 @@ def start_brain_api(
     web_out_dir: Path,
     log_path: Path,
 ) -> subprocess.Popen[bytes]:
-    """Spawn ``uvicorn --factory ...`` as a child process.
+    """Spawn ``python -m uvicorn --factory ...`` as a child process.
 
     Returns the ``Popen`` object (caller stores ``.pid`` in the PID file).
-    Never uses ``shell=True``. Passes a scrubbed env with the three
-    BRAIN_* vars the factory expects.
+    Never uses ``shell=True``. Passes a scrubbed env with the BRAIN_*
+    vars the factory expects.
+
+    We use ``sys.executable`` (the venv's Python interpreter) rather
+    than a nested ``uv run`` call. The parent Python process is already
+    running inside the venv — either because the user ran ``uv run
+    brain ...`` directly or because the install shim did. That means
+    ``sys.executable`` resolves to the venv's Python which has
+    ``uvicorn`` installed. Going through ``uv run`` adds zero value
+    and fails when PATH doesn't include ``uv``'s install location
+    (e.g. a child of ``uv run`` has the venv's ``bin/`` on PATH but
+    NOT ``~/.local/bin/``).
 
     On Windows, we add ``CREATE_NEW_PROCESS_GROUP`` so Ctrl+C in the
     parent shell doesn't cascade into the child (matches Plan 08 spec).
@@ -78,10 +96,8 @@ def start_brain_api(
     # we're just not scrubbing it.
 
     cmd: list[str] = [
-        "uv",
-        "run",
-        "--project",
-        str(install_dir),
+        sys.executable,
+        "-m",
         "uvicorn",
         "--factory",
         "--host",

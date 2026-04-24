@@ -196,9 +196,13 @@ def check_install_dir(install_dir: Path | None = None) -> CheckResult:
 def check_venv(install_dir: Path | None = None) -> CheckResult:
     """Check the venv can import ``brain_core`` cleanly.
 
-    Runs ``uv run --project <install> python -c "import brain_core"`` in a
+    Runs ``<uv> run --project <install> python -c "import brain_core"`` in a
     subprocess so we exercise the *actual* venv, not the interpreter running
-    ``brain doctor`` (they differ in the installed case).
+    ``brain doctor`` (they differ in the installed case). We resolve ``uv``
+    via :func:`shutil.which` so this works even when brain_cli itself was
+    launched under ``uv run`` (nested invocation) — a child process of
+    ``uv run`` has the venv's ``bin/`` on PATH but not ``~/.local/bin/``
+    where uv is installed, so a bare ``["uv", ...]`` Popen would fail.
     """
     install = install_dir or default_install_dir()
 
@@ -212,10 +216,19 @@ def check_venv(install_dir: Path | None = None) -> CheckResult:
             fix_hint=f"Run `uv sync --project {install}`.",
         )
 
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        return CheckResult(
+            name="venv",
+            status="fail",
+            message="uv not on PATH (needed to run the venv)",
+            fix_hint="Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh",
+        )
+
     try:
         proc = subprocess.run(
             [
-                "uv",
+                uv_path,
                 "run",
                 "--project",
                 str(install),
