@@ -270,6 +270,43 @@ async def test_apply_does_not_stop_on_failure(ephemeral_vault: Path, tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_plan_max_files_caps_items_and_short_circuits_classify(
+    ephemeral_vault: Path, tmp_path: Path
+) -> None:
+    """Issue #28: max_files caps the plan AND stops classify before the cap is exceeded.
+
+    The folder has 3 claimable files; we ask for max_files=2 and queue ONLY
+    2 classifier responses. The third file should never be reached — if it
+    were, FakeLLMProvider would raise on the empty queue.
+    """
+    folder = _make_folder(tmp_path)
+    fake = FakeLLMProvider()
+    # Queue exactly 2 — fewer than the 3 claimable files. If plan() walks
+    # past the cap, the 3rd classify call hits an empty queue and raises.
+    fake.queue(CLASSIFY_RESEARCH)
+    fake.queue(CLASSIFY_RESEARCH)
+
+    importer = BulkImporter(_make_pipeline(ephemeral_vault, fake))
+    plan = await importer.plan(folder, allowed_domains=("research",), max_files=2)
+
+    assert len(plan.items) == 2, f"max_files=2 should cap items at 2, got {len(plan.items)}"
+
+
+@pytest.mark.asyncio
+async def test_plan_max_files_zero_or_negative_raises(
+    ephemeral_vault: Path, tmp_path: Path
+) -> None:
+    """Issue #28: ``max_files=0`` is meaningless; reject up front."""
+    folder = _make_folder(tmp_path)
+    fake = FakeLLMProvider()
+    importer = BulkImporter(_make_pipeline(ephemeral_vault, fake))
+    with pytest.raises(ValueError, match="max_files must be positive"):
+        await importer.plan(folder, allowed_domains=("research",), max_files=0)
+    with pytest.raises(ValueError, match="max_files must be positive"):
+        await importer.plan(folder, allowed_domains=("research",), max_files=-1)
+
+
+@pytest.mark.asyncio
 async def test_plan_empty_folder(ephemeral_vault: Path, tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()

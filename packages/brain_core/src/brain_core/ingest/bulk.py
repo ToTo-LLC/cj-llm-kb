@@ -67,6 +67,7 @@ class BulkImporter:
         allowed_domains: tuple[str, ...],
         domain_override: str | None = None,
         glob: str = "**/*",
+        max_files: int | None = None,
     ) -> BulkPlan:
         """Walk `folder` and build a BulkPlan.
 
@@ -82,11 +83,26 @@ class BulkImporter:
           the plan — the caller can choose to skip/reroute. Quarantine check
           happens at `apply` time.
 
+        ``max_files`` (issue #28) caps the number of items that end up in the
+        plan. The walk short-circuits once the cap is reached, so the
+        classifier is not called on files that would have been truncated
+        anyway — the MCP/CLI layer used to pass an unbounded plan and slice
+        post-classify, wasting classifier tokens on the overflow.
+
         Does NOT write to the vault. Does NOT call summarize or integrate.
         """
+        if max_files is not None and max_files <= 0:
+            raise ValueError(f"max_files must be positive, got {max_files}")
+
         result = BulkPlan()
 
         for p in sorted(folder.glob(glob)):
+            # Stop walking as soon as we hit the planned-item cap. We check
+            # at the TOP of the loop so the cap is evaluated before any
+            # per-file work (handler probe, hashing, classify) — that's
+            # the whole point of the kwarg.
+            if max_files is not None and len(result.items) >= max_files:
+                break
             # Skip non-files and symlinks
             if not p.is_file() or p.is_symlink():
                 continue

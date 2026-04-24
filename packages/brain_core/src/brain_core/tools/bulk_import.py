@@ -139,14 +139,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # ------------------------------------------------------------------
     pipeline = _build_pipeline(ctx)
     importer = BulkImporter(pipeline)
-    plan = await importer.plan(folder, allowed_domains=ctx.allowed_domains)
-
-    # Respect max_files at the MCP layer: BulkPlan is a non-frozen dataclass,
-    # so slicing items in place is safe. This truncates AFTER classify, but the
-    # rate-limit pre-check already budgeted for the truncated count; the extra
-    # classifier calls on overflow items are a tradeoff for the simpler API.
-    if max_files is not None and len(plan.items) > max_files:
-        plan.items = plan.items[:max_files]
+    # Push max_files into plan() so the classifier is not invoked on files
+    # past the cap (issue #28). The previous post-classify slice burned
+    # classifier tokens on items the caller had already chosen to drop.
+    plan = await importer.plan(
+        folder,
+        allowed_domains=ctx.allowed_domains,
+        max_files=max_files,
+    )
 
     if dry_run:
         return ToolResult(
