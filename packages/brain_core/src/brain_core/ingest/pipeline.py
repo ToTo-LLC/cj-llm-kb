@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from brain_core.cost.budget import BudgetEnforcer
 from brain_core.ingest.archive import archive_dir_for
 from brain_core.ingest.classifier import ClassifyResult, classify
 from brain_core.ingest.dispatcher import dispatch
@@ -20,9 +21,9 @@ from brain_core.ingest.failures import record_failure
 from brain_core.ingest.hashing import content_hash
 from brain_core.ingest.types import ExtractedSource, IngestResult, IngestStatus
 from brain_core.llm.provider import LLMProvider
-from brain_core.llm.types import LLMMessage, LLMRequest
+from brain_core.llm.types import LLMMessage, LLMRequest, LLMResponse
 from brain_core.prompts.loader import load_prompt
-from brain_core.prompts.schemas import SummarizeOutput
+from brain_core.prompts.schemas import ClassifyOutput, SummarizeOutput
 from brain_core.state.db import StateDB
 from brain_core.vault.frontmatter import parse_frontmatter, serialize_with_frontmatter
 from brain_core.vault.types import NewFile, PatchSet
@@ -87,6 +88,14 @@ class IngestPipeline:
         # in the except handler for record_failure.
         slug = self._slug_for(spec)
 
+        # Issue #29: accumulate per-stage USD spend so the row written into
+        # ``ingest_history`` carries a real ``cost_usd`` rather than the
+        # placeholder 0.0. Stages 2-4 are LLM-free so they contribute nothing;
+        # the classify / summarize / integrate stages each add their estimated
+        # cost. Cost is tracked even on early-return paths (QUARANTINED,
+        # FAILED, etc.) so partial spend is still recorded.
+        run_cost: float = 0.0
+
         try:
             # Stage 2: Dispatch
             handler = await dispatch(spec)
@@ -108,6 +117,7 @@ class IngestPipeline:
                     status=IngestStatus.SKIPPED_DUPLICATE.value,
                     patch_id=None,
                     error=None,
+                    cost_usd=run_cost,
                 )
                 return IngestResult(
                     status=IngestStatus.SKIPPED_DUPLICATE,
@@ -124,12 +134,11 @@ class IngestPipeline:
                     needs_user_pick=False,
                 )
             else:
-                cls_result = await classify(
-                    llm=self.llm,
-                    model=self.classify_model,
+                cls_result, classify_cost = await self._classify_with_cost(
                     title=extracted.title or slug,
                     snippet=extracted.body_text[:1000],
                 )
+                run_cost += classify_cost
             domain = cls_result.domain
             if domain not in allowed_domains:
                 self._record_history(
@@ -139,6 +148,7 @@ class IngestPipeline:
                     status=IngestStatus.QUARANTINED.value,
                     patch_id=None,
                     error=f"domain {domain!r} not in allowed {allowed_domains}",
+                    cost_usd=run_cost,
                 )
                 return IngestResult(
                     status=IngestStatus.QUARANTINED,
@@ -148,7 +158,8 @@ class IngestPipeline:
                 )
 
             # Stage 6: Summarize
-            summary = await self._summarize(extracted)
+            summary, summarize_cost = await self._summarize(extracted)
+            run_cost += summarize_cost
 
             # Stage 7: Build source note — recompute slug with summary title
             slug = self._slug_for(spec, title=summary.title)
@@ -162,12 +173,13 @@ class IngestPipeline:
             )
 
             # Stage 8: Integrate → PatchSet; prepend source note
-            integrate_patch = await self._integrate(
+            integrate_patch, integrate_cost = await self._integrate(
                 extracted=extracted,
                 summary=summary,
                 domain=domain,
                 note_content=note_content,
             )
+            run_cost += integrate_cost
             integrate_patch.new_files.insert(0, NewFile(path=note_path, content=note_content))
 
             # Stage 9: Apply (or stage)
@@ -180,6 +192,7 @@ class IngestPipeline:
                     status=IngestStatus.OK.value,
                     patch_id=receipt.undo_id,
                     error=None,
+                    cost_usd=run_cost,
                 )
                 return IngestResult(
                     status=IngestStatus.OK,
@@ -195,6 +208,7 @@ class IngestPipeline:
                 status=IngestStatus.OK.value,
                 patch_id=None,
                 error=None,
+                cost_usd=run_cost,
             )
             return IngestResult(
                 status=IngestStatus.OK,
@@ -217,6 +231,7 @@ class IngestPipeline:
                 status=IngestStatus.FAILED.value,
                 patch_id=None,
                 error=str(exc),
+                cost_usd=run_cost,
             )
             return IngestResult(
                 status=IngestStatus.FAILED,
@@ -224,8 +239,43 @@ class IngestPipeline:
                 errors=[str(exc)],
             )
 
-    async def _summarize(self, extracted: ExtractedSource) -> SummarizeOutput:
-        """Call the summarize prompt and parse the response as SummarizeOutput."""
+    async def _classify_with_cost(
+        self, *, title: str, snippet: str
+    ) -> tuple[ClassifyResult, float]:
+        """Run the classify prompt inline and return (result, cost_usd).
+
+        Pipeline-private variant of :func:`brain_core.ingest.classifier.classify`
+        — keeps the public free function unchanged for other callers
+        (BulkImporter, the standalone classify tool, contract tests) while
+        giving the pipeline access to the response usage so it can charge
+        the spend to ``ingest_history.cost_usd`` (issue #29).
+        """
+        prompt = load_prompt("classify")
+        user_content = prompt.render(title=title, snippet=snippet)
+        response = await self.llm.complete(
+            LLMRequest(
+                model=self.classify_model,
+                system=prompt.system,
+                messages=[LLMMessage(role="user", content=user_content)],
+                max_tokens=256,
+                temperature=0.0,
+            )
+        )
+        out = ClassifyOutput.model_validate_json(response.content)
+        result = ClassifyResult(
+            source_type=out.source_type,
+            domain=out.domain,
+            confidence=out.confidence,
+            needs_user_pick=out.confidence < 0.7,
+        )
+        return result, _estimate_call_cost(self.classify_model, response)
+
+    async def _summarize(self, extracted: ExtractedSource) -> tuple[SummarizeOutput, float]:
+        """Call the summarize prompt and parse the response as SummarizeOutput.
+
+        Returns ``(parsed, cost_usd)`` so the pipeline can accumulate spend
+        per stage (issue #29).
+        """
         prompt = load_prompt("summarize")
         user_content = prompt.render(
             title=extracted.title or "",
@@ -241,7 +291,8 @@ class IngestPipeline:
                 temperature=0.2,
             )
         )
-        return SummarizeOutput.model_validate_json(response.content)
+        parsed = SummarizeOutput.model_validate_json(response.content)
+        return parsed, _estimate_call_cost(self.summarize_model, response)
 
     async def _integrate(
         self,
@@ -250,12 +301,15 @@ class IngestPipeline:
         summary: SummarizeOutput,
         domain: str,
         note_content: str,
-    ) -> PatchSet:
+    ) -> tuple[PatchSet, float]:
         """Call the integrate prompt and parse the response as a PatchSet.
 
         Feeds the integrate LLM the rendered markdown body of the source note
         (not the SummarizeOutput JSON) so wikilink generation and section
         references work against the same prose the vault will eventually hold.
+
+        Returns ``(parsed, cost_usd)`` so the pipeline can accumulate spend
+        per stage (issue #29).
         """
         prompt = load_prompt("integrate")
         index_path = self.vault_root / domain / "index.md"
@@ -276,7 +330,8 @@ class IngestPipeline:
                 temperature=0.2,
             )
         )
-        return PatchSet.model_validate_json(response.content)
+        parsed = PatchSet.model_validate_json(response.content)
+        return parsed, _estimate_call_cost(self.integrate_model, response)
 
     # ---- Pure helpers (this batch) ----
 
@@ -327,6 +382,7 @@ class IngestPipeline:
         status: str,
         patch_id: str | None,
         error: str | None,
+        cost_usd: float = 0.0,
     ) -> None:
         """Append a row to ``ingest_history`` (Plan 07 Task 4).
 
@@ -334,6 +390,10 @@ class IngestPipeline:
         cannot break the ingest pipeline. Logs the failure via stderr so
         operators still see it. ``state_db is None`` short-circuits — Plan
         02 call sites that never wired a StateDB still work unchanged.
+
+        ``cost_usd`` defaults to 0.0 so non-LLM exit paths (e.g. duplicate
+        skip before any classify call) still write a row without spurious
+        spend (issue #29).
         """
         if self.state_db is None:
             return
@@ -353,8 +413,7 @@ class IngestPipeline:
                     status,
                     patch_id,
                     datetime.now(tz=UTC).isoformat(),
-                    # TODO(plan-07+): wire ingest pricing once Task 3 stage-tagged costs land.
-                    0.0,
+                    cost_usd,
                     error,
                 ),
             )
@@ -429,6 +488,25 @@ class IngestPipeline:
         body = _render_source_body(summary=summary)
         content = serialize_with_frontmatter(fm, body=body)
         return note_path, content
+
+
+def _estimate_call_cost(model: str, response: LLMResponse) -> float:
+    """Return USD cost for ``response`` priced at ``model``'s rates.
+
+    Wraps :meth:`BudgetEnforcer.estimate_cost` and degrades to 0.0 when the
+    pricing table doesn't know the model. We don't want an unrecognized
+    model (e.g. a fake LLM model string in a test) to crash the ingest
+    pipeline — the recorded cost being 0 in that case is the same shape
+    callers see for non-LLM exit paths (issue #29).
+    """
+    try:
+        return BudgetEnforcer.estimate_cost(
+            model=model,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
+    except KeyError:
+        return 0.0
 
 
 def _kebabify(text: str) -> str:

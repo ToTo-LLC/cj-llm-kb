@@ -264,6 +264,89 @@ def _queue_happy_path_responses(fake: FakeLLMProvider) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ingest_history_records_real_cost_usd(
+    ephemeral_vault: Path, fixtures_dir: Path
+) -> None:
+    """Issue #29: ingest_history.cost_usd reflects classify+summarize+integrate spend.
+
+    Previously the cost column was hardcoded to 0.0. Now the pipeline sums
+    each LLM stage's cost (priced via BudgetEnforcer.estimate_cost) and
+    writes the total into the row.
+    """
+    from brain_core.cost.budget import BudgetEnforcer
+    from brain_core.state.db import StateDB
+
+    fake = FakeLLMProvider()
+    # Queue with explicit token usage so we can predict the cost.
+    fake.queue(
+        '{"source_type":"text","domain":"research","confidence":0.95}',
+        input_tokens=100,
+        output_tokens=50,
+    )
+    fake.queue(
+        SummarizeOutput(
+            title="hello",
+            summary="A greeting.",
+            key_points=["says hi"],
+            entities=[],
+            concepts=[],
+            open_questions=[],
+        ).model_dump_json(),
+        input_tokens=200,
+        output_tokens=120,
+    )
+    fake.queue(
+        PatchSet(
+            index_entries=[
+                IndexEntryPatch(section="Sources", line="- [[hello]] — greeting", domain="research")
+            ],
+            log_entry="## [2026-04-24 12:00] ingest | source | [[hello]]",
+            reason="test",
+        ).model_dump_json(),
+        input_tokens=300,
+        output_tokens=80,
+    )
+
+    db_path = ephemeral_vault / ".brain" / "state.sqlite"
+    db = StateDB.open(db_path)
+
+    p = IngestPipeline(
+        vault_root=ephemeral_vault,
+        writer=VaultWriter(vault_root=ephemeral_vault),
+        llm=fake,
+        summarize_model="claude-sonnet-4-6",
+        integrate_model="claude-sonnet-4-6",
+        classify_model="claude-haiku-4-5-20251001",
+        state_db=db,
+    )
+    res = await p.ingest(fixtures_dir / "hello.txt", allowed_domains=("research",))
+    assert res.status is IngestStatus.OK
+
+    # Expected cost: classify (haiku) + summarize (sonnet) + integrate (sonnet)
+    expected = (
+        BudgetEnforcer.estimate_cost(
+            model="claude-haiku-4-5-20251001", input_tokens=100, output_tokens=50
+        )
+        + BudgetEnforcer.estimate_cost(
+            model="claude-sonnet-4-6", input_tokens=200, output_tokens=120
+        )
+        + BudgetEnforcer.estimate_cost(
+            model="claude-sonnet-4-6", input_tokens=300, output_tokens=80
+        )
+    )
+    assert expected > 0.0, "test pricing math should yield non-zero cost"
+
+    rows = db.exec("SELECT cost_usd, status FROM ingest_history").fetchall()
+    assert len(rows) == 1, f"expected one ingest_history row, got {len(rows)}"
+    cost_usd, status = rows[0]
+    assert status == IngestStatus.OK.value
+    assert cost_usd == pytest.approx(expected), (
+        f"ingest_history.cost_usd should match summed stage cost — "
+        f"expected {expected}, got {cost_usd}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_ingest_default_still_applies(ephemeral_vault: Path, fixtures_dir: Path) -> None:
     """Regression: the default call (no apply kwarg) still writes to the vault.
 
