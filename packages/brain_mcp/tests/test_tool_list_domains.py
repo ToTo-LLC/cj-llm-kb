@@ -8,7 +8,7 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any
 
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.list_domains import INPUT_SCHEMA, NAME, handle
 from mcp.client.session import ClientSession
 

@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.get_brain_md import INPUT_SCHEMA, NAME, handle
 
 

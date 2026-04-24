@@ -22,7 +22,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from pydantic import AnyUrl
 
-from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
 from brain_mcp.resources import brain_md as _brain_md_res
 from brain_mcp.resources import config_public as _config_public_res
 from brain_mcp.resources import domain_index as _domain_index_res
@@ -60,7 +60,8 @@ from brain_mcp.tools import rename_domain as _rename_domain_tool
 from brain_mcp.tools import search as _search_tool
 from brain_mcp.tools import set_api_key as _set_api_key_tool
 from brain_mcp.tools import undo_last as _undo_last_tool
-from brain_mcp.tools.base import ToolContext, ToolModule
+from brain_core.tools import ToolModule
+from brain_core.tools.base import ToolContext
 
 # Task 10+ appends more modules here.
 _TOOL_MODULES: list[ToolModule] = [

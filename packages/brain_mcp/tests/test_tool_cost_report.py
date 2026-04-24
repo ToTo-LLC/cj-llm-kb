@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from brain_core.cost.ledger import CostEntry
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.cost_report import NAME, handle
 
 

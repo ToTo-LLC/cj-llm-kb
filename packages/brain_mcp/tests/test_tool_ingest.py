@@ -16,8 +16,8 @@ import pytest
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.prompts.schemas import SummarizeOutput
 from brain_core.vault.types import IndexEntryPatch, PatchSet
-from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
-from brain_mcp.tools.base import ToolContext
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.ingest import INPUT_SCHEMA, NAME, handle
 
 

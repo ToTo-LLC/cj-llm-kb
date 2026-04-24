@@ -1,24 +1,33 @@
-"""Tests for brain_mcp.tools.base — ToolContext + helpers."""
+"""Tests for ``brain_mcp.tools.base`` — MCP-specific transport helpers.
+
+After issue #39 (2026-04-24) the module surface shrank to a single symbol:
+``text_result``. ``ToolContext`` / ``ToolResult`` / ``ToolModule`` /
+``scope_guard_path`` no longer live here — every call site pulls them from
+``brain_core.tools`` / ``brain_core.tools.base`` directly. The previous
+re-export identity test (``assert CoreCtx is McpCtx``) is therefore
+obsolete and has been removed.
+
+The frozen-dataclass behavior and ``scope_guard_path`` semantics are
+exercised in ``packages/brain_core/tests/tools/test_base.py``; the tests
+here focus on ``text_result``.
+"""
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from pathlib import Path
 
-import pytest
-from brain_core.vault.paths import ScopeError
-from brain_mcp.tools.base import (
-    ToolContext,
-    scope_guard_path,
-    text_result,
-)
+from brain_core.tools.base import ToolContext, ToolResult
+from brain_mcp.tools.base import text_result
 
 
-def _ctx(vault_root: Path, *, allowed_domains: tuple[str, ...] = ("research",)) -> ToolContext:
+def _ctx(vault_root: Path) -> ToolContext:
+    # ToolContext construction is smoke-only here — the brain_core
+    # test_base.py pins the full field contract (issue #31 added
+    # ``config`` bringing it to 11 fields).
     return ToolContext(
         vault_root=vault_root,
-        allowed_domains=allowed_domains,
+        allowed_domains=("research",),
         retrieval=None,
         pending_store=None,
         state_db=None,
@@ -28,33 +37,6 @@ def _ctx(vault_root: Path, *, allowed_domains: tuple[str, ...] = ("research",)) 
         rate_limiter=None,
         undo_log=None,
     )
-
-
-def test_tool_context_frozen(tmp_path: Path) -> None:
-    ctx = _ctx(tmp_path)
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        ctx.allowed_domains = ("personal",)  # type: ignore[misc]
-
-
-def test_scope_guard_path_happy(tmp_path: Path) -> None:
-    (tmp_path / "research" / "notes").mkdir(parents=True)
-    (tmp_path / "research" / "notes" / "foo.md").write_text("x", encoding="utf-8")
-    ctx = _ctx(tmp_path)
-    resolved = scope_guard_path("research/notes/foo.md", ctx)
-    assert resolved == (tmp_path / "research" / "notes" / "foo.md").resolve()
-
-
-def test_scope_guard_path_rejects_out_of_scope(tmp_path: Path) -> None:
-    (tmp_path / "personal" / "notes").mkdir(parents=True)
-    ctx = _ctx(tmp_path, allowed_domains=("research",))
-    with pytest.raises(ScopeError):
-        scope_guard_path("personal/notes/secret.md", ctx)
-
-
-def test_scope_guard_path_rejects_absolute(tmp_path: Path) -> None:
-    ctx = _ctx(tmp_path)
-    with pytest.raises(ValueError, match="vault-relative"):
-        scope_guard_path(str(tmp_path / "research" / "foo.md"), ctx)
 
 
 def test_text_result_plain() -> None:
@@ -73,14 +55,26 @@ def test_text_result_with_data() -> None:
     assert parsed == {"key": "value", "count": 3}
 
 
-def test_brain_mcp_tool_context_is_brain_core_tool_context() -> None:
-    """The re-export preserves identity — no subclass or alias duplication.
+def test_text_result_accepts_tool_result() -> None:
+    """Task 5/6 shim form: ``text_result(ToolResult(...))`` unwraps text+data."""
+    out = text_result(ToolResult(text="summary", data={"count": 3}))
+    assert len(out) == 2
+    assert out[0].text == "summary"
+    parsed = json.loads(out[1].text)
+    assert parsed == {"count": 3}
 
-    Group 2 (Plan 05 Tasks 5/6) depends on this: every brain_mcp test that
-    constructs ``ToolContext(...)`` via the ``brain_mcp.tools.base`` import
-    path must produce the IDENTICAL class as ``brain_core.tools.base``.
-    """
-    from brain_core.tools.base import ToolContext as CoreCtx
-    from brain_mcp.tools.base import ToolContext as McpCtx
 
-    assert CoreCtx is McpCtx
+def test_text_result_tool_result_without_data() -> None:
+    """A ToolResult with no ``data`` produces one TextContent, not two."""
+    out = text_result(ToolResult(text="summary"))
+    assert len(out) == 1
+    assert out[0].text == "summary"
+
+
+def test_smoke_ctx_construct(tmp_path: Path) -> None:
+    """Smoke check that ``ToolContext`` is still importable and constructible
+    via the ``brain_core.tools.base`` path. Full contract tests live in
+    ``brain_core/tests/tools/test_base.py``."""
+    ctx = _ctx(tmp_path)
+    assert ctx.vault_root == tmp_path
+    assert ctx.allowed_domains == ("research",)

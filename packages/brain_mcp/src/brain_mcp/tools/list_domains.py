@@ -9,7 +9,8 @@ from brain_core.rate_limit import RateLimitError
 from brain_core.tools.list_domains import DESCRIPTION, INPUT_SCHEMA, NAME
 from brain_core.tools.list_domains import handle as _core_handle
 
-from brain_mcp.tools.base import ToolContext, text_result
+from brain_core.tools.base import ToolContext
+from brain_mcp.tools.base import text_result
 
 __all__ = ["DESCRIPTION", "INPUT_SCHEMA", "NAME", "handle"]
 

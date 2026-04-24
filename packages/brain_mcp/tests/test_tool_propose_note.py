@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 from brain_core.vault.paths import ScopeError
-from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
-from brain_mcp.tools.base import ToolContext
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.propose_note import NAME, handle
 
 

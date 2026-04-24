@@ -19,9 +19,9 @@ import pytest
 from brain_core.chat.types import ChatMode
 from brain_core.vault.paths import ScopeError
 from brain_core.vault.types import NewFile, PatchSet
-from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
 from brain_mcp.tools.apply_patch import NAME, handle
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 
 
 def test_name() -> None:

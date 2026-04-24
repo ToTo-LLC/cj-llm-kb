@@ -14,7 +14,7 @@ from pathlib import Path
 
 from brain_core.chat.persistence import ThreadPersistence
 from brain_core.chat.types import ChatMode, ChatSessionConfig, ChatTurn, TurnRole
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.fork_thread import INPUT_SCHEMA, NAME, handle
 
 

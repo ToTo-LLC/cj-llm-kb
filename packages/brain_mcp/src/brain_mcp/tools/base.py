@@ -1,14 +1,15 @@
 """MCP-transport helpers for brain_mcp tools.
 
-``ToolContext``, ``ToolResult``, and ``scope_guard_path`` are re-exported
-verbatim from ``brain_core.tools.base`` — identity preserved, no subclass or
-alias wrapping, so any test that compares classes sees the same object.
+``text_result`` is MCP-SDK-specific: it returns ``list[mcp.types.TextContent]``.
+The overloaded signature keeps Plan 04 call sites working while letting
+Task 5/6 shims wrap a ``ToolResult`` directly.
 
-``text_result`` lives here because it is MCP-SDK-specific: it returns
-``list[mcp.types.TextContent]``. The overloaded signature keeps Plan 04 call
-sites working while letting Task 5/6 shims wrap a ``ToolResult`` directly.
-``ToolModule`` re-exports the ``ModuleType`` alias from ``brain_core.tools``
-so ``brain_mcp.server`` stays on the current import path.
+Issue #39 (closed 2026-04-24): ``ToolContext`` / ``ToolResult`` /
+``ToolModule`` / ``scope_guard_path`` are no longer re-exported from this
+module. Every call site in brain_mcp (and the 30+ brain_mcp tests) now
+imports them from ``brain_core.tools`` / ``brain_core.tools.base``
+directly. The previous re-export existed only as a Plan 05 Task 14
+compatibility shim after those symbols moved into brain_core.
 """
 
 from __future__ import annotations
@@ -17,16 +18,9 @@ import json
 from typing import Any
 
 import mcp.types as types
-from brain_core.tools import ToolModule
-from brain_core.tools.base import ToolContext, ToolResult, scope_guard_path
+from brain_core.tools.base import ToolResult
 
-__all__ = [
-    "ToolContext",
-    "ToolModule",
-    "ToolResult",
-    "scope_guard_path",
-    "text_result",
-]
+__all__ = ["text_result"]
 
 
 def text_result(

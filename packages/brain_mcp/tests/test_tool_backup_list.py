@@ -8,7 +8,7 @@ from pathlib import Path
 
 from brain_core.backup import create_snapshot
 from brain_mcp.tools.backup_list import NAME, handle
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 
 
 def test_name() -> None:

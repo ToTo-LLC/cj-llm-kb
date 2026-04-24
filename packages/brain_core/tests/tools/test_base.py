@@ -37,6 +37,27 @@ def test_tool_result_frozen_with_optional_data() -> None:
         result.text = "mutated"  # type: ignore[misc]
 
 
+def test_tool_context_frozen(tmp_path: Path) -> None:
+    """``ToolContext`` is a frozen dataclass — every field is immutable once
+    constructed. Previously covered in brain_mcp/tests/test_tools_base.py via
+    the re-export; moved here as part of issue #39 when the re-export shim
+    was deleted (ToolContext now lives only in brain_core).
+    """
+    ctx = _ctx(tmp_path)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ctx.allowed_domains = ("personal",)  # type: ignore[misc]
+
+
+def test_scope_guard_path_happy(tmp_path: Path) -> None:
+    """Happy-path smoke for ``scope_guard_path``. Previously in
+    brain_mcp/tests/test_tools_base.py via re-export; moved here with #39."""
+    (tmp_path / "research" / "notes").mkdir(parents=True)
+    (tmp_path / "research" / "notes" / "foo.md").write_text("x", encoding="utf-8")
+    ctx = _ctx(tmp_path)
+    resolved = scope_guard_path("research/notes/foo.md", ctx)
+    assert resolved == (tmp_path / "research" / "notes" / "foo.md").resolve()
+
+
 def test_tool_context_field_set(tmp_path: Path) -> None:
     """The field set must match the Plan 04 + Plan 09 contract — brain_mcp
     tests depend on it. ``config`` was added in issue #31 as an optional

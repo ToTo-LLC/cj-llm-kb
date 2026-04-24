@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 from brain_mcp.tools.bulk_import import NAME, handle
 
 

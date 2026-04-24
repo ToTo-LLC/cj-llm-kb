@@ -31,9 +31,9 @@ from brain_core.llm.fake import FakeLLMProvider
 from brain_core.state.db import StateDB
 from brain_core.vault.undo import UndoLog
 from brain_core.vault.writer import VaultWriter
-from brain_mcp.rate_limit import RateLimitConfig, RateLimiter
+from brain_core.rate_limit import RateLimitConfig, RateLimiter
 from brain_mcp.server import create_server
-from brain_mcp.tools.base import ToolContext
+from brain_core.tools.base import ToolContext
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_connected_server_and_client_session
 
