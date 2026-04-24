@@ -181,6 +181,72 @@ class OriginHostMiddleware:
         await self.app(scope, receive, send)
 
 
+class RequestIDMiddleware:
+    """Stamp every HTTP request with a request_id and echo it back as ``X-Request-ID``.
+
+    Issue #32. The 500 catch-all handler reads ``request.state.request_id``
+    and surfaces it under ``detail.request_id`` so the frontend error
+    boundary can show it to the user — and the matching server log line
+    (``Unhandled exception ... (request_id=...)``) becomes joinable.
+
+    Honors a caller-supplied ``X-Request-ID`` header if present (for
+    distributed-trace propagation). Otherwise generates a fresh UUID4 hex.
+
+    Pure ASGI middleware so it runs on both ``http`` and ``websocket``
+    scopes (mirrors :class:`OriginHostMiddleware`). The id is attached to
+    ``scope["state"]["request_id"]`` so FastAPI's ``request.state.request_id``
+    sees it; the response wrapper injects the ``X-Request-ID`` header into
+    the outgoing ``http.response.start`` message.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        scope_type = scope.get("type")
+        if scope_type not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        # Honor an upstream-supplied ID; otherwise mint a fresh one. UUID4
+        # hex (no dashes) keeps the header short and easy to copy.
+        request_id = _header_value(scope, "x-request-id") or _new_request_id()
+        scope.setdefault("state", {})["request_id"] = request_id
+
+        if scope_type == "websocket":
+            # WS doesn't have a single response we can stamp; the id is
+            # available via scope state for any handler that wants it.
+            await self.app(scope, receive, send)
+            return
+
+        # Wrap the send callable to inject X-Request-ID on the response
+        # start. Match casing already used by other custom headers in this
+        # codebase (lowercase bytes, per ASGI spec; HTTP/2 normalizes).
+        async def send_with_request_id(message: dict[str, object]) -> None:
+            if message["type"] == "http.response.start":
+                headers_obj = message.get("headers")
+                headers = list(headers_obj) if isinstance(headers_obj, list) else []
+                # Drop any caller-supplied X-Request-ID so we always emit
+                # the canonical (middleware-set) value exactly once.
+                headers = [
+                    (k, v)
+                    for (k, v) in headers
+                    if isinstance(k, (bytes, bytearray)) and k.lower() != b"x-request-id"
+                ]
+                headers.append((b"x-request-id", request_id.encode("ascii")))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_request_id)
+
+
+def _new_request_id() -> str:
+    """Return a fresh request-id (UUID4 hex, 32 chars, no dashes)."""
+    import uuid
+
+    return uuid.uuid4().hex
+
+
 async def _send_refusal(scope_type: str, send: Send, *, message: str) -> None:
     """Emit a 403 JSON envelope for HTTP or a 1008 close frame for WebSocket.
 

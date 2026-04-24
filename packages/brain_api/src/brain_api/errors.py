@@ -3,7 +3,12 @@
 Call :func:`register_error_handlers` once on an app instance (after middleware
 install + router include) and every unhandled domain exception gets mapped to
 the flat error envelope ``{"error", "message", "detail"}`` at a stable HTTP
-status code:
+status code.
+
+500 responses additionally carry a request-id (issue #32) in
+``detail.request_id`` and an ``X-Request-ID`` response header so the user-
+facing error boundary and the server log line are joinable. The id comes
+from :class:`RequestIDMiddleware`, installed by ``app.create_app``.
 
 - :class:`ApiError` → whatever the caller set (``status``, ``code``, ``message``, ``detail``)
 - :class:`ScopeError` (from :mod:`brain_core.vault.paths`) → 403 ``scope``
@@ -163,11 +168,23 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _catch_all(request: Request, exc: Exception) -> JSONResponse:
         # Log the traceback server-side (where it belongs); return a generic
         # body so exception type / arguments never leak to callers.
-        # TODO(Plan 07): add request-id correlation to the 500 body so the
-        # frontend error boundary can surface the ID to the user and the
-        # server log line becomes joinable. Requires a request-id middleware
-        # that stashes the ID on ``request.state`` plus a header on every
-        # response (``X-Request-ID``); the generic 500 body grows a ``detail
-        # = {"request_id": ...}`` key while the message stays generic.
-        logger.exception("Unhandled exception in %s %s", request.method, request.url.path)
-        return _envelope(code="internal", message="unexpected error", status=500)
+        # The request-id (issue #32) joins the response body to the log line
+        # via the X-Request-ID response header. RequestIDMiddleware stamps
+        # ``request.state.request_id`` on every request; the catch-all is the
+        # only handler that needs to surface it because all other 4xx error
+        # bodies already pinpoint the failure (the user knows what they sent).
+        request_id = getattr(request.state, "request_id", None)
+        logger.exception(
+            "Unhandled exception in %s %s (request_id=%s)",
+            request.method,
+            request.url.path,
+            request_id,
+        )
+        detail = {"request_id": request_id} if request_id else None
+        return _envelope(
+            code="internal",
+            message="unexpected error",
+            detail=detail,
+            status=500,
+            extra_headers={"X-Request-ID": request_id} if request_id else None,
+        )

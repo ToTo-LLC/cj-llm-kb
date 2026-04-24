@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from brain_api.auth import OriginHostMiddleware
+from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
 from brain_api.context import build_app_context
 from brain_api.endpoints import setup_status as setup_status_endpoint
 from brain_api.endpoints import token as token_endpoint
@@ -109,6 +109,13 @@ def create_app(
     # before any downstream processing (logging, exception handlers,
     # auth deps, route dispatch) ever sees them.
     app.add_middleware(OriginHostMiddleware)
+
+    # Issue #32: stamp every request with a request_id and echo as
+    # ``X-Request-ID``. Installed AFTER OriginHostMiddleware so refused
+    # requests don't carry an id (they never reach a handler), but BEFORE
+    # any router so downstream code (route handlers, the 500 catch-all,
+    # logging) sees ``request.state.request_id``.
+    app.add_middleware(RequestIDMiddleware)
 
     app.include_router(health.router)
     app.include_router(tools_routes.router)
