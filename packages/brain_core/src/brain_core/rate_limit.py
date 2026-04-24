@@ -47,6 +47,20 @@ class RateLimitError(Exception):
         super().__init__(f"rate limited on {bucket!r} bucket, retry after ~{retry_after_seconds}s")
 
 
+@dataclass
+class _Bucket:
+    """Per-bucket state for :class:`RateLimiter` (issue #5).
+
+    Pairs the static cap with the dynamic remaining capacity so neither can
+    drift relative to the other during ``_refill`` / ``check``. Replaces the
+    prior pair of parallel ``dict[str, float]`` containers (``_caps`` +
+    ``_remaining``) which mypy could not narrow as a unit.
+    """
+
+    cap: float
+    remaining: float
+
+
 class RateLimiter:
     """Two-bucket token-bucket limiter over ``patches`` and ``tokens``.
 
@@ -58,12 +72,21 @@ class RateLimiter:
     """
 
     def __init__(self, config: RateLimitConfig) -> None:
-        self._config = config
-        self._caps: dict[str, float] = {
-            "patches": float(config.patches_per_minute),
-            "tokens": float(config.tokens_per_minute),
+        # Issue #5: dropped the unused ``self._config = config`` field that
+        # was retained from the Plan 04 implementation but never read after
+        # construction. The cap values are baked into the per-bucket state
+        # below so any need to introspect the original config can be served
+        # by reading ``bucket.cap``.
+        self._buckets: dict[str, _Bucket] = {
+            "patches": _Bucket(
+                cap=float(config.patches_per_minute),
+                remaining=float(config.patches_per_minute),
+            ),
+            "tokens": _Bucket(
+                cap=float(config.tokens_per_minute),
+                remaining=float(config.tokens_per_minute),
+            ),
         }
-        self._remaining: dict[str, float] = dict(self._caps)
         self._last_refill = time.monotonic()
 
     def check(self, bucket: str, *, cost: int | float = 1) -> None:
@@ -75,31 +98,36 @@ class RateLimiter:
             ValueError: if ``bucket`` is not a known bucket name.
             RateLimitError: if the bucket lacks capacity for ``cost``.
         """
-        if bucket not in self._caps:
+        b = self._buckets.get(bucket)
+        if b is None:
             raise ValueError(f"unknown rate-limit bucket: {bucket!r}")
 
         self._refill()
 
-        remaining = self._remaining[bucket]
-        if remaining < cost:
-            cap = self._caps[bucket]
+        if b.remaining < cost:
             # Seconds until enough refills to cover `cost`:
             #   (cost - remaining) / (cap / 60).
             # Guard against cap <= 0 (degenerate config) by falling back to
             # 1/sec so retry_after is still a finite non-negative integer.
-            refill_rate = cap / 60.0 if cap > 0 else 1.0
-            retry = max(0, int((cost - remaining) / refill_rate) + 1)
+            refill_rate = b.cap / 60.0 if b.cap > 0 else 1.0
+            retry = max(0, int((cost - b.remaining) / refill_rate) + 1)
             raise RateLimitError(bucket=bucket, retry_after_seconds=retry)
 
-        self._remaining[bucket] = remaining - cost
+        b.remaining -= cost
 
     def _refill(self) -> None:
         now = time.monotonic()
+        # Defensive clock-backwards guard. ``time.monotonic`` is documented
+        # as non-decreasing within a single process, but ``max(0.0, ...)``
+        # is cheap insurance against any future runtime / VM-time-warp
+        # behavior that could otherwise turn ``elapsed`` negative and
+        # silently subtract capacity from every bucket. (Issue #5 listed
+        # this as a follow-up; it has been in the code since Plan 05.)
         elapsed = max(0.0, now - self._last_refill)
         self._last_refill = now
-        for bucket, cap in self._caps.items():
-            refill = (cap / 60.0) * elapsed
-            self._remaining[bucket] = min(cap, self._remaining[bucket] + refill)
+        for b in self._buckets.values():
+            refill = (b.cap / 60.0) * elapsed
+            b.remaining = min(b.cap, b.remaining + refill)
 
 
 __all__ = ["RateLimitConfig", "RateLimitError", "RateLimiter"]

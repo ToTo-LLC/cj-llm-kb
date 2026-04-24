@@ -85,3 +85,68 @@ def test_config_defaults_sane() -> None:
     cfg = RateLimitConfig()
     assert cfg.patches_per_minute > 0
     assert cfg.tokens_per_minute > 0
+
+
+def test_no_unused_config_attribute_post_refactor() -> None:
+    """Issue #5: the unused ``self._config`` attribute was removed.
+
+    Pinning its absence keeps anyone from re-introducing it as cargo-cult
+    "we might need this someday" state. If the limiter ever needs to expose
+    the original config it should add an explicit accessor with a real
+    use case, not a private bag.
+    """
+    limiter = RateLimiter(RateLimitConfig())
+    assert not hasattr(limiter, "_config"), (
+        "RateLimiter._config was removed in issue #5 — re-adding it without "
+        "a documented consumer is a regression."
+    )
+
+
+def test_internal_state_is_per_bucket_dataclass() -> None:
+    """Issue #5: ``_Bucket`` dataclass replaces the parallel-dicts shape.
+
+    A future refactor that reverts to ``dict[str, float]`` parallel state
+    drops mypy narrowing for code that walks bucket state — pin the shape.
+    """
+    from brain_core.rate_limit import _Bucket
+
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=42, tokens_per_minute=99))
+    buckets = limiter._buckets  # type: ignore[attr-defined]
+    assert set(buckets.keys()) == {"patches", "tokens"}
+    assert isinstance(buckets["patches"], _Bucket)
+    assert buckets["patches"].cap == 42.0
+    assert buckets["patches"].remaining == 42.0
+    assert buckets["tokens"].cap == 99.0
+
+
+def test_clock_backwards_does_not_drain_buckets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #5: a non-monotonic ``time.monotonic`` (hypothetical VM warp,
+    runtime bug) must not silently subtract capacity from every bucket.
+
+    The defensive ``elapsed = max(0.0, now - last)`` guard turns a
+    backwards step into a zero-elapsed refill — buckets stay at whatever
+    capacity they had before the warp.
+    """
+    fake_now = [1000.0]
+    monkeypatch.setattr(
+        "brain_core.rate_limit.time.monotonic",
+        lambda: fake_now[0],
+    )
+    limiter = RateLimiter(RateLimitConfig(patches_per_minute=60))
+    # Drain to 50 (10 used).
+    for _ in range(10):
+        limiter.check("patches", cost=1)
+    bucket_remaining_before = limiter._buckets["patches"].remaining  # type: ignore[attr-defined]
+    # Warp clock backwards 100 seconds.
+    fake_now[0] -= 100.0
+    # A subsequent check triggers _refill — must NOT drain anything despite
+    # the negative elapsed.
+    limiter.check("patches", cost=1)
+    bucket_remaining_after = limiter._buckets["patches"].remaining  # type: ignore[attr-defined]
+    # Used 1 since the warp; remaining must be (before - 1), never less.
+    assert bucket_remaining_after == bucket_remaining_before - 1, (
+        f"clock-backwards must yield zero-elapsed refill, not negative; "
+        f"before={bucket_remaining_before} after={bucket_remaining_after}"
+    )
