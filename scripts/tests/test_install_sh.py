@@ -104,13 +104,33 @@ def test_install_happy_path(
     assert shim.is_file(), f"shim not written at {shim}"
     assert os.access(shim, os.X_OK), "shim is not executable"
     body = shim.read_text()
-    assert "uv run --project" in body
+    # Shim must call uv via an absolute path (not bare ``uv run``) so it
+    # survives invocation from a context without ~/.local/bin on PATH
+    # (launchd / Spotlight / GUI / bash subshell). Capture the uv path
+    # install.sh saw + assert the shim embeds it literally.
+    uv_abs = shutil.which("uv")
+    assert uv_abs, "uv must be on PATH for this test to run"
+    assert f'exec "{uv_abs}" run --project' in body, (
+        f"expected shim to embed absolute uv path; got:\n{body}"
+    )
+    assert "exec uv run" not in body, (
+        f"shim must NOT call bare ``uv run`` — it breaks under stripped PATH\n{body}"
+    )
     assert str(install_dir) in body
 
     # .app bundle exists (Mac only — this test is gated to darwin).
     app_launcher = fake_home / "Applications" / "brain.app" / "Contents" / "MacOS" / "brain"
     assert app_launcher.is_file()
     assert os.access(app_launcher, os.X_OK)
+    # Same absolute-uv-path rule for the .app launcher. Finder / Spotlight
+    # launches do NOT inherit the user's shell PATH.
+    launcher_body = app_launcher.read_text()
+    assert f'exec "{uv_abs}" run --project' in launcher_body, (
+        f"expected .app launcher to embed absolute uv path; got:\n{launcher_body}"
+    )
+    assert "exec uv run" not in launcher_body, (
+        f".app launcher must NOT call bare ``uv run``\n{launcher_body}"
+    )
     info_plist = fake_home / "Applications" / "brain.app" / "Contents" / "Info.plist"
     assert info_plist.is_file()
     plist_text = info_plist.read_text()
@@ -378,3 +398,100 @@ def test_install_missing_curl_uses_wget_or_errors(
         assert "no downloader found" in combined or "curl" in combined.lower(), (
             f"expected clean 'no downloader' or curl-related error; got:\n{combined}"
         )
+
+
+# ---------------------------------------------------------------------------
+# (g) Shim survives stripped PATH (regression: Plan 09 Task 11 bug)
+# ---------------------------------------------------------------------------
+
+
+@skip_if_not_mac
+def test_install_shim_runs_with_stripped_path(
+    install_env: dict[str, str],
+    install_dir: Path,
+    fake_home: Path,
+) -> None:
+    """Regression: the generated shim must run in a minimal PATH env.
+
+    Plan 09 Task 11 surfaced a ``brain start`` failure when the shim was
+    invoked from a context without ``~/.local/bin`` on PATH (launchd /
+    Spotlight / .app double-click / bash subshell without rc files). The
+    root cause was a bare ``uv run ...`` in the shim — uv lives in
+    ``~/.local/bin/uv`` and is NOT on the minimal PATH.
+
+    Fix: write_shim.sh resolves ``uv`` to an absolute path at install
+    time + embeds it in the shim. This test asserts that: (1) the
+    generated shim file embeds an absolute uv path, and (2) invoking
+    the shim under ``PATH=/usr/bin:/bin`` runs cleanly rather than
+    erroring with "``uv`` not found on PATH".
+
+    We stop short of running ``--version`` (which needs the full uv sync
+    + brain package build) and instead run the shim enough to prove uv
+    is reachable. The install_env fixture sets BRAIN_SKIP_UV_SYNC=1 so
+    calling ``brain`` would fail with an import error even under the fix
+    — what we assert here is the error is NOT the shim-level
+    ``command not found``.
+    """
+    result = _run_install(install_env)
+    assert result.returncode == 0, result.stderr
+
+    shim = fake_home / ".local" / "bin" / "brain"
+    assert shim.is_file()
+
+    body = shim.read_text()
+    uv_abs = shutil.which("uv")
+    assert uv_abs, "uv must be on PATH for this test to run"
+    assert f'"{uv_abs}"' in body, (
+        f"expected absolute uv path {uv_abs!r} in shim body; got:\n{body}"
+    )
+
+    # Invoke the shim under a minimal PATH — no ~/.local/bin. The shim
+    # itself is called by absolute path. If the fix works, bash will be
+    # able to exec the shim's uv and uv will respond to --version
+    # without any PATH lookup.
+    stripped_env = {
+        "HOME": str(fake_home),
+        "PATH": "/usr/bin:/bin",
+    }
+    # Run: bash -lc '<shim> --version is too heavy; just run uv --version
+    # via the shim's own path'. The shim does ``exec "$uv_abs" run
+    # --project <dir> brain "$@"`` — so passing ``--version`` would
+    # trigger a full brain load. Instead verify the shim header's
+    # absolute-uv-path exec line at least can *find* uv. We do this by
+    # running bash -n (syntax check) which parses the shim without
+    # executing it, plus a standalone test that $uv_abs is executable
+    # via /usr/bin:/bin only.
+    syntax_check = subprocess.run(
+        ["/bin/bash", "-n", str(shim)],
+        env=stripped_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert syntax_check.returncode == 0, (
+        f"shim has bad bash syntax:\n{syntax_check.stderr}"
+    )
+
+    # Run the shim directly (via its absolute path) under stripped PATH.
+    # With BRAIN_SKIP_UV_SYNC=1 in place the project isn't fully built,
+    # so brain --version may fail at the Python level — but it MUST NOT
+    # fail at the shim level with "uv: command not found". Parse the
+    # combined output for that specific failure mode.
+    invoke = subprocess.run(
+        ["/bin/bash", "-c", f'"{shim}" --version'],
+        env=stripped_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    combined = invoke.stdout + invoke.stderr
+    assert "uv: command not found" not in combined, (
+        f"shim failed under stripped PATH — uv not reachable:\n{combined}"
+    )
+    assert "uv: not found" not in combined, (
+        f"shim failed under stripped PATH — uv not reachable:\n{combined}"
+    )
+    # install.sh's ensure_uv always puts uv at ~/.local/bin/uv on Mac.
+    # Confirm the shim used the same path.
+    assert str(Path(uv_abs)) in body

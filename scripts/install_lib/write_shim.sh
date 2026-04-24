@@ -13,18 +13,24 @@
 # Bash 3.2 compatible.
 
 # ---------------------------------------------------------------------------
-# _shim_body INSTALL_DIR
+# _shim_body INSTALL_DIR UV_PATH
 #   Print the shim script body to stdout. Uses ``exec`` so signals
 #   (Ctrl+C) propagate cleanly and the shim doesn't linger as a
 #   parent process.
+#
+#   UV_PATH is an absolute path to ``uv`` captured at install time so the
+#   shim does not depend on the invoking shell having ``~/.local/bin`` on
+#   PATH (launchd / Spotlight / .app double-click / bash subshell without
+#   rc files — these all break a bare ``uv`` lookup).
 # ---------------------------------------------------------------------------
 _shim_body() {
     local install_dir="$1"
+    local uv_path="$2"
     cat <<SHIM_EOF
 #!/bin/bash
 # brain — installed by scripts/install.sh (Plan 08)
 # Edit is safe; re-run install.sh to regenerate.
-exec uv run --project "$install_dir" brain "\$@"
+exec "$uv_path" run --project "$install_dir" brain "\$@"
 SHIM_EOF
 }
 
@@ -78,12 +84,26 @@ write_mac_shim() {
     local bin_dir="$HOME/.local/bin"
     local shim="$bin_dir/brain"
 
+    # Resolve ``uv`` to an absolute path at shim-write time. install.sh's
+    # ensure_uv runs before this function + guarantees uv is on PATH, so
+    # a failure here is a genuine bug (not a user-facing condition) — but
+    # we still emit a plain-English error rather than silently falling
+    # back to bare ``uv``.
+    local uv_path
+    uv_path="$(command -v uv 2>/dev/null || true)"
+    if [ -z "$uv_path" ]; then
+        echo "error: uv not found on PATH when writing shim" >&2
+        echo "       ensure_uv should have installed it before this step." >&2
+        echo "       try: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+        return 2
+    fi
+
     mkdir -p "$bin_dir" || {
         echo "error: cannot create $bin_dir" >&2
         return 1
     }
 
-    _shim_body "$install_dir" > "$shim" || {
+    _shim_body "$install_dir" "$uv_path" > "$shim" || {
         echo "error: failed to write $shim" >&2
         return 1
     }

@@ -226,7 +226,25 @@ def test_install_ps_happy_path(
     shim = ps_fake_home / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "brain.cmd"
     assert shim.is_file(), f"shim not written at {shim}"
     body = shim.read_text()
-    assert "uv run --project" in body
+    # Shim must call uv via an absolute path (not bare ``uv run``) so it
+    # survives invocation from a cmd.exe context with a minimal PATH
+    # (scheduled tasks / services / Start Menu launches that don't
+    # inherit the user shell's PATH edits). Capture the uv path the
+    # installer saw + assert the shim embeds it literally (quoted, since
+    # the Windows path may contain spaces).
+    uv_abs = shutil.which("uv") or shutil.which("uv.exe")
+    assert uv_abs, "uv must be on PATH for this test to run"
+    assert f'"{uv_abs}" run --project' in body, (
+        f"expected shim to embed absolute uv path; got:\n{body}"
+    )
+    # Bare ``uv run`` at the start of the line means the fix didn't land.
+    # We check for the specific no-quote form to avoid matching
+    # ``"C:\\...\\uv" run`` which legitimately contains the substring
+    # ``uv" run``.
+    assert "\nuv run --project" not in body, (
+        f"shim must NOT call bare ``uv run`` — it breaks under minimal "
+        f"cmd.exe PATH:\n{body}"
+    )
     assert str(ps_install_dir) in body
 
     start_menu_lnk = (
@@ -461,4 +479,53 @@ def test_install_ps_missing_tar_errors(
     combined = result.stdout + result.stderr
     assert "tar.exe" in combined or "tar" in combined.lower(), (
         f"expected tar-related error; got:\n{combined}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (g) Shim embeds absolute uv path (regression: Plan 09 Task 11 bug)
+# ---------------------------------------------------------------------------
+
+
+@skip_if_not_windows
+def test_install_ps_shim_has_absolute_uv_path(
+    ps_install_env: dict[str, str],
+    ps_install_dir: Path,
+    ps_fake_home: Path,
+) -> None:
+    """Regression: the generated ``brain.cmd`` must invoke uv by absolute path.
+
+    Plan 09 Task 11 (Mac) surfaced a parallel failure mode on Windows:
+    when the shim at %LOCALAPPDATA%\\Microsoft\\WindowsApps\\brain.cmd was
+    launched by a shortcut (Start Menu / taskbar / scheduled task), the
+    cmd.exe environment had a minimal PATH and ``uv`` resolved to
+    nothing — the shim errored out with ``'uv' is not recognized as an
+    internal or external command``.
+
+    Fix: Write-Shim resolves ``uv`` via ``Get-Command`` at install time
+    + embeds the absolute path into the .cmd body. This test asserts:
+    (1) the generated shim embeds the absolute uv path, and (2) bare
+    ``uv run`` does NOT appear as a leading command token.
+    """
+    result = _run_install_ps(ps_install_env)
+    assert result.returncode == 0, (
+        f"install.ps1 failed (rc={result.returncode})\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+    shim = (
+        ps_fake_home / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "brain.cmd"
+    )
+    assert shim.is_file()
+    body = shim.read_text()
+
+    uv_abs = shutil.which("uv") or shutil.which("uv.exe")
+    assert uv_abs, "uv must be on PATH for this test to run"
+    assert f'"{uv_abs}" run --project' in body, (
+        f"expected absolute uv path in shim; got:\n{body}"
+    )
+    # A leading bare ``uv run`` on a line indicates the fix didn't land.
+    assert "\nuv run --project" not in body, (
+        f"shim still calls bare ``uv run``:\n{body}"
     )

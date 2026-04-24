@@ -60,10 +60,15 @@ PLIST_EOF
 }
 
 # ---------------------------------------------------------------------------
-# _app_launcher_body INSTALL_DIR
+# _app_launcher_body INSTALL_DIR UV_PATH
 #   The script that Launchpad invokes when the user double-clicks the
 #   app. It just calls ``brain start`` via the same uv machinery the
 #   shim uses — ``brain start`` handles port probing and browser open.
+#
+#   UV_PATH is an absolute path to ``uv`` captured at install time. GUI
+#   launches (Spotlight / Launchpad / double-click) do NOT inherit the
+#   user's shell PATH, so a bare ``uv`` here would always fail. Hard-code
+#   the resolved path.
 #
 #   We use ``osascript`` to open Terminal.app only if the user started
 #   from Finder (detected by the absence of a controlling tty). When
@@ -71,11 +76,12 @@ PLIST_EOF
 # ---------------------------------------------------------------------------
 _app_launcher_body() {
     local install_dir="$1"
+    local uv_path="$2"
     cat <<LAUNCH_EOF
 #!/bin/bash
 # brain.app launcher — installed by scripts/install.sh (Plan 08)
 # Double-click runs 'brain start'; it opens the browser once ready.
-exec uv run --project "$install_dir" brain start
+exec "$uv_path" run --project "$install_dir" brain start
 LAUNCH_EOF
 }
 
@@ -99,6 +105,18 @@ make_app_bundle() {
     local info_plist="$app_root/Contents/Info.plist"
     local launcher="$macos_dir/brain"
 
+    # Resolve ``uv`` to an absolute path at bundle-write time. The .app
+    # is launched from Finder / Spotlight / Launchpad with a minimal env
+    # (no ~/.local/bin on PATH), so the launcher script MUST NOT rely on
+    # runtime PATH to find uv.
+    local uv_path
+    uv_path="$(command -v uv 2>/dev/null || true)"
+    if [ -z "$uv_path" ]; then
+        echo "error: uv not found on PATH when building .app bundle" >&2
+        echo "       ensure_uv should have installed it before this step." >&2
+        return 2
+    fi
+
     mkdir -p "$macos_dir" "$resources_dir" || {
         echo "error: cannot create $app_root" >&2
         return 1
@@ -109,7 +127,7 @@ make_app_bundle() {
         return 1
     }
 
-    _app_launcher_body "$install_dir" > "$launcher" || {
+    _app_launcher_body "$install_dir" "$uv_path" > "$launcher" || {
         echo "error: failed to write $launcher" >&2
         return 1
     }

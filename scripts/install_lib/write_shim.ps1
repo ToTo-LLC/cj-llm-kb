@@ -28,13 +28,34 @@ function _Get-WindowsAppsDir {
 }
 
 
+function _Resolve-UvPath {
+    <#
+    .SYNOPSIS
+      Return the absolute path to ``uv.exe`` (or ``uv``) on this host.
+
+    .DESCRIPTION
+      install.ps1's Ensure-Uv runs before Write-Shim + guarantees uv is
+      on PATH. We resolve it here so the generated shim doesn't have to
+      rely on runtime PATH — that matters for Start Menu / taskbar
+      launches + anywhere cmd.exe starts with a minimal env (scheduled
+      tasks, services, Windows Terminal profiles, etc).
+    #>
+    $cmd = Get-Command uv -ErrorAction SilentlyContinue
+    if ($null -eq $cmd) {
+        throw "uv not found on PATH when writing shim — ensure_uv should have installed it before this step."
+    }
+    return $cmd.Source
+}
+
+
 function _Shim-Body {
     <#
     .SYNOPSIS
       Produce the .cmd shim body for a given install dir.
     #>
     param(
-        [Parameter(Mandatory = $true)][string]$InstallDir
+        [Parameter(Mandatory = $true)][string]$InstallDir,
+        [Parameter(Mandatory = $true)][string]$UvPath
     )
 
     # Escape ampersands + percents correctly for cmd.exe. The install
@@ -43,7 +64,7 @@ function _Shim-Body {
 @echo off
 REM brain.cmd — installed by scripts\install.ps1 (Plan 08)
 REM Edit is safe; re-run install.ps1 to regenerate.
-uv run --project "$InstallDir" brain %*
+"$UvPath" run --project "$InstallDir" brain %*
 "@
     return $body
 }
@@ -111,7 +132,8 @@ function Write-Shim {
     }
 
     $shimPath = Join-Path $winAppsDir "brain.cmd"
-    $body = _Shim-Body -InstallDir $InstallDir
+    $uvPath = _Resolve-UvPath
+    $body = _Shim-Body -InstallDir $InstallDir -UvPath $uvPath
 
     # -Encoding ASCII keeps cmd.exe happy (no BOM, no UTF-16).
     Set-Content -LiteralPath $shimPath -Value $body -Encoding ASCII -Force
