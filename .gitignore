@@ -53,3 +53,8 @@ out/
 *.pfx
 *.crt
 *.cer
+
+# Design-tool export drops (Claude design / Figma zips etc.) — treated as
+# working-tree scratch. Extracted assets get committed selectively; the
+# raw zips don't.
+docs/design/*.zip
