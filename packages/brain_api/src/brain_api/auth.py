@@ -246,7 +246,12 @@ class RequestIDMiddleware:
         # Wrap the send callable to inject X-Request-ID on the response
         # start. Match casing already used by other custom headers in this
         # codebase (lowercase bytes, per ASGI spec; HTTP/2 normalizes).
-        async def send_with_request_id(message: dict[str, object]) -> None:
+        # Type matches starlette's ``Send`` exactly:
+        # ``Callable[[MutableMapping[str, Any]], Awaitable[None]]``.
+        from collections.abc import MutableMapping
+        from typing import Any
+
+        async def send_with_request_id(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 headers_obj = message.get("headers")
                 headers = list(headers_obj) if isinstance(headers_obj, list) else []

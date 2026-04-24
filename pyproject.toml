@@ -25,6 +25,17 @@ brain_api = { workspace = true, editable = false }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Issue #2: importlib mode imports each test by its absolute path rather
+# than mutating sys.path. This eliminates the duplicate ``prompts``
+# package collision that used to force brain_api/tests/prompts/ to omit
+# its __init__.py (and brain_api's mypy config to set
+# explicit_package_bases=true as a workaround).
+addopts = "--import-mode=importlib"
+# importlib mode no longer auto-adds the rootpath of each test to
+# sys.path, so test-only sibling helpers imported by bare module name
+# need explicit pythonpath entries. brain_api/tests/_ws_helpers.py is
+# imported as ``from _ws_helpers import ...`` by 4 WS chat test files.
+pythonpath = ["packages/brain_api/tests"]
 markers = [
     "vcr: requires cassette (deferred in Task 21)",
     "slow: slow integration tests (~30s+ each); run with ``pytest -m slow`` or unmarked",

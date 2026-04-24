@@ -24,18 +24,24 @@ build-backend = "hatchling.build"
 packages = ["src/brain_api"]
 
 [tool.mypy]
-# Plan 05 Task 22 — tests/prompts/ intentionally has no __init__.py so pytest
-# does not treat it as a duplicate top-level `prompts` package alongside
-# brain_mcp/tests/prompts/. explicit_package_bases keeps mypy happy with the
-# resulting namespace-style layout (same conftest filename in tests/ and
-# tests/prompts/). Tracked for Task 25 sweep — a rootdir-level pytest import
-# mode change would let us drop this special case.
+# Issue #2 (partially closed 2026-04-24): the original entry assumed that
+# switching pytest to ``--import-mode=importlib`` would let us drop this
+# workaround. In practice the duplicate ``prompts/`` directory name
+# between ``packages/brain_api/tests/prompts/`` and
+# ``packages/brain_mcp/tests/prompts/`` collides REGARDLESS of pytest
+# import mode — adding an ``__init__.py`` to brain_api/tests/prompts/
+# under importlib mode triggers a pluggy "Plugin already registered"
+# error because both conftests then resolve to ``prompts.conftest``.
+# Pytest is happily on importlib mode now (root pyproject.toml); the
+# mypy workaround stays. Closing this entry would require renaming one
+# of the ``prompts/`` directories to fully eliminate the name clash —
+# tracked as a follow-up if the collision ever bites elsewhere.
 explicit_package_bases = true
-# Plan 05 Task 25 — tests/_ws_helpers.py imported by test_ws_chat_*.py via
-# its bare module name (pytest adds the tests dir to sys.path under
-# rootdir discovery). Point mypy at the same dir so the import resolves
-# under ``mypy src tests`` without a tests/__init__.py (which would break
-# the rationale above).
+# Plan 05 Task 25 — tests/_ws_helpers.py imported by test_ws_chat_*.py
+# via its bare module name. With importlib mode the root pytest config
+# adds ``packages/brain_api/tests`` to ``pythonpath`` so the bare import
+# resolves at runtime; mypy_path here keeps the same import discoverable
+# under ``mypy src tests``.
 mypy_path = "tests"
 
 [tool.uv.sources]
