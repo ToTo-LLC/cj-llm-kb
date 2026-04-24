@@ -246,6 +246,13 @@ def test_install_ps_happy_path(
         f"cmd.exe PATH:\n{body}"
     )
     assert str(ps_install_dir) in body
+    # Shim must set BRAIN_INSTALL_DIR so ``brain start`` picks up the
+    # versioned install path rather than the platform default (which
+    # won't exist on disk). Regression guard for Plan 09 Task 11's
+    # supervisor-cwd-not-found bug surfaced on 2026-04-24.
+    assert "BRAIN_INSTALL_DIR" in body, (
+        f"shim must set BRAIN_INSTALL_DIR; got:\n{body}"
+    )
 
     start_menu_lnk = (
         ps_fake_home

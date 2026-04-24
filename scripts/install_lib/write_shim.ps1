@@ -60,10 +60,17 @@ function _Shim-Body {
 
     # Escape ampersands + percents correctly for cmd.exe. The install
     # dir rarely contains either, but quote defensively.
+    #
+    # BRAIN_INSTALL_DIR is set so ``brain start`` / ``brain doctor`` /
+    # ``brain upgrade`` pick up the actual versioned install path
+    # (e.g. %LOCALAPPDATA%\brain-v0.1.0\), not the platform default
+    # (%LOCALAPPDATA%\brain\). Without this the commands look in the
+    # wrong dir and the supervisor's cwd is non-existent.
     $body = @"
 @echo off
 REM brain.cmd — installed by scripts\install.ps1 (Plan 08)
 REM Edit is safe; re-run install.ps1 to regenerate.
+if not defined BRAIN_INSTALL_DIR set "BRAIN_INSTALL_DIR=$InstallDir"
 "$UvPath" run --project "$InstallDir" brain %*
 "@
     return $body

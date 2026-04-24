@@ -30,6 +30,13 @@ _shim_body() {
 #!/bin/bash
 # brain — installed by scripts/install.sh (Plan 08)
 # Edit is safe; re-run install.sh to regenerate.
+#
+# BRAIN_INSTALL_DIR is exported so ``brain start`` / ``brain doctor`` /
+# ``brain upgrade`` pick up the actual versioned install path
+# (e.g. ~/Applications/brain-v0.1.0/), not the platform default
+# (~/Applications/brain/). Without this the commands look in the
+# wrong dir and the supervisor's cwd is non-existent.
+export BRAIN_INSTALL_DIR="\${BRAIN_INSTALL_DIR:-$install_dir}"
 exec "$uv_path" run --project "$install_dir" brain "\$@"
 SHIM_EOF
 }

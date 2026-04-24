@@ -81,6 +81,12 @@ _app_launcher_body() {
 #!/bin/bash
 # brain.app launcher — installed by scripts/install.sh (Plan 08)
 # Double-click runs 'brain start'; it opens the browser once ready.
+#
+# BRAIN_INSTALL_DIR is exported so the ``brain start`` command picks
+# up the actual versioned install path (e.g. ~/Applications/brain-v0.1.0/),
+# not the platform default (~/Applications/brain/). Without this the
+# supervisor's cwd would be the non-existent default.
+export BRAIN_INSTALL_DIR="\${BRAIN_INSTALL_DIR:-$install_dir}"
 exec "$uv_path" run --project "$install_dir" brain start
 LAUNCH_EOF
 }

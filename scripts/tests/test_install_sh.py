@@ -117,6 +117,16 @@ def test_install_happy_path(
         f"shim must NOT call bare ``uv run`` — it breaks under stripped PATH\n{body}"
     )
     assert str(install_dir) in body
+    # Shim must export BRAIN_INSTALL_DIR so ``brain start`` picks up the
+    # versioned install path rather than the platform default (which
+    # won't exist on disk). Regression guard for Plan 09 Task 11's
+    # supervisor-cwd-not-found bug surfaced on 2026-04-24.
+    assert "BRAIN_INSTALL_DIR" in body, (
+        f"shim must export BRAIN_INSTALL_DIR; got:\n{body}"
+    )
+    assert f'BRAIN_INSTALL_DIR="${{BRAIN_INSTALL_DIR:-{install_dir}}}"' in body, (
+        f"shim must export BRAIN_INSTALL_DIR={install_dir} (with env override); got:\n{body}"
+    )
 
     # .app bundle exists (Mac only — this test is gated to darwin).
     app_launcher = fake_home / "Applications" / "brain.app" / "Contents" / "MacOS" / "brain"
@@ -130,6 +140,11 @@ def test_install_happy_path(
     )
     assert "exec uv run" not in launcher_body, (
         f".app launcher must NOT call bare ``uv run``\n{launcher_body}"
+    )
+    # Same BRAIN_INSTALL_DIR guarantee as the shim — Spotlight / Launchpad
+    # double-click inherits no env, so the launcher must set it explicitly.
+    assert "BRAIN_INSTALL_DIR" in launcher_body, (
+        f".app launcher must export BRAIN_INSTALL_DIR; got:\n{launcher_body}"
     )
     info_plist = fake_home / "Applications" / "brain.app" / "Contents" / "Info.plist"
     assert info_plist.is_file()
