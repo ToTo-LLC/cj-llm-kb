@@ -49,11 +49,12 @@ _CLASSIFY_TOKEN_COST = 1000
 # folder has more than this many files and the caller did NOT pass max_files.
 _LARGE_FOLDER_THRESHOLD = 20
 
-# Model strings — must match brain_core.tools.ingest so both tools route through
-# the same Anthropic models on real runs.
-_CLASSIFY_MODEL = "claude-haiku-4-5-20251001"
-_SUMMARIZE_MODEL = "claude-sonnet-4-6"
-_INTEGRATE_MODEL = "claude-sonnet-4-6"
+# Model fallbacks — used when ``ToolContext.config`` is None (issue #31).
+# When a config is present the pipeline pulls from ``config.llm`` so a model
+# swap is a single config flip rather than a multi-file edit.
+_CLASSIFY_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
+_SUMMARIZE_MODEL_FALLBACK = "claude-sonnet-4-6"
+_INTEGRATE_MODEL_FALLBACK = "claude-sonnet-4-6"
 
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -85,14 +86,28 @@ INPUT_SCHEMA: dict[str, Any] = {
 
 
 def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
-    """Construct the IngestPipeline using the same shape as brain_ingest."""
+    """Construct the IngestPipeline using the same shape as brain_ingest.
+
+    Resolves model strings from ``ctx.config.llm`` when present, falling
+    back to the hardcoded constants otherwise (issue #31).
+    """
+    cfg_llm = getattr(ctx.config, "llm", None) if ctx.config is not None else None
+    classify_model = (
+        getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
+    )
+    summarize_model = (
+        getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
+    )
+    integrate_model = (
+        getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
+    )
     return IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
         llm=ctx.llm,
-        summarize_model=_SUMMARIZE_MODEL,
-        integrate_model=_INTEGRATE_MODEL,
-        classify_model=_CLASSIFY_MODEL,
+        summarize_model=summarize_model,
+        integrate_model=integrate_model,
+        classify_model=classify_model,
         state_db=ctx.state_db,
     )
 

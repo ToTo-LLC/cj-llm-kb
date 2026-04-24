@@ -37,8 +37,11 @@ def test_tool_result_frozen_with_optional_data() -> None:
         result.text = "mutated"  # type: ignore[misc]
 
 
-def test_tool_context_accepts_all_ten_fields(tmp_path: Path) -> None:
-    """The field set must match the Plan 04 contract — brain_mcp tests depend on it."""
+def test_tool_context_field_set(tmp_path: Path) -> None:
+    """The field set must match the Plan 04 + Plan 09 contract — brain_mcp
+    tests depend on it. ``config`` was added in issue #31 as an optional
+    field (default None) so existing call sites stay source-compatible.
+    """
     names = {f.name for f in dataclasses.fields(ToolContext)}
     assert names == {
         "vault_root",
@@ -51,6 +54,7 @@ def test_tool_context_accepts_all_ten_fields(tmp_path: Path) -> None:
         "cost_ledger",
         "rate_limiter",
         "undo_log",
+        "config",
     }
 
 

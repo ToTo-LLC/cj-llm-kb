@@ -38,6 +38,12 @@ class ToolContext:
     cost_ledger: Any  # CostLedger
     rate_limiter: Any  # RateLimiter
     undo_log: Any  # UndoLog
+    # Issue #31: optional Config so model-routing tools (classify, ingest,
+    # bulk_import) can read ``config.llm.classify_model`` instead of carrying
+    # hardcoded model strings. Defaults to ``None`` so the 56+ existing
+    # ToolContext construction sites stay source-compatible — tools fall back
+    # to their hardcoded defaults when the config is absent.
+    config: Any = None  # Config
 
 
 @dataclass(frozen=True, slots=True)

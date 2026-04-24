@@ -54,21 +54,43 @@ INPUT_SCHEMA: dict[str, Any] = {
 _INGEST_TOKEN_ESTIMATE = 8000
 
 
+# Fallbacks when ``ToolContext.config`` is None (issue #31). Keep in sync
+# with the LLMConfig defaults so a None-config pipeline behaves identically
+# to a default-LLMConfig pipeline.
+_SUMMARIZE_MODEL_FALLBACK = "claude-sonnet-4-6"
+_INTEGRATE_MODEL_FALLBACK = "claude-sonnet-4-6"
+_CLASSIFY_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
+
+
 def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
     """Construct the IngestPipeline using the ctx primitives.
 
-    TODO(plan-05 config): model strings are hardcoded here and in
-    brain_core.tools.classify / brain_core.tools.bulk_import. Plan 05+
-    should wire these through LLMConfig (default_model / classify_model)
-    so changing models is a config flip, not a three-file edit.
+    Resolves model strings from ``ctx.config.llm`` (LLMConfig) when present,
+    falling back to the hardcoded constants when no config is wired (issue
+    #31). The fallback path keeps the 56+ existing ToolContext construction
+    sites that don't pass a config working unchanged.
     """
+    cfg_llm = getattr(ctx.config, "llm", None) if ctx.config is not None else None
+    classify_model = (
+        getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
+    )
+    # ``default_model`` covers both summarize and integrate today (the spec
+    # treats both as Sonnet-class). When/if the schema grows separate
+    # summarize_model / integrate_model fields, this is the single point to
+    # update.
+    summarize_model = (
+        getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
+    )
+    integrate_model = (
+        getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
+    )
     return IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
         llm=ctx.llm,
-        summarize_model="claude-sonnet-4-6",
-        integrate_model="claude-sonnet-4-6",
-        classify_model="claude-haiku-4-5-20251001",
+        summarize_model=summarize_model,
+        integrate_model=integrate_model,
+        classify_model=classify_model,
         state_db=ctx.state_db,
     )
 

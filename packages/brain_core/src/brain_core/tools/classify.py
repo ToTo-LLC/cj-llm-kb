@@ -41,12 +41,21 @@ INPUT_SCHEMA: dict[str, Any] = {
     "required": ["content"],
 }
 
-# Model string MUST match brain_core.tools.ingest's pipeline classify_model so
-# both tools route through the same Anthropic model on real runs. Changes here
-# need a matching change in ingest.py.
-# TODO(plan-05 config): wire through LLMConfig.classify_model so swapping
-# models is a config change rather than a three-file edit.
-_CLASSIFY_MODEL = "claude-haiku-4-5-20251001"
+# Fallback when ``ToolContext.config`` is None (issue #31). Both this and
+# brain_core.tools.ingest read from ``ctx.config.llm.classify_model`` when a
+# config is present, so swapping models is a single config field flip.
+# Keep this string in sync with ``LLMConfig.classify_model`` default.
+_CLASSIFY_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
+
+
+def _classify_model_for(ctx: ToolContext) -> str:
+    """Resolve the classify model name from config, with fallback (issue #31)."""
+    cfg = ctx.config
+    if cfg is not None and getattr(cfg, "llm", None) is not None:
+        model = getattr(cfg.llm, "classify_model", None)
+        if model:
+            return str(model)
+    return _CLASSIFY_MODEL_FALLBACK
 
 # Rough token cost for one classify call (classify prompt + 256 max output).
 # The fake LLM doesn't care; this is a rate-limit budget only.
@@ -69,7 +78,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     result = await classify(
         llm=ctx.llm,
-        model=_CLASSIFY_MODEL,
+        model=_classify_model_for(ctx),
         title=title,
         snippet=content,
     )
