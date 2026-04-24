@@ -59,7 +59,7 @@ $LibDir = Join-Path $ScriptDir "install_lib"
 # sit above the bootstrap because the bootstrap fires before we source
 # install_lib/*.ps1 (which is the reason we're bootstrapping at all).
 $BrainDefaultReleaseUrl = "https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
-$BrainDefaultReleaseSha256 = "1e14c9ebf1be303a0b5614cf40c3dd88c73b05a6ecdf9d5aa87be1ae10a88b20"
+$BrainDefaultReleaseSha256 = "84e922d9c82b305e052270666e352356745a25cbf387c6151be4f64fe965d24a"
 
 # Track any bootstrap staging dir so we can clean it up on exit.
 $script:BootstrapStaging = ""
