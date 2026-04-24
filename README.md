@@ -4,11 +4,7 @@
 
 brain turns a folder of Markdown files into a second brain you can chat with, brainstorm against, and draft inside. It's [Obsidian](https://obsidian.md)-compatible, keeps every change staged for your approval, and runs entirely on your laptop — the only outbound calls are the LLM API calls you configure.
 
-> **v0.1.0** — first public release. See the [release notes](docs/release-notes/v0.1.0.md).
-
-![brain chat screen](docs/testing/screenshots/v0.1.0/chat-first-response.png)
-
-*Screenshot placeholder — real image lands in [Plan 09 Task 12](tasks/plans/09-ship.md#task-12--embed-screenshots--doc-polish-from-qa-findings).*
+> **v0.1.0** — first public release. See the [release notes](docs/release-notes/v0.1.0.md). Visual screenshots land in v0.1.1.
 
 ---
 
@@ -80,19 +76,6 @@ Then start chatting. Your first message becomes the thread title.
 - A browser (Chrome, Safari, Edge, or any Chromium-based — Firefox best-effort)
 
 Linux is best-effort — `install.sh` works on most distros but isn't gate-tested for v0.1.0.
-
----
-
-## Screenshots
-
-*(placeholders — real images land after Plan 09 Task 11 manual-QA sweep)*
-
-- ![setup wizard step 3](docs/testing/screenshots/v0.1.0/setup-wizard-step-3.png) — setup wizard (API key step)
-- ![new thread empty](docs/testing/screenshots/v0.1.0/new-thread-empty.png) — starter prompts per chat mode
-- ![pending patch](docs/testing/screenshots/v0.1.0/pending-patch-diff.png) — pending patch with inline diff
-- ![browse backlinks](docs/testing/screenshots/v0.1.0/browse-backlinks.png) — browse view with backlinks rail
-- ![settings domains](docs/testing/screenshots/v0.1.0/settings-domains.png) — domain settings
-- ![bulk import](docs/testing/screenshots/v0.1.0/bulk-dry-run.png) — bulk import dry-run table
 
 ---
 
