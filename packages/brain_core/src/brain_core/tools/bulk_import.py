@@ -89,9 +89,16 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
     """Construct the IngestPipeline using the same shape as brain_ingest.
 
     Resolves model strings from ``ctx.config.llm`` when present, falling
-    back to the hardcoded constants otherwise (issue #31).
+    back to the hardcoded constants otherwise (issue #31). Also resolves
+    the source-handler list from ``ctx.config.handlers`` so per-handler
+    tunables flow through the bulk-import path too (issue #23).
     """
+    from brain_core.ingest.dispatcher import _default_handlers
+
     cfg_llm = getattr(ctx.config, "llm", None) if ctx.config is not None else None
+    cfg_handlers = (
+        getattr(ctx.config, "handlers", None) if ctx.config is not None else None
+    )
     classify_model = (
         getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
     )
@@ -101,6 +108,7 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
     integrate_model = (
         getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
     )
+    handlers = _default_handlers(cfg_handlers) if cfg_handlers is not None else None
     return IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
@@ -109,6 +117,7 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
         integrate_model=integrate_model,
         classify_model=classify_model,
         state_db=ctx.state_db,
+        handlers=handlers,
     )
 
 

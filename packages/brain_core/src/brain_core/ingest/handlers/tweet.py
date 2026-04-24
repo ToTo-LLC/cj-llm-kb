@@ -22,6 +22,12 @@ class TweetHandler:
     source_type: SourceType = SourceType.TWEET
     fragile: bool = True
 
+    def __init__(self, *, timeout_seconds: float = 20.0) -> None:
+        # Issue #23: timeout is user-tunable via ``HandlersConfig.tweet``.
+        # Default matches ``TweetHandlerConfig.timeout_seconds`` so callers
+        # that construct ``TweetHandler()`` keep previous behavior.
+        self._timeout_seconds = timeout_seconds
+
     def can_handle(self, spec: str | Path) -> bool:
         if not isinstance(spec, str):
             return False
@@ -38,7 +44,7 @@ class TweetHandler:
             raise HandlerError(f"no tweet id in {spec}")
         tweet_id = m.group(1)
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
                 resp = await client.get(_SYNDICATION, params={"id": tweet_id})
                 resp.raise_for_status()
                 data = resp.json()

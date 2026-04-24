@@ -70,6 +70,13 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         "domain_order",
         "budget.override_until",
         "budget.override_delta_usd",
+        # Issue #23: per-handler tunables (URL/Tweet timeouts, PDF
+        # min_chars). Each maps to a field on ``HandlersConfig.<handler>``.
+        # Plan 07's persistence path (Task 5) will write these to disk; the
+        # Settings page surfaces them in the next frontend pass.
+        "handlers.url.timeout_seconds",
+        "handlers.tweet.timeout_seconds",
+        "handlers.pdf.min_chars",
     }
 )
 

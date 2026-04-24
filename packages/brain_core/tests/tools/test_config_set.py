@@ -40,6 +40,7 @@ def test_settable_keys_match_plan_07_task_4() -> None:
     Plan 07 Task 1: adds the 5 ``autonomous.<category>`` flags.
     Plan 07 Task 2: adds the 3 per-mode ``{mode}_model`` overrides.
     Plan 07 Task 4: adds ``domain_order`` + 2 ``budget.override_*`` fields.
+    Issue #23: adds 3 ``handlers.*`` per-handler tunables.
     """
     assert (
         frozenset(
@@ -57,10 +58,42 @@ def test_settable_keys_match_plan_07_task_4() -> None:
                 "domain_order",
                 "budget.override_until",
                 "budget.override_delta_usd",
+                "handlers.url.timeout_seconds",
+                "handlers.tweet.timeout_seconds",
+                "handlers.pdf.min_chars",
             }
         )
         == _SETTABLE_KEYS
     )
+
+
+async def test_allows_handler_config_keys(tmp_path: Path) -> None:
+    """Issue #23: ``handlers.<handler>.<field>`` paths flow through the
+    allowlist + secret-substring check without raising. Persistence is
+    deferred to the same Plan 07 Task 5 path as every other settable key.
+    """
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research",),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+    )
+    for key, value in (
+        ("handlers.url.timeout_seconds", 60.0),
+        ("handlers.tweet.timeout_seconds", 5.0),
+        ("handlers.pdf.min_chars", 50),
+    ):
+        result = await handle({"key": key, "value": value}, ctx)
+        assert result.data is not None
+        assert result.data["status"] == "updated"
+        assert result.data["key"] == key
+        assert result.data["value"] == value
 
 
 async def test_allows_autonomous_flag(tmp_path: Path) -> None:

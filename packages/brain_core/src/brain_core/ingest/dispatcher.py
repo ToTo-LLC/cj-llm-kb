@@ -8,6 +8,7 @@ plain text. The order is codified in `_default_handlers()`.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from brain_core.ingest.handlers.base import SourceHandler
 from brain_core.ingest.handlers.email import EmailHandler
@@ -19,12 +20,15 @@ from brain_core.ingest.handlers.transcript_vtt import TranscriptVTTHandler
 from brain_core.ingest.handlers.tweet import TweetHandler
 from brain_core.ingest.handlers.url import URLHandler
 
+if TYPE_CHECKING:
+    from brain_core.config.schema import HandlersConfig
+
 
 class DispatchError(RuntimeError):
     """No handler could claim the given source spec."""
 
 
-def _default_handlers() -> list[SourceHandler]:
+def _default_handlers(cfg: HandlersConfig | None = None) -> list[SourceHandler]:
     """Ordered list of handlers. More-specific must come before more-general.
 
     - TweetHandler before URLHandler: tweet URLs also match the generic URL
@@ -32,14 +36,19 @@ def _default_handlers() -> list[SourceHandler]:
     - Transcript handlers (vtt, docx, text) before PDFHandler/EmailHandler/TextHandler:
       they target more specific extensions or stem conventions.
     - TextHandler is last: it's the broadest file-level catch.
+
+    ``cfg`` (issue #23) feeds per-handler tunables (URL/Tweet timeouts, PDF
+    min_chars). When ``None`` every handler uses its constructor default —
+    matches pre-issue-#23 behavior bit-for-bit so tests + embedders that
+    construct handlers without a config keep working.
     """
     return [
-        TweetHandler(),
-        URLHandler(),
+        TweetHandler(timeout_seconds=cfg.tweet.timeout_seconds) if cfg else TweetHandler(),
+        URLHandler(timeout_seconds=cfg.url.timeout_seconds) if cfg else URLHandler(),
         TranscriptVTTHandler(),
         TranscriptDOCXHandler(),
         TranscriptTextHandler(),
-        PDFHandler(),
+        PDFHandler(min_chars=cfg.pdf.min_chars) if cfg else PDFHandler(),
         EmailHandler(),
         TextHandler(),
     ]

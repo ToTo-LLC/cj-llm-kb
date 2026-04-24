@@ -16,6 +16,13 @@ from brain_core.ingest.types import ExtractedSource, SourceType
 class URLHandler:
     source_type: SourceType = SourceType.URL
 
+    def __init__(self, *, timeout_seconds: float = 30.0) -> None:
+        # Issue #23: timeout is user-tunable via ``HandlersConfig.url``.
+        # Constructor default mirrors ``URLHandlerConfig.timeout_seconds`` so
+        # ``URLHandler()`` (no-config callers, tests) keeps the previous
+        # behavior bit-for-bit.
+        self._timeout_seconds = timeout_seconds
+
     def can_handle(self, spec: str | Path) -> bool:
         if not isinstance(spec, str):
             return False
@@ -26,7 +33,9 @@ class URLHandler:
         if not isinstance(spec, str):
             raise HandlerError(f"url handler cannot read {spec!r}")
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            async with httpx.AsyncClient(
+                follow_redirects=True, timeout=self._timeout_seconds
+            ) as client:
                 resp = await client.get(spec)
                 resp.raise_for_status()
                 html = resp.text

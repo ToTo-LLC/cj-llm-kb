@@ -111,9 +111,11 @@ class BulkImporter:
             if _is_hidden(p, root=folder):
                 continue
 
-            # Check that a handler claims this file
+            # Check that a handler claims this file. Reuse the pipeline's
+            # handler list (issue #23) so config-supplied tunables take
+            # effect for the bulk path too.
             try:
-                await dispatch(p)
+                await dispatch(p, handlers=self._pipeline.handlers)
             except DispatchError:
                 result.skipped.append(p)
                 continue

@@ -18,6 +18,7 @@ from brain_core.ingest.archive import archive_dir_for
 from brain_core.ingest.classifier import ClassifyResult, classify
 from brain_core.ingest.dispatcher import dispatch
 from brain_core.ingest.failures import record_failure
+from brain_core.ingest.handlers.base import SourceHandler
 from brain_core.ingest.hashing import content_hash
 from brain_core.ingest.types import ExtractedSource, IngestResult, IngestStatus
 from brain_core.llm.provider import LLMProvider
@@ -45,6 +46,12 @@ class IngestPipeline:
     # call site (tests, demo scripts) keeps compiling without change. When
     # absent, ``_record_history`` is a no-op.
     state_db: StateDB | None = None
+    # Issue #23: optional handler list. When provided, ``ingest()`` passes
+    # it to ``dispatch(...)`` so config-supplied handler tunables (URL/Tweet
+    # timeouts, PDF min_chars) take effect. ``None`` falls back to
+    # ``_default_handlers()`` with hardcoded defaults — keeps Plan 02 call
+    # sites working unchanged.
+    handlers: list[SourceHandler] | None = None
 
     async def ingest(
         self,
@@ -97,8 +104,9 @@ class IngestPipeline:
         run_cost: float = 0.0
 
         try:
-            # Stage 2: Dispatch
-            handler = await dispatch(spec)
+            # Stage 2: Dispatch — pass self.handlers so config-supplied
+            # handler tunables (issue #23) flow through.
+            handler = await dispatch(spec, handlers=self.handlers)
 
             # Stage 3: Archive dir + Extract
             tentative_domain = domain_override if domain_override else allowed_domains[0]

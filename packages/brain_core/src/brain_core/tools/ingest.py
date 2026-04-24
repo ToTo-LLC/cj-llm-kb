@@ -69,8 +69,17 @@ def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
     falling back to the hardcoded constants when no config is wired (issue
     #31). The fallback path keeps the 56+ existing ToolContext construction
     sites that don't pass a config working unchanged.
+
+    Issue #23: also resolves the source-handler list from
+    ``ctx.config.handlers`` so per-handler tunables (URL/Tweet timeouts,
+    PDF min_chars) take effect.
     """
+    from brain_core.ingest.dispatcher import _default_handlers
+
     cfg_llm = getattr(ctx.config, "llm", None) if ctx.config is not None else None
+    cfg_handlers = (
+        getattr(ctx.config, "handlers", None) if ctx.config is not None else None
+    )
     classify_model = (
         getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
     )
@@ -84,6 +93,10 @@ def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
     integrate_model = (
         getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
     )
+    # Pass the resolved handler list only when a config was supplied;
+    # otherwise leave it None so the pipeline falls back to the hardcoded
+    # defaults (which is what the no-config tests expect).
+    handlers = _default_handlers(cfg_handlers) if cfg_handlers is not None else None
     return IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
@@ -92,6 +105,7 @@ def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
         integrate_model=integrate_model,
         classify_model=classify_model,
         state_db=ctx.state_db,
+        handlers=handlers,
     )
 
 
