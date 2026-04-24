@@ -50,7 +50,7 @@ LIB_DIR="$SCRIPT_DIR/install_lib"
 # before install_lib/*.sh gets sourced. The values MUST match the main
 # defaults block lower down — they are the same release asset.
 BRAIN_DEFAULT_RELEASE_URL="https://github.com/ToTo-LLC/cj-llm-kb/releases/download/v0.1.0/brain-0.1.0.tar.gz"
-BRAIN_DEFAULT_RELEASE_SHA256="fc8722da883ae02f40dbe1c66a3b845d367d62786eb53624ac3323a18e82a733"
+BRAIN_DEFAULT_RELEASE_SHA256="657f9feaab04fc2a54fe9089b226ae7d118a6c523cc6c03b72dbaba829592c1a"
 
 # Bootstrap: when install.sh was fetched standalone (``curl ... | bash``
 # or ``curl -o install.sh && bash install.sh``), install_lib/ does not
