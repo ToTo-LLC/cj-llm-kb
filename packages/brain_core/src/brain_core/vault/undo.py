@@ -23,6 +23,38 @@ import shutil
 from pathlib import Path
 
 
+def _consume_prev_chars(lines: list[str], start: int, prev_len: int) -> tuple[str, int]:
+    """Consume enough list elements (rejoined with ``\\n``) to total exactly
+    ``prev_len`` characters, returning ``(prev_content, next_index)``.
+
+    The undo writer joins the per-file record with ``\\n``, so a multi-line
+    prev value is split across consecutive ``lines`` entries. The recorded
+    ``PREV_LEN`` is the original character count of the un-split string —
+    walking by that count is independent of any sentinel that might appear
+    inside the content (issue #25).
+    """
+    consumed_chars = 0
+    consumed_parts: list[str] = []
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        sep_len = 1 if consumed_parts else 0  # the joining "\n" between parts
+        candidate_total = consumed_chars + sep_len + len(line)
+        if candidate_total > prev_len:
+            # Take only what fits to land on exactly prev_len chars.
+            take = prev_len - consumed_chars - sep_len
+            if take >= 0:
+                consumed_parts.append(line[:take])
+            i += 1
+            break
+        consumed_parts.append(line)
+        consumed_chars = candidate_total
+        i += 1
+        if consumed_chars == prev_len:
+            break
+    return "\n".join(consumed_parts), i
+
+
 class UndoLog:
     def __init__(self, *, vault_root: Path) -> None:
         self.vault_root = vault_root.resolve()
@@ -53,13 +85,18 @@ class UndoLog:
                     path.unlink()
                 i += 1
             elif i < len(lines) and lines[i].startswith("PREV_LEN\t"):
+                prev_len = int(lines[i].split("\t", 1)[1])
                 i += 1
-                prev_lines: list[str] = []
-                while i < len(lines) and lines[i] != "END_PREV":
-                    prev_lines.append(lines[i])
+                # Slice exactly prev_len characters of content (issue #25).
+                # The original parser used the END_PREV sentinel and
+                # truncated when the file's prior content contained that
+                # exact line. Consuming by recorded byte count is safe.
+                prev_content, i = _consume_prev_chars(lines, i, prev_len)
+                # Tolerate the optional END_PREV trailer for backward
+                # compatibility — older undo records still have it.
+                if i < len(lines) and lines[i] == "END_PREV":
                     i += 1
-                i += 1  # skip END_PREV
-                path.write_text("\n".join(prev_lines), encoding="utf-8")
+                path.write_text(prev_content, encoding="utf-8")
 
     def _revert_rename_domain(self, lines: list[str]) -> None:
         """Reverse a ``brain_rename_domain`` operation.
