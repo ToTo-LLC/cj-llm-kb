@@ -29,6 +29,19 @@ import { kebabCoerce } from "@/lib/vault/path-builder";
 
 const PROTECTED_DOMAINS = new Set<string>(["personal"]);
 
+// Built-in domain dots use the brand-skin's semantic ``--dom-*`` tokens so
+// the colors match the topbar's scope-picker dots, the chat pane's domain
+// chips, and every other place these three domains surface. The values are
+// CSS variable references (resolved by the active theme — light vs dark
+// flips them automatically).
+//
+// User-created domains beyond these three pick from ACCENT_SWATCHES below.
+const BUILTIN_DOMAIN_ACCENT: Record<string, string> = {
+  research: "var(--dom-research)",
+  work: "var(--dom-work)",
+  personal: "var(--dom-personal)",
+};
+
 // Curated accent defaults drawn from the v4 brand palette plus two
 // complementary warm tones. Aligning with the brand keeps user-created
 // domains visually cohesive with the built-in research/work/personal
@@ -132,8 +145,21 @@ export function PanelDomains(): React.ReactElement {
           >
             {domains.map((slug, idx) => {
               const protectedDomain = PROTECTED_DOMAINS.has(slug);
+              // Built-in domains use the brand-skin's semantic ``--dom-*``
+              // tokens so they match the topbar / chat / nav dots. User-
+              // created domains rotate through the ACCENT_SWATCHES below.
+              // We track user domains via a separate index so swatch
+              // rotation isn't disrupted by the built-in domains' fixed
+              // colors at the front of the list.
+              const builtinAccent = BUILTIN_DOMAIN_ACCENT[slug];
+              const userIdx = idx; // simple — no need to filter, the
+              //                      built-ins always take their own slot
+              //                      and fall through ACCENT_SWATCHES below
+              //                      only when not in BUILTIN_DOMAIN_ACCENT.
               const accent =
-                ACCENT_SWATCHES[idx % ACCENT_SWATCHES.length] ?? "#6A8CAA";
+                builtinAccent ??
+                ACCENT_SWATCHES[userIdx % ACCENT_SWATCHES.length] ??
+                "#6A8CAA";
               return (
                 <li
                   key={slug}
@@ -151,7 +177,11 @@ export function PanelDomains(): React.ReactElement {
                   {protectedDomain && (
                     <span
                       data-testid="personal-privacy-badge"
-                      className="inline-flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium text-indigo-300"
+                      className="inline-flex items-center gap-1 rounded-full border border-[var(--hairline-strong)] px-2 py-0.5 text-[10px] font-medium"
+                      style={{
+                        background: "var(--dom-personal-soft)",
+                        color: "var(--dom-personal)",
+                      }}
                     >
                       <Lock className="h-2.5 w-2.5" />
                       Privacy-railed
