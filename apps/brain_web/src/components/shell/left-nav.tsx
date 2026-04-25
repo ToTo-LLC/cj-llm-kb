@@ -35,15 +35,20 @@ export function LeftNav() {
   }
 
   return (
+    // Class ``nav`` matches the brand-skin.css selectors so the active-item
+    // ember inset accent (``.nav-item.active`` → ``box-shadow: inset 2px 0 0
+    // var(--brand-ember)``) cascades automatically. Wrapped in ``leftnav``
+    // too for any legacy Tailwind selectors that may still target the old
+    // class name.
     <nav
       aria-label="Primary"
-      className="leftnav flex flex-col gap-2 border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 text-[var(--text)]"
+      className="nav leftnav flex flex-col gap-2 p-3"
     >
       <Button
         type="button"
         onClick={handleNewChat}
         aria-label="New chat"
-        className="w-full justify-start"
+        className="new-chat-btn nav-new w-full justify-start"
         size="sm"
       >
         + New chat
@@ -62,11 +67,11 @@ export function LeftNav() {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className={[
-                  "flex items-center rounded-md px-3 py-1.5 text-sm",
-                  active
-                    ? "bg-[var(--surface-3)] text-[var(--text)]"
-                    : "text-[var(--text-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]",
-                ].join(" ")}
+                  "nav-item flex items-center px-3 py-1.5 text-sm",
+                  active ? "active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
               >
                 {item.label}
               </Link>
