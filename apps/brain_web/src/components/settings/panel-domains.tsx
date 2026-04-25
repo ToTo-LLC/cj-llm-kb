@@ -29,16 +29,22 @@ import { kebabCoerce } from "@/lib/vault/path-builder";
 
 const PROTECTED_DOMAINS = new Set<string>(["personal"]);
 
-// A small palette of pleasant accent defaults. Stored verbatim as the
-// colour the backend gets; users can later swap via the CLI if they
-// want a hex outside this set.
+// Curated accent defaults drawn from the v4 brand palette plus two
+// complementary warm tones. Aligning with the brand keeps user-created
+// domains visually cohesive with the built-in research/work/personal
+// dots (which use sky/sage/ember). Stored verbatim as the colour the
+// backend gets; users can still swap via the CLI for anything outside
+// this set.
+//
+// Source: docs/design/CJ Knowledge LLM v4/brand/brain-brand.html
+//   sky / sage / wheat / ember / dusk / wine.
 const ACCENT_SWATCHES = [
-  "#4f98b5",
-  "#7b9fd9",
-  "#9f7dd9",
-  "#d97d9f",
-  "#d9b47d",
-  "#7dd9a0",
+  "#6A8CAA", // sky    — same family as the built-in research dot
+  "#6E7F5B", // sage   — same family as the built-in work dot
+  "#D6A34E", // wheat  — warn / signal
+  "#C64B2E", // ember  — same family as the built-in personal dot
+  "#4C5872", // dusk   — informational / threads
+  "#7A2E3B", // wine   — rejected / dangerous
 ] as const;
 
 export function PanelDomains(): React.ReactElement {
@@ -127,7 +133,7 @@ export function PanelDomains(): React.ReactElement {
             {domains.map((slug, idx) => {
               const protectedDomain = PROTECTED_DOMAINS.has(slug);
               const accent =
-                ACCENT_SWATCHES[idx % ACCENT_SWATCHES.length] ?? "#4f98b5";
+                ACCENT_SWATCHES[idx % ACCENT_SWATCHES.length] ?? "#6A8CAA";
               return (
                 <li
                   key={slug}

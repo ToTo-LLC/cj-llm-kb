@@ -24,6 +24,10 @@ const STUB_DOMAINS = [
   { id: "personal", label: "Personal" },
 ];
 
+// Version surfaced in the topbar's brand chip. Sourced verbatim from the
+// monorepo's shipped tag (``v0.1.0``); update when cutting a new release.
+const APP_VERSION = "0.1.0";
+
 function pathToView(pathname: string | null): string {
   if (!pathname) return "chat";
   const seg = pathname.split("/").filter(Boolean)[0] ?? "chat";
@@ -64,14 +68,43 @@ export function Topbar() {
       className="topbar flex items-center gap-3 border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 text-[var(--text)]"
       data-view={view}
     >
-      {/* App title */}
-      <div className="flex items-center gap-2">
-        <div
-          aria-hidden
-          className="h-4 w-4 rounded-full"
-          style={{ background: "var(--tt-grad-cream-cyan)" }}
-        />
-        <span className="font-medium">brain</span>
+      {/* Brand block — v4 brand-mark (outline circle + ember dot + connector
+          line) plus serif italic ``brain.`` wordmark with ember period and a
+          mono version chip. Class names match the brand-skin.css selectors
+          (.topbar .brand, .brand-mark, .brand .name .wm, .brand .name .ver,
+          .brand .name .wm .dot) so the v4 typography + ember accent flow
+          through the skin layer. */}
+      <div className="brand">
+        <svg
+          className="brand-mark"
+          viewBox="0 0 120 120"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <circle cx="36" cy="60" r="20" strokeWidth="6" />
+          <circle
+            cx="84"
+            cy="60"
+            r="10"
+            fill="var(--brand-ember)"
+            stroke="none"
+          />
+          <line
+            x1="56"
+            y1="60"
+            x2="74"
+            y2="60"
+            strokeWidth="6"
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className="name">
+          <span className="wm">
+            brain<span className="dot">.</span>
+          </span>
+          <span className="ver">v{APP_VERSION}</span>
+        </div>
       </div>
 
       <div aria-hidden className="h-5 w-px bg-[var(--hairline)]" />
