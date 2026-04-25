@@ -29,6 +29,12 @@ export function BootGate({
 }): React.ReactElement {
   const { loading, error, retry } = useBootstrap();
 
+  // Tokens used here come from ``apps/brain_web/src/styles/tokens.css`` +
+  // ``brand-skin.css``. The original Plan 08 BootGate used ``--color-*``
+  // names that don't exist in the project, so every value fell back to a
+  // hardcoded gray and the gate looked unbranded. Aligned 2026-04-24 to
+  // the real token surface (``--surface-*``, ``--text*``, ``--hairline*``,
+  // ``--r-*``).
   if (loading) {
     return (
       <div
@@ -39,13 +45,14 @@ export function BootGate({
           alignItems: "center",
           justifyContent: "center",
           minHeight: "100vh",
-          padding: "var(--space-6, 24px)",
+          padding: 24,
+          background: "var(--surface-0)",
         }}
       >
         <div
           style={{
-            fontSize: "var(--font-size-md, 14px)",
-            color: "var(--color-text-muted, #888)",
+            fontSize: 14,
+            color: "var(--text-muted)",
           }}
         >
           Starting brain…
@@ -63,42 +70,44 @@ export function BootGate({
           alignItems: "center",
           justifyContent: "center",
           minHeight: "100vh",
-          padding: "var(--space-6, 24px)",
+          padding: 24,
+          background: "var(--surface-0)",
         }}
       >
         <div
           style={{
             maxWidth: "420px",
-            padding: "var(--space-6, 24px)",
-            border: "1px solid var(--color-border, #333)",
-            borderRadius: "var(--radius-lg, 8px)",
-            background: "var(--color-surface, #1a1a1a)",
-            color: "var(--color-text, #eee)",
+            padding: 24,
+            border: "1px solid var(--hairline-strong)",
+            borderRadius: "var(--r-lg, 8px)",
+            background: "var(--surface-2)",
+            color: "var(--text)",
             textAlign: "center",
           }}
         >
           <h1
             style={{
-              fontSize: "var(--font-size-lg, 18px)",
+              fontSize: 18,
               fontWeight: 600,
-              marginBottom: "var(--space-3, 12px)",
+              marginBottom: 12,
             }}
           >
             {error}
           </h1>
           <p
             style={{
-              fontSize: "var(--font-size-sm, 13px)",
-              color: "var(--color-text-muted, #999)",
-              marginBottom: "var(--space-5, 20px)",
+              fontSize: 13,
+              color: "var(--text-muted)",
+              marginBottom: 20,
             }}
           >
             Try running{" "}
             <code
               style={{
                 padding: "2px 6px",
-                background: "var(--color-surface-raised, #222)",
-                borderRadius: "var(--radius-sm, 4px)",
+                background: "var(--surface-3)",
+                borderRadius: "var(--r-sm, 4px)",
+                fontFamily: "var(--font-mono)",
               }}
             >
               brain start
@@ -109,13 +118,13 @@ export function BootGate({
             type="button"
             onClick={retry}
             style={{
-              padding: "var(--space-2, 8px) var(--space-4, 16px)",
-              border: "1px solid var(--color-border, #444)",
-              borderRadius: "var(--radius-md, 6px)",
-              background: "var(--color-surface-raised, #222)",
-              color: "var(--color-text, #eee)",
+              padding: "8px 16px",
+              border: "1px solid var(--hairline-strong)",
+              borderRadius: "var(--r-md, 6px)",
+              background: "var(--surface-3)",
+              color: "var(--text)",
               cursor: "pointer",
-              fontSize: "var(--font-size-sm, 13px)",
+              fontSize: 13,
             }}
           >
             Retry
