@@ -18,8 +18,9 @@ import { useDialogsStore } from "@/lib/state/dialogs-store";
  * ``group-hover:opacity-100`` combo delivers that pattern.
  *
  * Task 20 wired the FileToWiki + Fork dialogs through `dialogs-store`.
- * Copy writes real clipboard text; Quote is still a Task 15-adjacent
- * stub (TODO: route into composer with "> " prefix).
+ * Copy writes real clipboard text. Quote stages the message body as
+ * a markdown blockquote in ``chat-store.pendingQuote``; the composer
+ * consumes it on its next render (issue #16).
  */
 
 export interface MsgActionsProps {
@@ -39,6 +40,7 @@ export function MsgActions({
   const activeThreadId = useAppStore((s) => s.activeThreadId);
   const scope = useAppStore((s) => s.scope);
   const transcriptLength = useChatStore((s) => s.transcript.length);
+  const setPendingQuote = useChatStore((s) => s.setPendingQuote);
 
   const onFile = React.useCallback(() => {
     const threadId = activeThreadId ?? "t-new";
@@ -80,10 +82,12 @@ export function MsgActions({
   }, [msg.body]);
 
   const onQuote = React.useCallback(() => {
-    // TODO(Task 15): route into composer-store with "> " prefix.
-    // eslint-disable-next-line no-console
-    console.log("TODO Task 15: quote", { body: msg.body });
-  }, [msg.body]);
+    // Issue #16: stage the message body in chat-store.pendingQuote.
+    // The composer's effect picks it up on next render, prepends "> "
+    // to each line, drops it ahead of any current draft, focuses the
+    // textarea, and clears the pending value.
+    setPendingQuote(msg.body);
+  }, [setPendingQuote, msg.body]);
 
   return (
     <div

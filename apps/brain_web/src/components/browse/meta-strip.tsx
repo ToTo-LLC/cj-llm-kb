@@ -5,6 +5,7 @@ import { Check, Edit, ExternalLink } from "lucide-react";
 
 import { buildObsidianUri } from "@/lib/vault/obsidian-url";
 import { cn } from "@/lib/utils";
+import { prefetchMonaco } from "./monaco-editor";
 
 /**
  * MetaStrip (Plan 07 Task 18).
@@ -79,6 +80,13 @@ export function MetaStrip({
       <button
         type="button"
         onClick={onToggleEdit}
+        // Issue #13: prefetch the Monaco chunk on hover/focus so the
+        // editor is warm by the time the click lands. ``prefetchMonaco``
+        // is idempotent — fired on every hover but only one network
+        // round-trip happens per session. Skipped while ``editing`` is
+        // true because the chunk has already loaded.
+        onMouseEnter={editing ? undefined : prefetchMonaco}
+        onFocus={editing ? undefined : prefetchMonaco}
         className={cn(
           "edit-toggle inline-flex items-center gap-1 rounded border border-[var(--hairline)] px-2 py-1 text-[11px] hover:bg-[var(--surface-3)]",
           editing && "bg-[var(--surface-3)] text-[var(--text)]",

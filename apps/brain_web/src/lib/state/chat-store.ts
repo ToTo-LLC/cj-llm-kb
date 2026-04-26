@@ -97,6 +97,22 @@ export interface ChatState {
    */
   pendingAttachedSources: string[];
 
+  /**
+   * A snippet (typically one assistant message body) waiting to be
+   * inserted into the composer as a markdown blockquote (issue #16).
+   * The composer's effect watches this on every render: when non-null,
+   * it prepends ``> `` to each line of the snippet, drops it ahead of
+   * any current draft text, focuses the textarea, and calls
+   * :meth:``consumePendingQuote`` to clear so the same quote isn't
+   * applied twice on re-render.
+   *
+   * Why a one-shot pending value instead of "owned by composer state":
+   * msg-actions.tsx fires this from inside the transcript, which
+   * doesn't share React state with the composer. The chat-store is
+   * the only place where both sides can meet.
+   */
+  pendingQuote: string | null;
+
   // WS-event reducers
   onTurnStart: (ev: TurnStartEvent) => void;
   onDelta: (ev: DeltaEvent) => void;
@@ -124,6 +140,13 @@ export interface ChatState {
   removeAttachedSource: (id: string) => void;
   /** Empty the attached-source row (fires on successful turn_start send). */
   clearAttachedSources: () => void;
+
+  /** Stage a snippet for the composer to render as a blockquote on its
+   *  next render (issue #16). The composer is responsible for consuming
+   *  and clearing via :meth:``consumePendingQuote``. */
+  setPendingQuote: (snippet: string) => void;
+  /** Clear the pending quote — called by the composer after applying. */
+  consumePendingQuote: () => void;
 }
 
 // ---------- Helpers ----------
@@ -162,6 +185,7 @@ export const useChatStore = create<ChatState>((set) => ({
   currentTurn: 0,
   cumulativeTokensIn: 0,
   pendingAttachedSources: [],
+  pendingQuote: null,
 
   onTurnStart: (ev) => {
     set((s) => ({
@@ -331,5 +355,13 @@ export const useChatStore = create<ChatState>((set) => ({
 
   clearAttachedSources: () => {
     set({ pendingAttachedSources: [] });
+  },
+
+  setPendingQuote: (snippet) => {
+    set({ pendingQuote: snippet });
+  },
+
+  consumePendingQuote: () => {
+    set({ pendingQuote: null });
   },
 }));

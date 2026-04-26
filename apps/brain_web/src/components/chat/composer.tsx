@@ -76,9 +76,43 @@ export function Composer({
   const pendingAttachedSources = useChatStore(
     (s) => s.pendingAttachedSources,
   );
+  const pendingQuote = useChatStore((s) => s.pendingQuote);
+  const consumePendingQuote = useChatStore((s) => s.consumePendingQuote);
 
   const [text, setText] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  // Issue #16: when ``msg-actions.tsx`` stages a quote via
+  // ``setPendingQuote(body)``, this effect picks it up on next render,
+  // formats each line as a markdown blockquote (``> ...``), prepends
+  // it to whatever the user has already typed, focuses the textarea,
+  // and consumes the pending value so the same quote isn't re-applied
+  // on the next render. The blank line after the quote is the
+  // markdown-standard separator between blockquote and the user's
+  // own reply text.
+  React.useEffect(() => {
+    if (pendingQuote === null) return;
+    const quoted =
+      pendingQuote
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n") + "\n\n";
+    setText((prev) => quoted + prev);
+    consumePendingQuote();
+    // Defer focus + autosize until after the setText flush.
+    queueMicrotask(() => {
+      textareaRef.current?.focus();
+      const el = textareaRef.current;
+      if (el) {
+        el.style.height = "auto";
+        el.style.height = `${Math.min(MAX_AUTOSIZE_PX, el.scrollHeight)}px`;
+        // Park the cursor at the very end so the user can start
+        // typing their reply immediately.
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    });
+  }, [pendingQuote, consumePendingQuote]);
 
   const placeholder = PLACEHOLDERS[mode];
   const ctxPct = Math.min(
