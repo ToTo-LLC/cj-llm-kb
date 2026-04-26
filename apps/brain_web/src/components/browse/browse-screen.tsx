@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, GitCompare } from "lucide-react";
 
 import {
+  configGet,
   listDomains,
   proposeNote,
   readNote,
@@ -42,10 +43,67 @@ import { WikilinkHover } from "./wikilink-hover";
 export interface BrowseScreenProps {
   /** Optional pre-selected note path from ``/browse/[...path]``. */
   activePath?: string;
-  /** Vault name — fed into Obsidian URI. For now taken from a
-   *  prop; Task 25 sweep pipes the real value through
-   *  ``brain_config_get("vault_name")``. */
+  /** Vault name — fed into the Obsidian URI. When omitted, the
+   *  component falls back to ``brain_config_get("vault_path")`` and
+   *  uses the basename of the returned path (so a vault at
+   *  ``~/Documents/my-brain`` shows up as ``my-brain`` in the
+   *  Obsidian deep-link). The prop override exists for tests and
+   *  for any caller that already has the value cached. */
   vaultName?: string;
+}
+
+/** Module-level cache so the configGet round-trip happens at most once
+ *  per session. The vault path is fixed for a given brain process — it
+ *  cannot change without a restart — so caching is safe. */
+let cachedVaultName: string | null = null;
+
+function basename(p: string): string {
+  // Cross-platform basename: split on both ``/`` and ``\``, keep the
+  // last non-empty segment. Falls back to "brain" if the path is
+  // empty/garbled.
+  const trimmed = p.replace(/[\\/]+$/, ""); // drop trailing slashes
+  const parts = trimmed.split(/[\\/]/);
+  const last = parts[parts.length - 1] ?? "";
+  return last || "brain";
+}
+
+/** Load the vault name from ``brain_config_get("vault_path")``. Returns
+ *  the prop override immediately if supplied; otherwise resolves the
+ *  config call once and caches the basename for subsequent renders.
+ *  Falls back to ``"brain"`` on any error so the Obsidian deep-link
+ *  always renders something. */
+function useVaultName(override?: string): string {
+  const [name, setName] = React.useState<string>(
+    override ?? cachedVaultName ?? "brain",
+  );
+
+  React.useEffect(() => {
+    if (override !== undefined) return; // caller has it; nothing to fetch
+    if (cachedVaultName !== null) return; // session-cache hit
+
+    let cancelled = false;
+    configGet({ key: "vault_path" })
+      .then((res) => {
+        if (cancelled) return;
+        const value =
+          res.data && typeof res.data.value === "string"
+            ? res.data.value
+            : null;
+        if (value) {
+          cachedVaultName = basename(value);
+          setName(cachedVaultName);
+        }
+      })
+      .catch(() => {
+        // Best-effort. If the config call fails the fallback "brain"
+        // already on screen is correct for the default vault location.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [override]);
+
+  return override ?? name;
 }
 
 function slugOf(path: string): string {
@@ -68,9 +126,13 @@ function readTime(body: string): number {
 
 export function BrowseScreen({
   activePath,
-  vaultName = "brain",
+  vaultName: vaultNameProp,
 }: BrowseScreenProps): React.ReactElement {
   const router = useRouter();
+  // Issue #14: vault name now flows from ``brain_config_get("vault_path")``
+  // rather than the hardcoded prop default. The hook respects an explicit
+  // prop override (used by tests + any caller that already has it cached).
+  const vaultName = useVaultName(vaultNameProp);
   const scope = useAppStore((s) => s.scope);
   const pushToast = useSystemStore((s) => s.pushToast);
   const setBrowseCurrent = useBrowseStore((s) => s.setCurrent);

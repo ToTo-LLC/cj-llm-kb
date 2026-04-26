@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { Sun, Moon, PanelRight, Settings as SettingsIcon } from "lucide-react";
+
 import { useAppStore, type ChatMode } from "@/lib/state/app-store";
 import { Button } from "@/components/ui/button";
 import {
@@ -193,34 +195,43 @@ export function Topbar() {
       {/* Connection pip — hidden when WS is "ok" (Plan 07 Task 12). */}
       <ConnectionIndicator />
 
-      {/* Theme toggle */}
+      {/* Theme / Rail / Settings — iconified per the v4 mockup. Sun
+          shown when theme is dark (click → light), Moon when light
+          (click → dark). PanelRight icon toggles the right-rail open
+          state. SettingsIcon (gear) deep-links to /settings. The
+          aria-label keeps the action discoverable for screen readers
+          and keyboard nav even with the text-free chrome. */}
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        aria-label="Toggle theme"
-        className="h-7 px-2 text-xs"
+        aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        title={theme === "dark" ? "Light" : "Dark"}
+        className="h-7 w-7 p-0"
         onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
       >
-        {theme === "dark" ? "Light" : "Dark"}
+        {theme === "dark" ? (
+          <Sun className="h-4 w-4" aria-hidden="true" />
+        ) : (
+          <Moon className="h-4 w-4" aria-hidden="true" />
+        )}
       </Button>
 
-      {/* Rail toggle */}
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        aria-label="Toggle rail"
-        className="h-7 px-2 text-xs"
+        aria-label="Toggle right rail"
+        title="Right rail"
+        className="h-7 w-7 p-0"
         onClick={toggleRail}
       >
-        Rail
+        <PanelRight className="h-4 w-4" aria-hidden="true" />
       </Button>
 
-      {/* Settings gear */}
-      <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
-        <Link href="/settings" aria-label="Settings">
-          Settings
+      <Button asChild variant="ghost" size="sm" className="h-7 w-7 p-0">
+        <Link href="/settings" aria-label="Settings" title="Settings">
+          <SettingsIcon className="h-4 w-4" aria-hidden="true" />
         </Link>
       </Button>
     </header>

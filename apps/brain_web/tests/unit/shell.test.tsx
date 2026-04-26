@@ -56,8 +56,16 @@ describe("Shell components", () => {
     // App title (banner-level label "brain").
     const banner = screen.getByRole("banner");
     expect(banner).toHaveTextContent(/brain/i);
-    expect(screen.getByRole("button", { name: /toggle theme/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /toggle rail/i })).toBeInTheDocument();
+    // Phase 2E iconified the topbar's right-side controls. The aria-labels
+    // are intentionally action-prefixed ("Switch to light theme" / "Toggle
+    // right rail") so screen-reader users hear what the icon-only button
+    // does, not just what it represents.
+    expect(
+      screen.getByRole("button", { name: /switch to (light|dark) theme/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /toggle right rail/i }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /settings/i })).toBeInTheDocument();
   });
 
@@ -86,9 +94,9 @@ describe("Shell components", () => {
       </AppShell>,
     );
     expect(useAppStore.getState().railOpen).toBe(true);
-    await user.click(screen.getByRole("button", { name: /toggle rail/i }));
+    await user.click(screen.getByRole("button", { name: /toggle right rail/i }));
     expect(useAppStore.getState().railOpen).toBe(false);
-    await user.click(screen.getByRole("button", { name: /toggle rail/i }));
+    await user.click(screen.getByRole("button", { name: /toggle right rail/i }));
     expect(useAppStore.getState().railOpen).toBe(true);
   });
 
