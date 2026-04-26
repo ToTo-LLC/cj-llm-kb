@@ -129,11 +129,13 @@ export function StepPickFolder(): React.ReactElement {
       try {
         const res = await bulkImport({ folder: folderPath, dry_run: true });
         // ``brain_bulk_import`` ships its per-file breakdown under
-        // ``data.items``; an earlier iteration named it ``plan`` in the
-        // sketch. Accept both so the UI keeps working if the tool name
-        // flips back for any reason (Plan 07 Task 25C sweep fix —
-        // surfaced by the bulk-import e2e spec).
-        const rawPlan = res.data?.plan ?? (res.data as { items?: unknown })?.items;
+        // ``data.items`` (verified in
+        // ``packages/brain_core/src/brain_core/tools/bulk_import.py:182``).
+        // The previous ``data.plan ?? data.items`` fallback was a
+        // safeguard from a Plan 07 sketch that never landed — issue #7
+        // in the v0.1.0 known-issues backlog tracked the cleanup. Now a
+        // single ``items`` read; the backend is the source of truth.
+        const rawPlan = (res.data as { items?: unknown })?.items;
         const plan = Array.isArray(rawPlan)
           ? (rawPlan as Array<Record<string, unknown>>)
           : [];
