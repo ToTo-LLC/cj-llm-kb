@@ -28,10 +28,12 @@
  * Do NOT reach for Option B from this dialog. If you think you need it,
  * update the spec first.
  *
- * Task 11 scope: this component only exposes the dialog + its
- * ``onConfirm(edited: string)`` signature. The three-step chain is wired in
- * Task 16 (pending-patches view). Until then the host passes a handler that
- * logs the edited body.
+ * Component scope: this dialog exposes the side-by-side editor + its
+ * ``onConfirm(edited: string)`` signature. The three-step chain itself
+ * lives in the host (``components/pending/patch-detail.tsx``,
+ * ``handleEdit``) — host calls ``rejectPatch`` → ``proposeNote`` →
+ * ``applyPatch`` in sequence, surfacing toasts on success / failure.
+ * Verified wired 2026-04-26 while closing issue #19.
  * ---------------------------------------------------------------------------
  */
 
@@ -65,8 +67,8 @@ export function EditApproveDialog({
   const isNewFile = before.length === 0;
 
   const handleSave = () => {
-    // TODO(Task 16): wire the three-step chain documented at the top of this
-    // file. For now we simply hand the edited body to the caller.
+    // Hand the edited body up; the host (patch-detail.tsx) runs the
+    // reject → propose → apply chain documented above.
     onConfirm(draft);
     onClose();
   };

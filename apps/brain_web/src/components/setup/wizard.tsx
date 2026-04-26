@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { applyPatch, proposeNote } from "@/lib/api/tools";
+import { applyPatch, brainSetApiKey, proposeNote } from "@/lib/api/tools";
 
 import { WelcomeStep } from "./steps/welcome";
 import { VaultLocationStep } from "./steps/vault-location";
@@ -43,12 +43,29 @@ export interface WizardProps {
 export function Wizard({ onDone }: WizardProps) {
   const [step, setStep] = useState(1);
   const [vaultPath, setVaultPath] = useState("~/Documents/brain");
-  // TODO(plan-07 task 25 sweep): wire apiKey to `configSet` once the setup
-  // flow can bootstrap a backend token independently.
   const [apiKey, setApiKey] = useState("");
+  // Track whether the api-key value currently in ``apiKey`` has been
+  // persisted to ``<vault>/.brain/secrets.env``. The Test button on
+  // step 3 saves + ping-tests in one shot; if the user types a key but
+  // skips the Test button, ``handleNext`` falls back to persisting on
+  // step 3 → step 4 advance (issue #20).
+  const [apiKeySaved, setApiKeySaved] = useState(false);
   const [theme, setTheme] = useState<ThemeKey>("blank");
   const [brainMd, setBrainMd] = useState(DEFAULT_BRAIN_MD);
   const [busy, setBusy] = useState(false);
+
+  // Bridge for the api-key step: the step's Test button saves+pings
+  // directly via ``brain_set_api_key``; signal that here so we don't
+  // double-save on advance. Wrapping the prop setter rather than
+  // exposing ``setApiKeySaved`` to the step keeps the state contract
+  // minimal — the step only knows about value + onChange + onSaved.
+  const handleApiKeyChange = useCallback((value: string) => {
+    setApiKey(value);
+    setApiKeySaved(false);
+  }, []);
+  const handleApiKeySaved = useCallback(() => {
+    setApiKeySaved(true);
+  }, []);
 
   const canContinue =
     step !== 2 ? true : vaultPath.trim().length > 0;
@@ -85,7 +102,23 @@ export function Wizard({ onDone }: WizardProps) {
 
   async function handleNext() {
     if (busy) return;
-    if (step === 4) {
+    if (step === 3) {
+      // Issue #20: persist the api key on advance if the user typed a
+      // value but didn't click the in-step "Test" button (which saves
+      // + pings in one shot). Idempotent — re-sending the same key is
+      // a no-op on the backend's side; the step's local "saved" flag
+      // just lets us short-circuit the round-trip when the Test
+      // button already did the work.
+      if (apiKey.trim().length > 0 && !apiKeySaved) {
+        setBusy(true);
+        try {
+          await brainSetApiKey({ provider: "anthropic", api_key: apiKey });
+          setApiKeySaved(true);
+        } finally {
+          setBusy(false);
+        }
+      }
+    } else if (step === 4) {
       setBusy(true);
       try {
         await seedTheme(theme);
@@ -130,7 +163,13 @@ export function Wizard({ onDone }: WizardProps) {
         {step === 2 && (
           <VaultLocationStep value={vaultPath} onChange={setVaultPath} />
         )}
-        {step === 3 && <ApiKeyStep value={apiKey} onChange={setApiKey} />}
+        {step === 3 && (
+          <ApiKeyStep
+            value={apiKey}
+            onChange={handleApiKeyChange}
+            onSaved={handleApiKeySaved}
+          />
+        )}
         {step === 4 && (
           <StartingThemeStep pick={theme} onPick={setTheme} />
         )}

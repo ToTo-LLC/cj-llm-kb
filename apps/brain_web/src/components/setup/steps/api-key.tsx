@@ -10,6 +10,10 @@ import { brainPingLlm, brainSetApiKey } from "@/lib/api/tools";
 export interface ApiKeyStepProps {
   value: string;
   onChange: (value: string) => void;
+  /** Issue #20: fired the first time the in-step Test button
+   *  successfully calls ``brain_set_api_key``. Lets the wizard skip
+   *  re-saving on advance because the value is already on disk. */
+  onSaved?: () => void;
 }
 
 interface PingResult {
@@ -32,7 +36,7 @@ interface PingResult {
  * underlying `brain_ping_llm` tool, commit Plan 07 Task 25B for the
  * providers panel wiring): save → ping → render ok/fail pill inline.
  */
-export function ApiKeyStep({ value, onChange }: ApiKeyStepProps) {
+export function ApiKeyStep({ value, onChange, onSaved }: ApiKeyStepProps) {
   const [testing, setTesting] = React.useState(false);
   const [ping, setPing] = React.useState<PingResult | null>(null);
 
@@ -45,6 +49,7 @@ export function ApiKeyStep({ value, onChange }: ApiKeyStepProps) {
       // `<vault>/.brain/secrets.env`. The plaintext never echoes back —
       // `brain_set_api_key` returns a masked suffix.
       await brainSetApiKey({ provider: "anthropic", api_key: value });
+      onSaved?.();
       const res = await brainPingLlm();
       const d = res.data;
       if (d) {
