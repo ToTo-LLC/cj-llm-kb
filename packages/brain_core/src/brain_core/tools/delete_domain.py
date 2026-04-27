@@ -19,11 +19,11 @@ and a ``KIND\tdelete_domain`` undo record is written so
 
 from __future__ import annotations
 
-import contextlib
 import sys
 from typing import Any
 
 from brain_core.config.schema import PRIVACY_RAILED_SLUG
+from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.domain import delete_domain
 
@@ -69,17 +69,33 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 "then re-run delete."
             )
 
+    # Plan 11 Task 4: refuse to delete the active domain. Without this
+    # guard the persisted Config would carry ``active_domain == slug``
+    # but ``domains`` no longer contains it, and the next ``load_config``
+    # would reject the file via ``_check_active_domain_in_domains``.
+    # The user should switch active_domain first (Settings → Domains).
+    cfg = ctx.config
+    if cfg is not None and getattr(cfg, "active_domain", None) == slug:
+        raise PermissionError(
+            f"refusing to delete {slug!r} — it is the active domain. "
+            "Switch the active domain first (Settings → Domains), then re-run delete."
+        )
+
     result = delete_domain(ctx.vault_root, slug, typed_confirm=typed_confirm)
 
-    # Plan 10 Task 5: drop the slug from ``Config.domains`` in-memory
-    # so subsequent listDomains / classify calls see the change. Disk
-    # persistence is issue #27.
-    cfg = ctx.config
-    if cfg is not None and isinstance(getattr(cfg, "domains", None), list):
-        # ``slug`` may not be in cfg.domains (e.g. on-disk-only / D7
-        # divergence); the on-disk delete already happened, so a
-        # missing config entry is fine.
-        with contextlib.suppress(ValueError):
+    # Plan 10 Task 5 + Plan 11 Task 4: drop the slug from
+    # ``Config.domains`` and persist via ``save_config``. The helper
+    # reverts the in-memory removal on disk-write failure so the live
+    # Config never diverges from disk. The folder is already in trash
+    # at this point — even if persistence fails, the data isn't lost
+    # (``brain_undo_last`` reverses the move) so the worst case is the
+    # caller re-runs ``brain_delete_domain`` after fixing the disk
+    # write issue.
+    # ``slug`` may not be in cfg.domains (e.g. on-disk-only / D7
+    # divergence); skip persistence in that case so we don't write a
+    # no-op config update on every divergent delete.
+    if cfg is not None and isinstance(getattr(cfg, "domains", None), list) and slug in cfg.domains:
+        with persist_config_or_revert(cfg, ctx.vault_root):
             cfg.domains.remove(slug)
 
     return ToolResult(

@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from brain_core.config.schema import PRIVACY_RAILED_SLUG, _validate_domain_slug
+from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.frontmatter import (
     FrontmatterError,
@@ -244,17 +245,30 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Step 3: COMMIT — the atomic folder rename.
     os.rename(from_dir, to_dir)
 
-    # Plan 10 Task 5: rewrite ``Config.domains`` in-memory so any
-    # ``allowed_domains`` reads from the live config see the new slug
-    # immediately. Disk persistence is issue #27 / Plan 07 Task 5.
+    # Plan 10 Task 5 + Plan 11 Task 4: rewrite ``Config.domains`` and
+    # persist to ``<vault>/.brain/config.json`` via ``save_config``. The
+    # helper reverts the in-memory rewrite if the disk write fails so
+    # the live Config never diverges from disk. The folder rename
+    # already committed above is left in place — recovery is to re-run
+    # rename (the destination-exists guard will trip and the caller can
+    # back out manually) or to manually fix the config file.
     if cfg is not None and isinstance(getattr(cfg, "domains", None), list):
-        try:
-            idx = cfg.domains.index(from_slug)
-            cfg.domains[idx] = to_slug
-        except ValueError:
-            # ``from_slug`` wasn't configured — append the new one so
-            # the config reflects what's now on disk.
-            cfg.domains.append(to_slug)
+        with persist_config_or_revert(cfg, ctx.vault_root):
+            try:
+                idx = cfg.domains.index(from_slug)
+                cfg.domains[idx] = to_slug
+            except ValueError:
+                # ``from_slug`` wasn't configured — append the new one so
+                # the config reflects what's now on disk.
+                cfg.domains.append(to_slug)
+            # If the renamed slug was the active domain, follow the rename
+            # so the persisted Config remains internally consistent
+            # (Config's ``_check_active_domain_in_domains`` validator
+            # would reject the next ``load_config`` otherwise — pydantic
+            # only validates assignments when ``validate_assignment=True``,
+            # which Config doesn't enable).
+            if getattr(cfg, "active_domain", None) == from_slug:
+                cfg.active_domain = to_slug
 
     # Step 4: write the single undo record. The absolute paths in
     # edits_for_undo still point under <from>/ (the source-of-truth at

@@ -27,6 +27,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -186,3 +188,49 @@ def save_config(
         lock.release()
 
     return target
+
+
+@contextmanager
+def persist_config_or_revert(config: Config, vault_root: Path) -> Iterator[None]:
+    """Snapshot, yield for in-place mutation, persist, revert on failure.
+
+    Plan 11 Task 4 helper for the five mutation tools (``brain_config_set``,
+    ``brain_create_domain``, ``brain_rename_domain``, ``brain_delete_domain``,
+    ``brain_budget_override``). Each tool's pre-Task-4 shape was "mutate
+    ``ctx.config`` in-place, return". Each becomes::
+
+        with persist_config_or_revert(ctx.config, ctx.vault_root):
+            ctx.config.domains.append(slug)
+
+    The yield happens AFTER the deep snapshot but BEFORE :func:`save_config`,
+    so the caller's mutations land on the live ``Config`` first; the writer
+    serializes the post-mutation state. If anything between the snapshot
+    and a successful ``save_config`` raises (caller's mutation, schema
+    validation, lock timeout, disk write), the snapshot's field values
+    are copied back over ``config`` via ``setattr`` and the exception
+    re-raises.
+
+    Why ``setattr`` per field instead of swapping the reference: every
+    caller is a tool whose ``ToolContext`` is ``@dataclass(frozen=True)``,
+    so reassigning ``ctx.config`` raises ``FrozenInstanceError``. Mutating
+    the existing object in place keeps the caller's reference live.
+
+    Why catch bare ``Exception``: the helper only needs to revert when
+    something — caller mutation OR ``save_config`` — actually changed
+    state. If the caller's mutation raises before ``save_config`` runs,
+    the snapshot revert is still the right move (it restores the
+    pre-mutation state) and is idempotent on partial mutations. The
+    caller-visible exception is preserved via re-raise.
+
+    KeyboardInterrupt / SystemExit are *not* caught — those should
+    propagate without revert so the user sees the original signal and
+    we don't paper over an interactive abort.
+    """
+    snapshot = config.model_copy(deep=True)
+    try:
+        yield
+        save_config(config, vault_root)
+    except Exception:
+        for field_name in type(config).model_fields:
+            setattr(config, field_name, getattr(snapshot, field_name))
+        raise

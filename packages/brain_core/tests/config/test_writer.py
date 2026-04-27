@@ -20,6 +20,7 @@ from brain_core.config.schema import _PERSISTED_FIELDS, BudgetConfig, Config
 from brain_core.config.writer import (
     ConfigPersistenceError,
     _json_default,
+    persist_config_or_revert,
     save_config,
 )
 
@@ -281,3 +282,100 @@ def test_save_config_serializes_budget_override_until_isoformat(tmp_path: Path) 
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data["budget"]["override_until"] == "2026-05-01T12:00:00"
     assert data["budget"]["override_delta_usd"] == 2.5
+
+
+# ----------------------------------------------------------------------
+# persist_config_or_revert (Plan 11 Task 4 helper)
+# ----------------------------------------------------------------------
+
+
+def test_persist_or_revert_success_persists_mutation(tmp_path: Path) -> None:
+    cfg = Config(domains=["research", "personal"])
+    with persist_config_or_revert(cfg, tmp_path):
+        cfg.domains.append("hobby")
+
+    # In-memory mutation survived.
+    assert "hobby" in cfg.domains
+    # Disk reflects the post-mutation state.
+    on_disk = json.loads((tmp_path / ".brain" / "config.json").read_text(encoding="utf-8"))
+    assert "hobby" in on_disk["domains"]
+
+
+def test_persist_or_revert_reverts_on_save_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = Config(domains=["research", "personal"])
+    pre_domains = list(cfg.domains)
+
+    def boom(_config: Config, _vault_root: Path, **_kw: object) -> Path:
+        raise ConfigPersistenceError("disk on fire", cause="io_error")
+
+    monkeypatch.setattr("brain_core.config.writer.save_config", boom)
+
+    with (
+        pytest.raises(ConfigPersistenceError, match="disk on fire"),
+        persist_config_or_revert(cfg, tmp_path),
+    ):
+        cfg.domains.append("hobby")
+
+    # In-memory state was restored to the pre-yield snapshot.
+    assert cfg.domains == pre_domains
+
+
+def test_persist_or_revert_reverts_on_caller_exception(tmp_path: Path) -> None:
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    pre_domains = list(cfg.domains)
+    pre_active = cfg.active_domain
+
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        persist_config_or_revert(cfg, tmp_path),
+    ):
+        cfg.domains.append("hobby")
+        cfg.active_domain = "hobby"
+        raise RuntimeError("boom")
+
+    assert cfg.domains == pre_domains
+    assert cfg.active_domain == pre_active
+    # Nothing was written either.
+    assert not (tmp_path / ".brain" / "config.json").exists()
+
+
+def test_persist_or_revert_keeps_caller_reference_alive(tmp_path: Path) -> None:
+    """The helper mutates fields in-place via setattr — it must NOT replace
+    the Config object. Tests that took a reference to the Config before
+    entering the helper still see the same object after revert.
+    """
+    cfg = Config(domains=["research", "personal"])
+    same_ref = cfg
+    with pytest.raises(RuntimeError), persist_config_or_revert(cfg, tmp_path):
+        cfg.domains.append("hobby")
+        raise RuntimeError("boom")
+    assert same_ref is cfg
+    assert "hobby" not in cfg.domains
+
+
+def test_persist_or_revert_propagates_structured_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ConfigPersistenceError carries ``cause`` and ``attempted_path``;
+    those must survive propagation through the helper untouched.
+    """
+    target = tmp_path / ".brain" / "config.json"
+
+    def boom(_config: Config, _vault_root: Path, **_kw: object) -> Path:
+        raise ConfigPersistenceError(
+            "lock timeout",
+            attempted_path=target,
+            cause="lock_timeout",
+        )
+
+    monkeypatch.setattr("brain_core.config.writer.save_config", boom)
+    cfg = Config()
+    with (
+        pytest.raises(ConfigPersistenceError) as exc_info,
+        persist_config_or_revert(cfg, tmp_path),
+    ):
+        cfg.log_llm_payloads = True
+    assert exc_info.value.cause == "lock_timeout"
+    assert exc_info.value.attempted_path == target

@@ -1,9 +1,11 @@
 """brain_budget_override — set an ephemeral budget override.
 
 Raises the effective daily cap by ``amount_usd`` for ``duration_hours``
-hours. Persistence lands in Plan 07 Task 5; this tool currently writes
-to ``ctx.config`` if a config object is attached, otherwise returns the
-intended values so the caller (frontend) can mirror the change locally.
+hours. Plan 11 Task 4 wires :func:`persist_config_or_revert` so the
+override fields (``budget.override_until`` + ``budget.override_delta_usd``)
+round-trip to ``<vault>/.brain/config.json`` via :func:`save_config`. Both
+fields are in the persisted-field whitelist (Plan 11 D4) so a restart
+respects the override until it expires.
 
 The ``CostLedger.is_over_budget(config, today)`` consult is what actually
 gates spending — see ``brain_core/cost/ledger.py``.
@@ -15,12 +17,14 @@ import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_budget_override"
 DESCRIPTION = (
     "Temporarily raise the daily budget cap by amount_usd for duration_hours. "
-    "Returns the override window. Persistence lands in Plan 07 Task 5."
+    "Returns the override window. Persists override_until + override_delta_usd "
+    "to <vault>/.brain/config.json via save_config()."
 )
 _MIN_AMOUNT = 0.01
 _MAX_AMOUNT = 100.0
@@ -58,15 +62,19 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     override_until = datetime.now(tz=UTC) + timedelta(hours=duration_hours)
 
-    # If a config object is wired through ToolContext (Plan 07 Task 5+),
-    # update the in-memory BudgetConfig so the next ``is_over_budget`` call
-    # respects the override. Today no Plan 04 ToolContext carries config; we
-    # use ``getattr`` with a default to stay forward-compatible without
-    # forcing a ToolContext-shape change in this task.
+    # Plan 07 Task 4 + Plan 11 Task 4: mutate ``BudgetConfig`` in-place
+    # then persist to ``<vault>/.brain/config.json`` via
+    # ``persist_config_or_revert``. The helper snapshots first and
+    # reverts both override fields if the disk write fails so the
+    # in-memory override never drifts from disk. Persistence is skipped
+    # when ``ctx.config`` is ``None`` (low-level test contexts) — the
+    # response payload still carries the intended window so the caller
+    # (frontend) can mirror locally.
     config = getattr(ctx, "config", None)
     if config is not None and hasattr(config, "budget"):
-        config.budget.override_until = override_until
-        config.budget.override_delta_usd = amount_usd
+        with persist_config_or_revert(config, ctx.vault_root):
+            config.budget.override_until = override_until
+            config.budget.override_delta_usd = amount_usd
 
     return ToolResult(
         text=(
@@ -78,8 +86,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "override_until": override_until.isoformat(),
             "override_delta_usd": amount_usd,
             "note": (
-                "Plan 07 Task 4: in-memory override. Persistence (writing the "
-                "fields back into config.json) lands in Plan 07 Task 5."
+                "Override window persisted to <vault>/.brain/config.json "
+                "via save_config(). Restart respects the override until it expires."
             ),
         },
     )

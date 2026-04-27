@@ -18,13 +18,19 @@ that a partial create (folder + index but no log) leaves the vault as it
 was found.
 
 Plan 10 Task 5: after a successful create, the slug is appended to
-``ctx.config.domains`` (in-memory). Disk-level config persistence is
-issue #27 / Plan 07 Task 5 follow-up — until that lands, the slug
-survives only for the lifetime of the running process; restart loses the
-edit unless the on-disk folder is what the next list_domains crawl
-picks up. The append also fails silently when ``ctx.config`` is None
-(low-level tests, harness contexts) — the on-disk folder still exists,
-so ``brain_list_domains`` would still surface the slug as
+``ctx.config.domains``. Plan 11 Task 4 wires :func:`persist_config_or_revert`
+around the append so the new slug is persisted to
+``<vault>/.brain/config.json`` via :func:`save_config`. If the disk
+write fails, the in-memory append is reverted and
+``ConfigPersistenceError`` propagates so the caller (UI, MCP, CLI) can
+surface the failure. The on-disk domain folder created above is left
+in place even on persistence failure — the caller can re-run the tool
+once the write issue is resolved (the folder-already-exists guard will
+then fail-fast and the caller can choose to retry or rip the folder).
+
+The persistence step is skipped when ``ctx.config`` is ``None`` (low-level
+tests, harness contexts that don't wire config) — the on-disk folder
+still exists, so ``brain_list_domains`` would still surface the slug as
 ``on_disk=True, configured=False``.
 """
 
@@ -36,6 +42,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from brain_core.config.schema import _validate_domain_slug
+from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_create_domain"
@@ -118,12 +125,16 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             shutil.rmtree(domain_dir, ignore_errors=True)
         raise
 
-    # Plan 10 Task 5: in-memory append so ``brain_list_domains`` and the
-    # classifier's ``allowed_domains`` see the new slug immediately,
-    # without needing the user to restart. Disk-level config persistence
-    # (issue #27) lands in a follow-up.
+    # Plan 10 Task 5 + Plan 11 Task 4: append to ``Config.domains`` and
+    # persist via ``save_config``. The helper snapshots first, mutates
+    # in-place, persists, and reverts the in-memory append on disk-write
+    # failure (so disk and memory never diverge). Persistence is skipped
+    # when ``ctx.config`` is ``None`` — the on-disk folder still exists
+    # and ``brain_list_domains`` will surface it as ``on_disk=True,
+    # configured=False``.
     if cfg is not None and isinstance(getattr(cfg, "domains", None), list):
-        cfg.domains.append(slug)
+        with persist_config_or_revert(cfg, ctx.vault_root):
+            cfg.domains.append(slug)
 
     domain = {"slug": slug, "name": name, "accent_color": accent_color}
     return ToolResult(
@@ -132,9 +143,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "status": "created",
             "domain": domain,
             "note": (
-                "Slug appended to Config.domains in-memory. Disk-level "
-                "persistence is issue #27; restart loses the edit unless "
-                "the on-disk folder remains."
+                "Slug appended to Config.domains and persisted to "
+                "<vault>/.brain/config.json via save_config()."
             ),
         },
     )
