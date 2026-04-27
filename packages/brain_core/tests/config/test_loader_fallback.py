@@ -13,6 +13,7 @@ from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Any
 
+import pytest
 from brain_core.config.loader import load_config
 from brain_core.config.schema import Config
 from structlog.testing import capture_logs
@@ -188,6 +189,80 @@ def test_top_level_non_object_treated_as_parse_error(tmp_path: Path) -> None:
     assert len(logs) == 1
     assert logs[0]["attempted"] == str(main)
     assert logs[0]["reason"] == "parse_error"
+
+
+def test_io_error_on_primary_falls_back_with_io_error_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pin the OSError-but-not-FileNotFoundError branch: a file that exists
+    # but is unreadable (permission / I/O) must surface ``reason="io_error"``
+    # so a future ``brain doctor`` can distinguish "file does not exist
+    # (normal first run)" from "file exists but I cannot read it
+    # (genuinely wrong)". The ``error`` key carries the underlying message.
+    main = tmp_path / "config.json"
+    # File must exist for ``read_text`` to be called; content doesn't
+    # matter because we're forcing PermissionError.
+    main.write_text("{}", encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def raising_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == main:
+            raise PermissionError("denied")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", raising_read_text)
+
+    with capture_logs() as cap_logs:
+        cfg = load_config(config_file=main, env={}, cli_overrides={})
+
+    # No ``.bak`` in tmp_path either — falls through to defaults.
+    assert cfg == Config()
+
+    logs = _fallback_logs(cap_logs)
+    # Two warnings: io_error on primary, missing on the absent .bak.
+    assert len(logs) == 2
+    assert logs[0]["attempted"] == str(main)
+    assert logs[0]["reason"] == "io_error"
+    assert "denied" in logs[0].get("error", "")
+    assert logs[1]["attempted"] == str(tmp_path / "config.json.bak")
+    assert logs[1]["reason"] == "missing"
+
+
+def test_io_error_on_primary_falls_through_to_readable_bak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Companion to the above: when the primary is unreadable but the
+    # ``.bak`` is fine, the loader recovers from the bak rather than
+    # bricking startup. This is the "primary unreadable, .bak fine"
+    # recovery case worth pinning explicitly.
+    main = tmp_path / "config.json"
+    bak = tmp_path / "config.json.bak"
+    main.write_text("{}", encoding="utf-8")
+    bak.write_text(json.dumps({"web_port": 5151}), encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def raising_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == main:
+            raise PermissionError("denied")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", raising_read_text)
+
+    with capture_logs() as cap_logs:
+        cfg = load_config(config_file=main, env={}, cli_overrides={})
+
+    # Recovered from the .bak, not from defaults.
+    assert cfg.web_port == 5151
+
+    logs = _fallback_logs(cap_logs)
+    # Exactly one fallback warning (for the unreadable primary). The bak
+    # read succeeded so it must NOT log.
+    assert len(logs) == 1
+    assert logs[0]["attempted"] == str(main)
+    assert logs[0]["reason"] == "io_error"
+    assert "denied" in logs[0].get("error", "")
 
 
 def test_config_file_none_skips_fallback_chain(tmp_path: Path) -> None:

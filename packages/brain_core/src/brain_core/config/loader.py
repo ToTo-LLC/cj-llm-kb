@@ -76,9 +76,18 @@ def _try_read_config_file(path: Path) -> dict[str, Any] | None:
     """Read and parse a config JSON file, or return ``None`` and warn.
 
     Returns the parsed JSON object on success. Returns ``None`` and emits
-    a ``config_load_fallback`` warning on either of:
-      * file does not exist / cannot be opened (``reason="missing"``)
-      * file exists but is not valid JSON (``reason="parse_error"``)
+    a ``config_load_fallback`` structlog warning on either of:
+      * file does not exist (``reason="missing"``)
+      * file exists but read fails on permissions / I/O (``reason="io_error"``)
+      * file read succeeds but JSON parse fails or top-level value is not
+        an object (``reason="parse_error"``)
+
+    Warning event contract (stable; downstream consumers may rely on this):
+      * ``event="config_load_fallback"``
+      * ``attempted: str`` — string form of the path that was tried.
+      * ``reason: str`` — one of ``"missing"``, ``"io_error"``, ``"parse_error"``.
+      * ``error: str`` — present on ``"io_error"`` and ``"parse_error"``;
+        contains the underlying exception message for triage.
     """
     try:
         raw = path.read_text(encoding="utf-8")
@@ -90,12 +99,13 @@ def _try_read_config_file(path: Path) -> dict[str, Any] | None:
         )
         return None
     except OSError as exc:
-        # Permission errors / unreadable file — treat the same as missing
-        # for fallback purposes; the ``error`` key disambiguates in logs.
+        # Permission errors / unreadable file — distinct from "missing" so
+        # ``brain doctor`` can tell "file does not exist (normal first run)"
+        # from "file exists but I cannot read it (genuinely wrong)".
         logger.warning(
             "config_load_fallback",
             attempted=str(path),
-            reason="missing",
+            reason="io_error",
             error=str(exc),
         )
         return None
