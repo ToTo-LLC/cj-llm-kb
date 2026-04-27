@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from brain_core.config.schema import DEFAULT_DOMAINS
 from brain_core.cost.budget import BudgetEnforcer
 from brain_core.ingest.archive import archive_dir_for
 from brain_core.ingest.classifier import ClassifyResult
@@ -147,6 +146,7 @@ class IngestPipeline:
                 cls_result, classify_cost = await self._classify_with_cost(
                     title=extracted.title or slug,
                     snippet=extracted.body_text[:1000],
+                    allowed_domains=allowed_domains,
                 )
                 run_cost += classify_cost
             domain = cls_result.domain
@@ -250,7 +250,11 @@ class IngestPipeline:
             )
 
     async def _classify_with_cost(
-        self, *, title: str, snippet: str
+        self,
+        *,
+        title: str,
+        snippet: str,
+        allowed_domains: tuple[str, ...],
     ) -> tuple[ClassifyResult, float]:
         """Run the classify prompt inline and return (result, cost_usd).
 
@@ -260,14 +264,15 @@ class IngestPipeline:
         giving the pipeline access to the response usage so it can charge
         the spend to ``ingest_history.cost_usd`` (issue #29).
 
-        Plan 10 Task 3 routes the prompt's domain enum through
-        :meth:`Prompt.render_system` and validates the LLM reply with the
-        per-call ``allowed_domains`` context. Task 4 swaps
-        ``DEFAULT_DOMAINS`` here for the live ingest scope so user-added
-        domains actually appear in the enum.
+        Plan 10 Task 4 plumbs the call's ``allowed_domains`` through to
+        :meth:`Prompt.render_system` so the prompt's enum (D6/D8) lists
+        exactly the user's currently-active scope. The reply is parsed
+        permissively — the pipeline's existing
+        ``if domain not in allowed_domains`` check (Stage 5) routes
+        out-of-set replies to QUARANTINED, preserving the v0.1 behavior.
         """
         prompt = load_prompt("classify")
-        domains_text = ", ".join(f"`{d}`" for d in DEFAULT_DOMAINS)
+        domains_text = ", ".join(f"`{d}`" for d in allowed_domains)
         system = prompt.render_system(domains=domains_text)
         user_content = prompt.render(title=title, snippet=snippet)
         response = await self.llm.complete(
@@ -280,10 +285,7 @@ class IngestPipeline:
             )
         )
         parsed = json.loads(response.content)
-        out = ClassifyOutput.model_validate(
-            parsed,
-            context={"allowed_domains": list(DEFAULT_DOMAINS)},
-        )
+        out = ClassifyOutput.model_validate(parsed)
         result = ClassifyResult(
             source_type=out.source_type,
             domain=out.domain,

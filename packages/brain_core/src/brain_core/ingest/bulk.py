@@ -157,6 +157,7 @@ class BulkImporter:
                     model=self._pipeline.classify_model,
                     title=p.stem,
                     snippet=snippet,
+                    allowed_domains=allowed_domains,
                 )
                 item = BulkItem(
                     spec=p,

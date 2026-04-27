@@ -57,6 +57,7 @@ def _classify_model_for(ctx: ToolContext) -> str:
             return str(model)
     return _CLASSIFY_MODEL_FALLBACK
 
+
 # Rough token cost for one classify call (classify prompt + 256 max output).
 # The fake LLM doesn't care; this is a rate-limit budget only.
 _CLASSIFY_TOKEN_COST = 1000
@@ -81,6 +82,12 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         model=_classify_model_for(ctx),
         title=title,
         snippet=content,
+        # Plan 10 D6/Task 4: forward the call's allowed_domains so the
+        # classify prompt's enum matches the scope the user is asking
+        # about. Without this, the prompt would advertise the v0.1
+        # default {research, work, personal} regardless of whether the
+        # user added or removed domains via Settings → Domains.
+        allowed_domains=ctx.allowed_domains,
     )
 
     # Sanitize: if the classifier returned an out-of-scope domain, don't leak
