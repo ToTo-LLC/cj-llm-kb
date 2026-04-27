@@ -1,11 +1,13 @@
 """Typed Config model. Source of truth for all user-configurable behavior.
 
 Plan 10 / issue #21 — domain set is configurable. ``Config.domains`` holds
-the user's runtime list of top-level vault domains; the v0.1 ``Domain``
-``Literal`` and ``ALLOWED_DOMAINS`` tuple are kept as deprecation aliases
-so external callers that still import them get a string type and the
-default tuple respectively. Plan 10 Task 2 drops ``ALLOWED_DOMAINS`` once
-``vault.paths.scope_guard`` reads the live domain set from its caller.
+the user's runtime list of top-level vault domains. The v0.1 ``Domain``
+``Literal`` alias remains for one minor version so any external caller
+still typing against it compiles through the transition; ``DEFAULT_DOMAINS``
+exposes the v0.1 tuple for any caller that needs a default. The legacy
+``ALLOWED_DOMAINS`` tuple was dropped in Plan 10 Task 2 — call sites that
+need a fallback must import ``DEFAULT_DOMAINS`` (or, preferably, read
+``Config.domains`` from the live config).
 
 Slug rules (D2 in plan 10):
   * lowercase ASCII
@@ -28,12 +30,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Deprecation aliases — kept so external callers compile through the
-# Plan 10 transition. Plan 10 Task 2 drops ``ALLOWED_DOMAINS``; the
-# ``Domain`` alias becomes ``str`` once every internal call site has
-# migrated to ``Config.domains``. Treat both as read-only legacy.
+# Deprecation alias — kept so external callers typing against ``Domain``
+# compile through the Plan 10 transition. The alias becomes a plain
+# ``str`` re-export once every internal call site has migrated to
+# ``Config.domains`` (filed for the next minor version after Plan 10).
+# Plan 10 Task 2 dropped the ``ALLOWED_DOMAINS`` tuple — call sites
+# that still need a default fallback should import ``DEFAULT_DOMAINS``
+# below, but the preferred path is to read ``Config.domains`` directly.
 Domain = Literal["research", "work", "personal"]
-ALLOWED_DOMAINS: tuple[Domain, ...] = ("research", "work", "personal")
 
 # Plan 10 D5: ``personal`` is the privacy-railed slug. Hardcoded here so
 # the Config validator (and every other call site) can reference one
