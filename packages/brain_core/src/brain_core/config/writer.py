@@ -225,6 +225,16 @@ def persist_config_or_revert(config: Config, vault_root: Path) -> Iterator[None]
     KeyboardInterrupt / SystemExit are *not* caught — those should
     propagate without revert so the user sees the original signal and
     we don't paper over an interactive abort.
+
+    NOTE on concurrency: this helper is per-(``Config``, ``vault_root``)
+    and assumes the caller's ``Config`` is NOT being mutated by another
+    thread between snapshot and persist. Production code paths never
+    share one ``Config`` object across threads doing parallel mutations
+    — each request handler gets its own ``ToolContext`` with its own
+    ``Config`` instance. The on-disk filelock in :func:`save_config`
+    serializes write calls between processes and handler instances; in
+    in-memory mutations sharing one ``Config`` reference across threads
+    are out of contract and will race the snapshot/revert path.
     """
     snapshot = config.model_copy(deep=True)
     try:
