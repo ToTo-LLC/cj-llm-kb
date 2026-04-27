@@ -7,15 +7,17 @@ in the async `ingest()` method and wires the LLM round-trips.
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from brain_core.config.schema import DEFAULT_DOMAINS
 from brain_core.cost.budget import BudgetEnforcer
 from brain_core.ingest.archive import archive_dir_for
-from brain_core.ingest.classifier import ClassifyResult, classify
+from brain_core.ingest.classifier import ClassifyResult
 from brain_core.ingest.dispatcher import dispatch
 from brain_core.ingest.failures import record_failure
 from brain_core.ingest.handlers.base import SourceHandler
@@ -257,19 +259,31 @@ class IngestPipeline:
         (BulkImporter, the standalone classify tool, contract tests) while
         giving the pipeline access to the response usage so it can charge
         the spend to ``ingest_history.cost_usd`` (issue #29).
+
+        Plan 10 Task 3 routes the prompt's domain enum through
+        :meth:`Prompt.render_system` and validates the LLM reply with the
+        per-call ``allowed_domains`` context. Task 4 swaps
+        ``DEFAULT_DOMAINS`` here for the live ingest scope so user-added
+        domains actually appear in the enum.
         """
         prompt = load_prompt("classify")
+        domains_text = ", ".join(f"`{d}`" for d in DEFAULT_DOMAINS)
+        system = prompt.render_system(domains=domains_text)
         user_content = prompt.render(title=title, snippet=snippet)
         response = await self.llm.complete(
             LLMRequest(
                 model=self.classify_model,
-                system=prompt.system,
+                system=system,
                 messages=[LLMMessage(role="user", content=user_content)],
                 max_tokens=256,
                 temperature=0.0,
             )
         )
-        out = ClassifyOutput.model_validate_json(response.content)
+        parsed = json.loads(response.content)
+        out = ClassifyOutput.model_validate(
+            parsed,
+            context={"allowed_domains": list(DEFAULT_DOMAINS)},
+        )
         result = ClassifyResult(
             source_type=out.source_type,
             domain=out.domain,

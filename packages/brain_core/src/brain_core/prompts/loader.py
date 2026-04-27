@@ -84,6 +84,27 @@ class Prompt:
                 f"Prompt {self.name!r} render() failed: missing or malformed placeholder ({exc})"
             ) from exc
 
+    def render_system(self, **kwargs: Any) -> str:
+        """Substitute ``{placeholders}`` in the system text.
+
+        Plan 10 Task 3 added this so the classify prompt can render its
+        domain enum from the live ``Config.domains`` per call. Other
+        prompts whose system text contains no placeholders can still use
+        :attr:`Prompt.system` directly — :func:`str.format` returns the
+        string unchanged when no positional or named placeholders are
+        present, so calling ``render_system()`` on those is safe but
+        unnecessary.
+
+        Raises :class:`PromptError` for the same reasons as :meth:`render`.
+        """
+        try:
+            return self.system.format(**kwargs)
+        except (KeyError, IndexError, ValueError) as exc:
+            raise PromptError(
+                f"Prompt {self.name!r} render_system() failed: "
+                f"missing or malformed placeholder ({exc})"
+            ) from exc
+
 
 def load_prompt(
     name: str,

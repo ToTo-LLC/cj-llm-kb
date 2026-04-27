@@ -87,7 +87,16 @@ async def test_classify_custom_threshold() -> None:
 
 @pytest.mark.asyncio
 async def test_classify_request_shape() -> None:
-    """Verify the LLMRequest built by classify() has the expected fields."""
+    """Verify the LLMRequest built by classify() has the expected fields.
+
+    Plan 10 Task 3 routes the system text through ``Prompt.render_system``
+    so the ``{domains}`` template variable is replaced with the call's
+    ``allowed_domains``. The default fallback is the v0.1 set, so the
+    rendered system MUST equal the v0.1-default render — not the raw
+    template (which still contains ``{domains}`` literally).
+    """
+    from brain_core.config.schema import DEFAULT_DOMAINS
+
     fake = FakeLLMProvider()
     output = ClassifyOutput(source_type="pdf", domain="research", confidence=0.9)
     fake.queue(output.model_dump_json())
@@ -103,7 +112,10 @@ async def test_classify_request_shape() -> None:
     request = fake.requests[0]
 
     prompt = load_prompt("classify")
-    assert request.system == prompt.system
+    expected_domains_text = ", ".join(f"`{d}`" for d in DEFAULT_DOMAINS)
+    expected_system = prompt.render_system(domains=expected_domains_text)
+    assert request.system == expected_system
+    assert "{domains}" not in request.system  # template was rendered
     assert request.temperature == 0.0
     assert request.max_tokens == 256
     assert request.messages[0].role == "user"
