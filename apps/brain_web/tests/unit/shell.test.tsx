@@ -23,6 +23,25 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+// Plan 10 Task 7: stub useDomains() so the scope picker doesn't trigger
+// a live ``listDomains`` fetch in the unit-test environment. The hook's
+// real behaviour (singleton cache + refresh) is exercised in
+// ``use-domains.test.ts``; this test just needs the topbar to render
+// the v0.1 default triple.
+vi.mock("@/lib/hooks/use-domains", () => ({
+  useDomains: () => ({
+    domains: [
+      { slug: "research", label: "Research", accent: "var(--dom-research)", configured: true, on_disk: true },
+      { slug: "work", label: "Work", accent: "var(--dom-work)", configured: true, on_disk: true },
+      { slug: "personal", label: "Personal", accent: "var(--dom-personal)", configured: true, on_disk: true },
+    ],
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+  invalidateDomainsCache: vi.fn(),
+}));
+
 import { Topbar } from "@/components/shell/topbar";
 import { LeftNav } from "@/components/shell/left-nav";
 import { RightRail } from "@/components/shell/right-rail";

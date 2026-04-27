@@ -6,7 +6,6 @@ import { AlertTriangle, GitCompare } from "lucide-react";
 
 import {
   configGet,
-  listDomains,
   proposeNote,
   readNote,
   recent,
@@ -15,6 +14,7 @@ import {
 import { useAppStore } from "@/lib/state/app-store";
 import { useBrowseStore } from "@/lib/state/browse-store";
 import { useSystemStore } from "@/lib/state/system-store";
+import { useDomains } from "@/lib/hooks/use-domains";
 import { resolveLink } from "@/lib/vault/wikilinks";
 
 import { FileTree, type FileTreeNote } from "./file-tree";
@@ -139,6 +139,14 @@ export function BrowseScreen({
 
   const [notes, setNotes] = React.useState<FileTreeNote[]>([]);
   const [loading, setLoading] = React.useState(true);
+  // Plan 10 Task 7: live domain list (cached singleton). Used as the
+  // recent-notes bucket source AND passed to FileTree so empty
+  // domains still render their header.
+  const { domains: liveDomains } = useDomains();
+  const liveDomainSlugs = React.useMemo(
+    () => liveDomains.map((d) => d.slug),
+    [liveDomains],
+  );
   const [active, setActive] = React.useState<string | null>(
     activePath ?? null,
   );
@@ -162,14 +170,16 @@ export function BrowseScreen({
   });
 
   // Build the tree from recent notes across every allowed domain.
+  // Plan 10 Task 7: domain source flipped from a per-mount listDomains
+  // call to the cached useDomains() hook so the topbar + browse share
+  // one fetch.
   React.useEffect(() => {
+    if (liveDomainSlugs.length === 0) return; // wait for hook hydration
     let cancelled = false;
     (async () => {
       try {
-        const domainsRes = await listDomains();
-        const domains = domainsRes.data?.domains ?? ["research", "work"];
         const buckets = await Promise.all(
-          domains.map((d) =>
+          liveDomainSlugs.map((d) =>
             recent({ domain: d, limit: 200 })
               .then((r) => ({ domain: d, items: r.data?.items ?? [] }))
               .catch(() => ({
@@ -202,8 +212,11 @@ export function BrowseScreen({
     return () => {
       cancelled = true;
     };
+    // ``liveDomainSlugs`` is the only effect input we read; ``active``
+    // and ``scope`` are read inside but only to seed the initial
+    // selection, which we don't want to rerun on every scope change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [liveDomainSlugs]);
 
   // Sync active → reader body.
   React.useEffect(() => {
@@ -307,6 +320,7 @@ export function BrowseScreen({
         scope={scope}
         activePath={active}
         onOpenSearch={() => setSearchOpen(true)}
+        domains={liveDomainSlugs}
       />
       <div className="flex flex-col overflow-hidden">
         {note && active ? (

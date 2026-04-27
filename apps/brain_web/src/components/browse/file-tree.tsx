@@ -44,6 +44,11 @@ export interface FileTreeProps {
   /** Handler invoked when the "Search vault…" pseudo-button is
    *  clicked. The overlay itself lives at the shell level. */
   onOpenSearch: () => void;
+  /** Plan 10 Task 7: live domain slug list. When provided, the tree
+   *  also renders headers for configured-but-empty domains so a
+   *  fresh ``hobby`` shows up immediately after creation. Omitted
+   *  callers fall back to the v0.1 notes-driven grouping. */
+  domains?: string[];
 }
 
 const PERSONAL_DOMAIN = "personal";
@@ -53,8 +58,31 @@ export function FileTree({
   scope,
   activePath,
   onOpenSearch,
+  domains,
 }: FileTreeProps): React.ReactElement {
   const tree = React.useMemo(() => buildTree(notes), [notes]);
+
+  // Plan 10 Task 7: combined domain list = union of (live domains)
+  // and (domains seen in notes) so an empty domain still renders a
+  // header. We preserve the live-domain order first, then append
+  // any note-only domains (shouldn't happen if Config.domains tracks
+  // on-disk dirs, but belt-and-braces).
+  const renderedDomains = React.useMemo(() => {
+    const fromTree = new Map(tree.domains.map((d) => [d.domain, d]));
+    if (!domains || domains.length === 0) {
+      return tree.domains;
+    }
+    const out: typeof tree.domains = [];
+    const seen = new Set<string>();
+    for (const slug of domains) {
+      out.push(fromTree.get(slug) ?? { domain: slug, folders: [] });
+      seen.add(slug);
+    }
+    for (const d of tree.domains) {
+      if (!seen.has(d.domain)) out.push(d);
+    }
+    return out;
+  }, [tree, domains]);
 
   // Collapsed folder keys, stored as ``"<domain>/<folder>"``.
   // Default: every folder expanded; click-to-collapse.
@@ -86,10 +114,11 @@ export function FileTree({
         </span>
       </button>
 
-      {tree.domains.map((dom) => {
+      {renderedDomains.map((dom) => {
         const isPersonal = dom.domain === PERSONAL_DOMAIN;
         const inScope = scope.includes(dom.domain);
         const hidePersonal = isPersonal && !inScope;
+        const isEmpty = dom.folders.length === 0;
 
         return (
           <div key={dom.domain} className="tree-group flex flex-col gap-0.5">
@@ -111,6 +140,13 @@ export function FileTree({
                 data-testid="personal-hidden-label"
               >
                 — hidden by default
+              </div>
+            ) : isEmpty ? (
+              <div
+                className="dim px-3 py-1 text-[11px] italic text-[var(--text-dim)]"
+                data-testid={`domain-empty-${dom.domain}`}
+              >
+                No notes yet
               </div>
             ) : (
               dom.folders.map((fld) => {

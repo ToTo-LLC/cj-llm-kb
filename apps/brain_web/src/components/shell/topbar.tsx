@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import * as React from "react";
 import { Sun, Moon, PanelRight, Settings as SettingsIcon } from "lucide-react";
 
 import { useAppStore, type ChatMode } from "@/lib/state/app-store";
+import { useDomains } from "@/lib/hooks/use-domains";
 import { Button } from "@/components/ui/button";
 import {
   ToggleGroup,
@@ -18,13 +19,6 @@ import {
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConnectionIndicator } from "@/components/system/connection-indicator";
-
-// Stub domains; Task 14 replaces this with a live `listDomains()` query.
-const STUB_DOMAINS = [
-  { id: "research", label: "Research" },
-  { id: "work", label: "Work" },
-  { id: "personal", label: "Personal" },
-];
 
 // Version surfaced in the topbar's brand chip. Sourced verbatim from the
 // monorepo's shipped tag (``v0.1.0``); update when cutting a new release.
@@ -49,20 +43,39 @@ export function Topbar() {
   const setScope = useAppStore((s) => s.setScope);
   const toggleRail = useAppStore((s) => s.toggleRail);
 
-  const [scopeOpen, setScopeOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = React.useState(false);
+
+  // Plan 10 Task 7: live domain list (Config.domains ∪ on-disk).
+  // Renders as `[]` while the first fetch is in-flight; the topbar's
+  // dot row stays empty until the response lands rather than
+  // briefly painting the v0.1 stub triple.
+  const { domains: liveDomains } = useDomains();
+
+  // Plan 10 Task 7 prune: drop persisted scope slugs that aren't in
+  // the live list anymore. Without this, deleting a domain in
+  // settings would leave a dangling chip in the scope picker that
+  // toggles a slug the rest of the app no longer routes to.
+  React.useEffect(() => {
+    if (liveDomains.length === 0) return;
+    const liveSet = new Set(liveDomains.map((d) => d.slug));
+    const pruned = scope.filter((s) => liveSet.has(s));
+    if (pruned.length !== scope.length) {
+      setScope(pruned);
+    }
+  }, [liveDomains, scope, setScope]);
 
   const scopeLabel =
     scope.length === 0
       ? "No domain"
-      : scope.length === STUB_DOMAINS.length
+      : scope.length === liveDomains.length && liveDomains.length > 0
         ? "All domains"
         : scope.length === 1
-          ? (STUB_DOMAINS.find((d) => d.id === scope[0])?.label ?? scope[0])
+          ? (liveDomains.find((d) => d.slug === scope[0])?.label ?? scope[0])
           : `${scope.length} domains`;
 
-  function toggleDomain(id: string) {
-    if (scope.includes(id)) setScope(scope.filter((x) => x !== id));
-    else setScope([...scope, id]);
+  function toggleDomain(slug: string) {
+    if (scope.includes(slug)) setScope(scope.filter((x) => x !== slug));
+    else setScope([...scope, slug]);
   }
 
   return (
@@ -121,13 +134,13 @@ export function Topbar() {
             className="h-7 gap-2 text-xs"
           >
             <span aria-hidden className="flex items-center gap-0.5">
-              {STUB_DOMAINS.map((d) => (
+              {liveDomains.map((d) => (
                 <span
-                  key={d.id}
+                  key={d.slug}
                   className="h-1.5 w-1.5 rounded-full"
                   style={{
-                    background: `var(--dom-${d.id})`,
-                    opacity: scope.includes(d.id) ? 1 : 0.25,
+                    background: d.accent,
+                    opacity: scope.includes(d.slug) ? 1 : 0.25,
                   }}
                 />
               ))}
@@ -139,28 +152,34 @@ export function Topbar() {
           <div className="mb-1 px-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
             Visible domains
           </div>
-          <ul className="flex flex-col">
-            {STUB_DOMAINS.map((d) => {
-              const checked = scope.includes(d.id);
-              return (
-                <li key={d.id}>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-[var(--surface-3)]">
-                    <Checkbox
-                      aria-label={d.label}
-                      checked={checked}
-                      onCheckedChange={() => toggleDomain(d.id)}
-                    />
-                    <span
-                      aria-hidden
-                      className="h-2 w-2 rounded-full"
-                      style={{ background: `var(--dom-${d.id})` }}
-                    />
-                    <span>{d.label}</span>
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
+          {liveDomains.length === 0 ? (
+            <div className="px-2 py-1.5 text-xs text-[var(--text-dim)]">
+              Loading domains…
+            </div>
+          ) : (
+            <ul className="flex flex-col">
+              {liveDomains.map((d) => {
+                const checked = scope.includes(d.slug);
+                return (
+                  <li key={d.slug}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-[var(--surface-3)]">
+                      <Checkbox
+                        aria-label={d.label}
+                        checked={checked}
+                        onCheckedChange={() => toggleDomain(d.slug)}
+                      />
+                      <span
+                        aria-hidden
+                        className="h-2 w-2 rounded-full"
+                        style={{ background: d.accent }}
+                      />
+                      <span>{d.label}</span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </PopoverContent>
       </Popover>
 

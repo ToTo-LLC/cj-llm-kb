@@ -134,4 +134,42 @@ describe("FileTree", () => {
     // Placeholder label visible.
     expect(screen.getByText(/hidden by default/i)).toBeInTheDocument();
   });
+
+  test("Plan 10 Task 7: live domain prop renders empty domains with a 'No notes yet' hint", () => {
+    // Notes only cover research; ``hobby`` is in the live domain
+    // list but has zero notes. The tree must render a header for
+    // ``hobby`` so the user can see the domain exists.
+    const ONLY_RESEARCH: FileTreeNote[] = [
+      {
+        path: "research/notes/foo.md",
+        title: "foo",
+        domain: "research",
+        folder: "notes",
+      },
+    ];
+    render(
+      React.createElement(FileTree, {
+        notes: ONLY_RESEARCH,
+        scope: ["research", "hobby"],
+        activePath: null,
+        onOpenSearch: vi.fn(),
+        domains: ["research", "hobby", "personal"],
+      }),
+    );
+    // All three live-domain headers are present, in the order
+    // supplied via the prop.
+    const headers = Array.from(
+      document.querySelectorAll('[data-testid^="domain-header-"]'),
+    ).map((el) => el.getAttribute("data-testid"));
+    expect(headers).toEqual([
+      "domain-header-research",
+      "domain-header-hobby",
+      "domain-header-personal",
+    ]);
+    // Hobby is empty → renders the "No notes yet" hint, not folders.
+    expect(screen.getByTestId("domain-empty-hobby")).toBeInTheDocument();
+    expect(screen.getByText(/No notes yet/)).toBeInTheDocument();
+    // Research has folders, so the empty hint is NOT under it.
+    expect(screen.queryByTestId("domain-empty-research")).not.toBeInTheDocument();
+  });
 });

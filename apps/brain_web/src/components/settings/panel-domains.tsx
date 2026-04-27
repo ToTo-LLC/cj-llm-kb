@@ -5,6 +5,7 @@ import { Edit2, Lock, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ACCENT_SWATCHES, DomainForm } from "@/components/settings/domain-form";
+import { invalidateDomainsCache } from "@/lib/hooks/use-domains";
 import { brainDeleteDomain, listDomains } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
@@ -52,6 +53,11 @@ export function PanelDomains(): React.ReactElement {
   const [loading, setLoading] = React.useState(true);
 
   const refresh = React.useCallback(async () => {
+    // Plan 10 Task 7: blow the module-level cache so other live
+    // surfaces (topbar scope picker, Browse file tree) re-fetch on
+    // their next mount. The list call below populates a fresh cache
+    // for the panel itself.
+    invalidateDomainsCache();
     try {
       const r = await listDomains();
       setDomains(r.data?.domains ?? []);
@@ -93,6 +99,9 @@ export function PanelDomains(): React.ReactElement {
       onConfirm: async () => {
         try {
           const res = await brainDeleteDomain({ slug, typed_confirm: true });
+          // Plan 10 Task 7: invalidate the cache so the topbar +
+          // browse pick up the deletion on their next read.
+          invalidateDomainsCache();
           setDomains((prev) => prev.filter((s) => s !== slug));
           const moved = res.data?.files_moved ?? 0;
           pushToast({
