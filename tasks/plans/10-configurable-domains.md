@@ -309,15 +309,17 @@ Print `PLAN 10 DEMO OK` on exit 0; non-zero exit on any gate failure.
 
 ---
 
-## Review
+## Review (closed 2026-04-27)
 
-(Filled in at plan completion — same shape as the Plan 02 / Plan 07 closure sections.)
-
-- Tag: `plan-10-configurable-domains` on green demo.
-- Closes: `docs/v0.1.0-known-issues.md` item #21.
-- Bumps: tool count 36 → 36 (no new MCP tools — the four domain-admin tools were shipped in Plan 07 Task 4 + 25A; Plan 10 just verifies them).
-- Forwards: `tasks/lessons.md` entries from this plan feed Plan 11's authoring.
+- **Tag:** `plan-10-configurable-domains` (cut on green demo).
+- **Closes:** `docs/v0.1.0-known-issues.md` item #21 (configurable domains).
+- **Bumps:** tool count unchanged (36 → 36) — the four domain-admin tools (`brain_create_domain`, `brain_rename_domain`, `brain_delete_domain`, `brain_list_domains`) shipped in Plan 07 Task 4 + 25A; Plan 10 made them `Config.domains` aware and added the new D2 / D5 / D7 rails.
+- **Verification:** all 7 demo gates green (`scripts/demo-plan-10.py` → `PLAN 10 DEMO OK`); 1022 brain_core/api/mcp/cli pytest cases + 247 brain_web vitest cases + 1 new Playwright e2e (`tests/e2e/domains.spec.ts`).
+- **Backlog forward:**
+  - "Default scope on first load = `Config.active_domain`" — descoped from Task 7 (needs `active_domain` exposure on `list_domains` response + `scopeInitialized` flag on app-store). Filed for Plan 11.
+  - Disk-level config persistence for `Config.domains` mutations — currently in-memory only via the admin tools; restart relies on the on-disk folder set + `DEFAULT_DOMAINS` fallback. Issue #27.
+- **Forwards:** lessons captured in `tasks/lessons.md` under "Plan 10" feed Plan 11's authoring (per-domain LLM model overrides, `Config.privacy_railed` generalization, etc.).
 
 ---
 
-**End of Plan 10.** Resolve the D1–D10 decisions with the user before dispatching Task 1.
+**End of Plan 10.**
