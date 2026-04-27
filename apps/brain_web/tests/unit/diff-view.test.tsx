@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
-import { DiffView } from "@/components/pending/diff-view";
+import { DiffView, lcsDiff, synthesizeDiff } from "@/components/pending/diff-view";
 import type { DiffLine } from "@/components/pending/diff-view";
 
 /**
@@ -85,5 +85,111 @@ describe("DiffView", () => {
     expect(gutterOnes.length).toBeGreaterThanOrEqual(1);
     expect(gutterTwos.length).toBeGreaterThanOrEqual(1);
     expect(gutterThrees.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LCS diff (issue #15) — replaces the prior naive line-by-line zip that
+// mislabeled mid-document insertions as "everything from here changed".
+// ---------------------------------------------------------------------------
+
+describe("lcsDiff (issue #15)", () => {
+  test("identical sequences are all context", () => {
+    const out = lcsDiff(["a", "b", "c"], ["a", "b", "c"]);
+    expect(out).toEqual([
+      { type: "ctx", n: 1, code: "a" },
+      { type: "ctx", n: 2, code: "b" },
+      { type: "ctx", n: 3, code: "c" },
+    ]);
+  });
+
+  test("single-line insertion in the middle keeps surrounding ctx", () => {
+    // OLD: a, b, c
+    // NEW: a, X, b, c  → b and c stay as ctx; X is the only add.
+    const out = lcsDiff(["a", "b", "c"], ["a", "X", "b", "c"]);
+    expect(out).toEqual([
+      { type: "ctx", n: 1, code: "a" },
+      { type: "add", n: 2, code: "X" },
+      { type: "ctx", n: 2, code: "b" },
+      { type: "ctx", n: 3, code: "c" },
+    ]);
+  });
+
+  test("single-line deletion in the middle keeps surrounding ctx", () => {
+    // OLD: a, b, c
+    // NEW: a, c        → b is the only del.
+    const out = lcsDiff(["a", "b", "c"], ["a", "c"]);
+    expect(out).toEqual([
+      { type: "ctx", n: 1, code: "a" },
+      { type: "del", n: 2, code: "b" },
+      { type: "ctx", n: 3, code: "c" },
+    ]);
+  });
+
+  test("replacement reads as del followed by add at the same gutter region", () => {
+    // OLD: a, b, c
+    // NEW: a, X, c     → b → X. Surrounding lines stay ctx.
+    const out = lcsDiff(["a", "b", "c"], ["a", "X", "c"]);
+    expect(out).toEqual([
+      { type: "ctx", n: 1, code: "a" },
+      { type: "del", n: 2, code: "b" },
+      { type: "add", n: 2, code: "X" },
+      { type: "ctx", n: 3, code: "c" },
+    ]);
+  });
+
+  test("disjoint changes preserve ctx between them", () => {
+    // OLD: a, b, c, d, e
+    // NEW: a, X, c, Y, e   → two independent changes, three ctx lines.
+    const out = lcsDiff(
+      ["a", "b", "c", "d", "e"],
+      ["a", "X", "c", "Y", "e"],
+    );
+    const ctxLines = out.filter((l) => l.type === "ctx").map((l) => l.code);
+    expect(ctxLines).toEqual(["a", "c", "e"]);
+    expect(out.filter((l) => l.type === "add").map((l) => l.code)).toEqual([
+      "X",
+      "Y",
+    ]);
+    expect(out.filter((l) => l.type === "del").map((l) => l.code)).toEqual([
+      "b",
+      "d",
+    ]);
+  });
+
+  test("empty old produces all-add", () => {
+    const out = lcsDiff([], ["a", "b"]);
+    expect(out).toEqual([
+      { type: "add", n: 1, code: "a" },
+      { type: "add", n: 2, code: "b" },
+    ]);
+  });
+
+  test("empty new produces all-del", () => {
+    const out = lcsDiff(["a", "b"], []);
+    expect(out).toEqual([
+      { type: "del", n: 1, code: "a" },
+      { type: "del", n: 2, code: "b" },
+    ]);
+  });
+
+  test("synthesizeDiff routes edits through the LCS pass", () => {
+    // The naive prior implementation would have marked b and c as both
+    // ``del + add`` because it zipped index-by-index. LCS keeps c as ctx.
+    const patchset = {
+      edits: [
+        {
+          path: "research/notes/foo.md",
+          old: "a\nb\nc",
+          new: "a\nX\nc",
+        },
+      ],
+    };
+    const out = synthesizeDiff(patchset, "research/notes/foo.md");
+    const ctxCodes = out
+      .filter((l) => l.type === "ctx")
+      .map((l) => l.code);
+    expect(ctxCodes).toContain("a");
+    expect(ctxCodes).toContain("c");
   });
 });

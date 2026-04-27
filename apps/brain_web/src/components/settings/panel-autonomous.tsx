@@ -127,8 +127,18 @@ export function PanelAutonomous(): React.ReactElement {
         >
           {ROWS.map((row) => {
             const value = autonomous[row.key] ?? false;
+            // Issue #42: split the accessible name from the description.
+            // The wrapping element used to be a ``<label>`` whose text
+            // content concatenated the title + hint, so the Switch
+            // announced as "autonomous.ingest, switch, off, Source
+            // ingest New sources apply without review." Switching to a
+            // ``<div>`` plus ``aria-labelledby`` / ``aria-describedby``
+            // on the Switch produces "Source ingest, switch, off, New
+            // sources apply without review." instead.
+            const labelId = `autonomous-label-${row.key}`;
+            const descId = `autonomous-desc-${row.key}`;
             return (
-              <label
+              <div
                 key={row.key}
                 data-testid={`autonomous-row-${row.key}`}
                 data-danger={row.danger ? "true" : "false"}
@@ -140,23 +150,30 @@ export function PanelAutonomous(): React.ReactElement {
                 <Switch
                   checked={value}
                   onCheckedChange={(v) => void toggle(row.key, Boolean(v))}
-                  aria-label={`autonomous.${row.key}`}
+                  aria-labelledby={labelId}
+                  aria-describedby={descId}
                 />
                 <div className="flex flex-col">
                   <span
+                    id={labelId}
                     className={cn(
                       "text-sm font-medium text-[var(--text)]",
                       row.danger && "flex items-center gap-1 text-red-400",
                     )}
                   >
-                    {row.danger && <AlertTriangle className="h-3.5 w-3.5" />}
+                    {row.danger && (
+                      <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+                    )}
                     {row.label}
                   </span>
-                  <span className="text-[11px] text-[var(--text-muted)]">
+                  <span
+                    id={descId}
+                    className="text-[11px] text-[var(--text-muted)]"
+                  >
                     {row.hint}
                   </span>
                 </div>
-              </label>
+              </div>
             );
           })}
         </div>

@@ -115,11 +115,25 @@ export function DiffView({
  * For a ``new_files[]`` entry: every line of ``content`` is an
  * addition numbered from 1.
  *
- * For an ``edits[]`` entry: we run a trivial line-by-line compare.
- * Equal lines render as ``ctx``; otherwise both the old and new lines
- * appear, ``del`` before ``add``. This is not a full LCS, but for
- * small single-note patches the output reads correctly in 99% of
- * cases. A proper LCS is tracked as a Task 25 sweep item.
+ * For an ``edits[]`` entry: we run a classic LCS diff (issue #15
+ * — was a naive zipping that mislabeled mid-document insertions
+ * as "everything from the insertion point changed"). The LCS
+ * pass identifies the common subsequence of lines between
+ * ``old`` and ``new`` and emits:
+ *   - ``ctx`` for every line on the LCS — line numbers track
+ *     the OLD file (which equals the NEW file for those lines);
+ *   - ``del`` for old-only lines (numbered from OLD);
+ *   - ``add`` for new-only lines (numbered from NEW).
+ *
+ * Output ordering matches a unified diff: each contiguous change
+ * region renders ``del`` lines first, then ``add`` lines, with
+ * surrounding ``ctx`` lines for context. This is what reviewers
+ * expect.
+ *
+ * Complexity: O(N×M) time and space for ``oldLines.length`` ×
+ * ``newLines.length``. Acceptable for the single-note patches
+ * brain stages (~hundreds of lines). If a future plan ships
+ * multi-MB patches we'll switch to Myers' O((N+M)·D) algorithm.
  *
  * We accept the patchset as an opaque record so the function can be
  * called straight from the store's ``selectedDetail.patchset`` without
@@ -154,26 +168,64 @@ export function synthesizeDiff(
 
   const ed = edits.find((e) => pathMatches(e.path));
   if (ed) {
-    const oldLines = ed.old.split("\n");
-    const newLines = ed.new.split("\n");
-    const out: DiffLine[] = [];
-    const maxLen = Math.max(oldLines.length, newLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const o = oldLines[i];
-      const n = newLines[i];
-      if (o === undefined) {
-        out.push({ type: "add", n: i + 1, code: n ?? "" });
-      } else if (n === undefined) {
-        out.push({ type: "del", n: i + 1, code: o });
-      } else if (o === n) {
-        out.push({ type: "ctx", n: i + 1, code: o });
-      } else {
-        out.push({ type: "del", n: i + 1, code: o });
-        out.push({ type: "add", n: i + 1, code: n });
-      }
-    }
-    return out;
+    return lcsDiff(ed.old.split("\n"), ed.new.split("\n"));
   }
 
   return [];
+}
+
+/**
+ * Classic LCS-based diff. Builds an ``(m+1) × (n+1)`` length table
+ * in O(N×M), then backtracks to produce the edit script. Exported
+ * for tests; production code reaches it through ``synthesizeDiff``.
+ */
+export function lcsDiff(
+  oldLines: readonly string[],
+  newLines: readonly string[],
+): DiffLine[] {
+  const m = oldLines.length;
+  const n = newLines.length;
+
+  // table[i][j] = length of LCS of oldLines[0..i-1] and newLines[0..j-1].
+  // Storing as a flat Int32Array keeps the working set CPU-cache-friendly
+  // even for ~10k-line patches.
+  const stride = n + 1;
+  const table = new Int32Array((m + 1) * stride);
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        table[i * stride + j] = table[(i - 1) * stride + (j - 1)] + 1;
+      } else {
+        const up = table[(i - 1) * stride + j];
+        const left = table[i * stride + (j - 1)];
+        table[i * stride + j] = up >= left ? up : left;
+      }
+    }
+  }
+
+  // Backtrack from (m, n) → (0, 0). Build the result in reverse.
+  // Line numbers: ctx + del use the OLD index; add uses the NEW index
+  // (this matches unified-diff conventions and lets a reviewer cross-
+  // reference the gutter against the unmodified file).
+  const out: DiffLine[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      out.push({ type: "ctx", n: i, code: oldLines[i - 1]! });
+      i -= 1;
+      j -= 1;
+    } else if (
+      j > 0 &&
+      (i === 0 || table[i * stride + (j - 1)] >= table[(i - 1) * stride + j])
+    ) {
+      out.push({ type: "add", n: j, code: newLines[j - 1]! });
+      j -= 1;
+    } else {
+      out.push({ type: "del", n: i, code: oldLines[i - 1]! });
+      i -= 1;
+    }
+  }
+  out.reverse();
+  return out;
 }

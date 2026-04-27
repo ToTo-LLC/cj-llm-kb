@@ -66,12 +66,25 @@ export function StartingThemeStep({ pick, onPick }: StartingThemeStepProps) {
       >
         {THEME_OPTIONS.map((opt) => {
           const selected = pick === opt.key;
+          // Issue #42: split the accessible name from the description.
+          // Plan-09 QA sweep flagged that screen readers announced this
+          // card as ``"Research reading · papers"`` because all three
+          // text spans concatenated into the computed accessible name.
+          // The fix is the standard WAI-ARIA "card as button" pattern:
+          // ``aria-labelledby`` points at the title span (the most
+          // distinguishing identifier) and ``aria-describedby`` points
+          // at the description span. Result: ``"Research, radio,
+          // checked, reading · papers"``.
+          const labelId = `theme-label-${opt.key}`;
+          const descId = `theme-desc-${opt.key}`;
           return (
             <button
               key={opt.key}
               type="button"
               role="radio"
               aria-checked={selected}
+              aria-labelledby={labelId}
+              aria-describedby={descId}
               onClick={() => onPick(opt.key)}
               className={cn(
                 "flex flex-col items-start gap-2 rounded-lg border bg-background p-4 text-left transition-colors",
@@ -88,8 +101,12 @@ export function StartingThemeStep({ pick, onPick }: StartingThemeStepProps) {
                   opt.swatch,
                 )}
               />
-              <span className="text-sm font-medium">{opt.label}</span>
-              <span className="text-xs text-muted-foreground">{opt.desc}</span>
+              <span id={labelId} className="text-sm font-medium">
+                {opt.label}
+              </span>
+              <span id={descId} className="text-xs text-muted-foreground">
+                {opt.desc}
+              </span>
             </button>
           );
         })}

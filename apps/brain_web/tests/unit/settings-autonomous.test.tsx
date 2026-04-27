@@ -47,15 +47,19 @@ beforeEach(() => {
 describe("PanelAutonomous", () => {
   test("renders all 5 category toggles", () => {
     render(<PanelAutonomous />);
-    const categories = [
-      "autonomous.ingest",
-      "autonomous.entities",
-      "autonomous.concepts",
-      "autonomous.index_rewrites",
-      "autonomous.draft",
+    // Issue #42: switches now use ``aria-labelledby`` pointing at the
+    // human-readable title span (was ``aria-label="autonomous.ingest"``
+    // — a technical key that screen readers read out unhelpfully).
+    // Test queries follow suit.
+    const titles = [
+      /Source ingest/i,
+      /Entity updates/i,
+      /Concept notes/i,
+      /Domain index rewrites/i,
+      /Draft inline edits/i,
     ];
-    for (const key of categories) {
-      expect(screen.getByRole("switch", { name: key })).toBeInTheDocument();
+    for (const title of titles) {
+      expect(screen.getByRole("switch", { name: title })).toBeInTheDocument();
     }
   });
 
@@ -84,7 +88,8 @@ describe("PanelAutonomous", () => {
   test("toggling a switch calls configSet with `autonomous.<cat>`", async () => {
     const user = userEvent.setup();
     render(<PanelAutonomous />);
-    const toggle = screen.getByRole("switch", { name: "autonomous.ingest" });
+    // Issue #42: query by the human-readable title span.
+    const toggle = screen.getByRole("switch", { name: /Source ingest/i });
     await user.click(toggle);
     await waitFor(() => {
       expect(configSetMock).toHaveBeenCalled();
