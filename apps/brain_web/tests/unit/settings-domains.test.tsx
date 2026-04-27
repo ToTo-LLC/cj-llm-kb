@@ -157,8 +157,68 @@ describe("PanelDomains", () => {
     const renameBtn = screen.getByRole("button", { name: /rename work/i });
     await user.click(renameBtn);
     expect(openDialogMock).toHaveBeenCalled();
-    const payload = openDialogMock.mock.calls[0]![0] as { kind: string };
+    const payload = openDialogMock.mock.calls[0]![0] as {
+      kind: string;
+      onRenamed?: () => void;
+    };
     expect(payload.kind).toBe("rename-domain");
+    // Plan 10 Task 6: panel passes an ``onRenamed`` callback so the
+    // list refreshes after the dialog commits.
+    expect(typeof payload.onRenamed).toBe("function");
+  });
+
+  test("rename onRenamed callback re-fetches the domain list", async () => {
+    const user = userEvent.setup();
+    render(<PanelDomains />);
+    await waitFor(() => expect(screen.getByText("work")).toBeInTheDocument());
+
+    const initialCalls = listDomainsMock.mock.calls.length;
+    const renameBtn = screen.getByRole("button", { name: /rename work/i });
+    await user.click(renameBtn);
+    const payload = openDialogMock.mock.calls[0]![0] as {
+      onRenamed?: () => void;
+    };
+    expect(payload.onRenamed).toBeTypeOf("function");
+
+    // Simulate dialog success → callback fires.
+    listDomainsMock.mockResolvedValueOnce({
+      text: "",
+      data: { domains: ["consulting", "personal", "research"] },
+    });
+    await act(async () => {
+      payload.onRenamed!();
+    });
+    await waitFor(() => {
+      expect(listDomainsMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+  });
+
+  test("D2 slug rule: underscore allowed, leading digit rejected, trailing dash rejected", async () => {
+    const user = userEvent.setup();
+    render(<PanelDomains />);
+    await waitFor(() => expect(screen.getByText("research")).toBeInTheDocument());
+
+    const nameInput = screen.getByLabelText(/display name/i);
+    const slugInput = screen.getByLabelText(/folder slug/i);
+    const submit = screen.getByRole("button", { name: /add domain/i });
+
+    await user.type(nameInput, "Side Project");
+
+    // Leading digit → invalid → submit disabled.
+    await user.clear(slugInput);
+    await user.type(slugInput, "1bad");
+    expect(submit).toBeDisabled();
+
+    // Trailing dash → invalid → submit disabled. ``kebabCoerce`` strips
+    // some chars but the trailing-dash check happens client-side too.
+    await user.clear(slugInput);
+    await user.type(slugInput, "good-");
+    expect(submit).toBeDisabled();
+
+    // Underscore allowed (D2 expanded the regex to ``[a-z0-9_-]``).
+    await user.clear(slugInput);
+    await user.type(slugInput, "side_project");
+    expect(submit).toBeEnabled();
   });
 
   test("personal shows privacy-railed badge + no delete button", async () => {

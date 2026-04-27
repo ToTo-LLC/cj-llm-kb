@@ -83,6 +83,9 @@ export type DialogKind =
   | {
       kind: "rename-domain";
       domain: DomainMeta;
+      /** Plan 10 Task 6: invoked after a successful rename so the host
+       *  list (Settings → Domains, topbar scope picker) can refresh. */
+      onRenamed?: () => void;
     }
   | {
       kind: "doc-picker";

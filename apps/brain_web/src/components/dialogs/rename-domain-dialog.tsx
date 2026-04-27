@@ -29,20 +29,38 @@ import { useSystemStore } from "@/lib/state/system-store";
 export interface RenameDomainDialogProps {
   kind: "rename-domain";
   domain: { id: string; name: string; count: number };
+  /** Plan 10 Task 6: invoked after a successful rename so the host can
+   *  refresh its list. The dialog still calls ``onClose`` afterwards. */
+  onRenamed?: () => void;
   onClose: () => void;
+}
+
+// Plan 10 D2 client-side regex — matches the backend's
+// ``brain_core.config.schema._validate_domain_slug`` so the user gets
+// immediate feedback rather than a round-trip rejection.
+const D2_SLUG_RE = /^[a-z][a-z0-9_-]{0,30}$/;
+
+function isValidRenameSlug(s: string, currentSlug: string): boolean {
+  if (s === currentSlug) return false;
+  if (!D2_SLUG_RE.test(s)) return false;
+  if (s.endsWith("_") || s.endsWith("-")) return false;
+  if (s.includes("/") || s.includes("\\")) return false;
+  // Plan 10 D5: ``personal`` is the privacy-railed slug; renaming TO
+  // it is refused server-side, gate client-side too.
+  if (s === "personal") return false;
+  return true;
 }
 
 export function RenameDomainDialog({
   domain,
+  onRenamed,
   onClose,
 }: RenameDomainDialogProps) {
   const [newSlug, setNewSlug] = React.useState<string>(domain.id);
   const [rewrite, setRewrite] = React.useState<boolean>(true);
   const [submitting, setSubmitting] = React.useState(false);
 
-  // Kebab gate: lowercase, must start with a letter, length ≥ 2, max ~25.
-  const valid =
-    /^[a-z][a-z0-9-]{1,24}$/.test(newSlug) && newSlug !== domain.id;
+  const valid = isValidRenameSlug(newSlug, domain.id);
 
   const handleSubmit = React.useCallback(async () => {
     if (!valid || submitting) return;
@@ -59,6 +77,7 @@ export function RenameDomainDialog({
         msg: `${files} file${files === 1 ? "" : "s"} updated. Undo via Undo last.`,
         variant: "success",
       });
+      onRenamed?.();
       onClose();
     } catch (err) {
       useSystemStore.getState().pushToast({
@@ -68,7 +87,7 @@ export function RenameDomainDialog({
       });
       setSubmitting(false);
     }
-  }, [valid, submitting, domain.id, newSlug, rewrite, onClose]);
+  }, [valid, submitting, domain.id, newSlug, rewrite, onRenamed, onClose]);
 
   return (
     <Modal

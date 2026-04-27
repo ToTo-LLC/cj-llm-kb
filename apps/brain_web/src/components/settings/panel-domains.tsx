@@ -1,30 +1,31 @@
 "use client";
 
 import * as React from "react";
-import { Edit2, Lock, Plus, Trash2 } from "lucide-react";
+import { Edit2, Lock, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { brainDeleteDomain, createDomain, listDomains } from "@/lib/api/tools";
+import { ACCENT_SWATCHES, DomainForm } from "@/components/settings/domain-form";
+import { brainDeleteDomain, listDomains } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
-import { kebabCoerce } from "@/lib/vault/path-builder";
 
 /**
- * PanelDomains (Plan 07 Task 22).
+ * PanelDomains (Plan 07 Task 22 → Plan 10 Task 6).
  *
  * - List renders from ``listDomains``. Each row shows a colour swatch,
  *   the slug, and (when tooling catches up) a file count. Rename opens
- *   the existing RenameDomainDialog via dialogs-store. Delete opens
- *   TypedConfirmDialog with a stubbed onConfirm until Task 25 ships
- *   ``brain_delete_domain``.
+ *   the existing RenameDomainDialog via dialogs-store with an
+ *   ``onRenamed`` callback wired back here so the list refreshes after
+ *   a successful rename. Delete opens TypedConfirmDialog and on
+ *   confirm calls ``brain_delete_domain``.
  *
  * - Personal shows a Lock-icon "Privacy-railed" badge and has NO delete
- *   button. This mirrors Principle 2 (scope guard): ``personal`` never
- *   leaks into default queries and should never be deleteable from a
- *   casual UI click.
+ *   button. This mirrors Principle 2 (scope guard) and Plan 10 D5: the
+ *   ``personal`` slug is hardcoded as the privacy rail and must not be
+ *   deleteable from a casual UI click.
  *
- * - Add form (bottom): name + slug + accent colour → ``createDomain``.
+ * - Add form is the extracted ``DomainForm`` (Plan 10 Task 6) which
+ *   the setup wizard reuses for the starting-theme step.
  */
 
 const PROTECTED_DOMAINS = new Set<string>(["personal"]);
@@ -35,30 +36,13 @@ const PROTECTED_DOMAINS = new Set<string>(["personal"]);
 // CSS variable references (resolved by the active theme — light vs dark
 // flips them automatically).
 //
-// User-created domains beyond these three pick from ACCENT_SWATCHES below.
+// User-created domains beyond these three pick from ACCENT_SWATCHES (kept
+// in sync with the form's swatch list).
 const BUILTIN_DOMAIN_ACCENT: Record<string, string> = {
   research: "var(--dom-research)",
   work: "var(--dom-work)",
   personal: "var(--dom-personal)",
 };
-
-// Curated accent defaults drawn from the v4 brand palette plus two
-// complementary warm tones. Aligning with the brand keeps user-created
-// domains visually cohesive with the built-in research/work/personal
-// dots (which use sky/sage/ember). Stored verbatim as the colour the
-// backend gets; users can still swap via the CLI for anything outside
-// this set.
-//
-// Source: docs/design/CJ Knowledge LLM v4/brand/brain-brand.html
-//   sky / sage / wheat / ember / dusk / wine.
-const ACCENT_SWATCHES = [
-  "#6A8CAA", // sky    — same family as the built-in research dot
-  "#6E7F5B", // sage   — same family as the built-in work dot
-  "#D6A34E", // wheat  — warn / signal
-  "#C64B2E", // ember  — same family as the built-in personal dot
-  "#4C5872", // dusk   — informational / threads
-  "#7A2E3B", // wine   — rejected / dangerous
-] as const;
 
 export function PanelDomains(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
@@ -90,6 +74,12 @@ export function PanelDomains(): React.ReactElement {
     openDialog({
       kind: "rename-domain",
       domain: { id: slug, name: slug, count: 0 },
+      // Plan 10 Task 6: refresh the panel list after the dialog
+      // commits the rename. Without this hook the row would still
+      // show the old slug until the user navigated away and back.
+      onRenamed: () => {
+        void refresh();
+      },
     });
   };
 
@@ -145,20 +135,10 @@ export function PanelDomains(): React.ReactElement {
           >
             {domains.map((slug, idx) => {
               const protectedDomain = PROTECTED_DOMAINS.has(slug);
-              // Built-in domains use the brand-skin's semantic ``--dom-*``
-              // tokens so they match the topbar / chat / nav dots. User-
-              // created domains rotate through the ACCENT_SWATCHES below.
-              // We track user domains via a separate index so swatch
-              // rotation isn't disrupted by the built-in domains' fixed
-              // colors at the front of the list.
               const builtinAccent = BUILTIN_DOMAIN_ACCENT[slug];
-              const userIdx = idx; // simple — no need to filter, the
-              //                      built-ins always take their own slot
-              //                      and fall through ACCENT_SWATCHES below
-              //                      only when not in BUILTIN_DOMAIN_ACCENT.
               const accent =
                 builtinAccent ??
-                ACCENT_SWATCHES[userIdx % ACCENT_SWATCHES.length] ??
+                ACCENT_SWATCHES[idx % ACCENT_SWATCHES.length] ??
                 "#6A8CAA";
               return (
                 <li
@@ -219,124 +199,12 @@ export function PanelDomains(): React.ReactElement {
         )}
       </section>
 
-      <AddDomainForm onAdded={() => void refresh()} />
+      <section>
+        <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">
+          Add domain
+        </h2>
+        <DomainForm onAdded={() => void refresh()} />
+      </section>
     </div>
-  );
-}
-
-function AddDomainForm({
-  onAdded,
-}: {
-  onAdded: () => void;
-}): React.ReactElement {
-  const pushToast = useSystemStore((s) => s.pushToast);
-  const [name, setName] = React.useState("");
-  const [slug, setSlug] = React.useState("");
-  const [accent, setAccent] = React.useState<string>(ACCENT_SWATCHES[0]!);
-  const [submitting, setSubmitting] = React.useState(false);
-
-  const valid = name.trim().length > 0 && /^[a-z][a-z0-9-]{1,24}$/.test(slug);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!valid || submitting) return;
-    setSubmitting(true);
-    try {
-      await createDomain({
-        slug,
-        name: name.trim(),
-        accent_color: accent,
-      });
-      pushToast({
-        lead: "Domain added.",
-        msg: `${slug}/ is ready for content.`,
-        variant: "success",
-      });
-      setName("");
-      setSlug("");
-      onAdded();
-    } catch (err) {
-      pushToast({
-        lead: "Couldn't add domain.",
-        msg: err instanceof Error ? err.message : "Unknown error.",
-        variant: "danger",
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <section>
-      <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">
-        Add domain
-      </h2>
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label
-              htmlFor="new-domain-name"
-              className="mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--text-dim)]"
-            >
-              Display name
-            </label>
-            <Input
-              id="new-domain-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Hobby"
-            />
-          </div>
-          <div>
-            <label
-              htmlFor="new-domain-slug"
-              className="mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--text-dim)]"
-            >
-              Folder slug
-            </label>
-            <Input
-              id="new-domain-slug"
-              value={slug}
-              onChange={(e) => setSlug(kebabCoerce(e.target.value))}
-              placeholder="hobby"
-              className="font-mono"
-              spellCheck={false}
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--text-dim)]">
-            Accent colour
-          </label>
-          <div className="flex items-center gap-2" role="radiogroup">
-            {ACCENT_SWATCHES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                role="radio"
-                aria-checked={accent === c}
-                aria-label={`Accent ${c}`}
-                onClick={() => setAccent(c)}
-                className={`h-6 w-6 rounded-full border transition-transform ${
-                  accent === c
-                    ? "border-[var(--text)] scale-110"
-                    : "border-[var(--hairline)]"
-                }`}
-                style={{ background: c }}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="flex justify-end">
-          <Button type="submit" disabled={!valid || submitting} className="gap-2">
-            <Plus className="h-3.5 w-3.5" />
-            {submitting ? "Adding…" : "Add domain"}
-          </Button>
-        </div>
-      </form>
-    </section>
   );
 }
