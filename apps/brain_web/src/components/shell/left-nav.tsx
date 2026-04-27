@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { RecentThreads } from "./recent-threads";
 
 interface NavItem {
   href: string;
@@ -79,6 +80,10 @@ export function LeftNav() {
           );
         })}
       </ul>
+
+      {/* Issue #18 — recent-chats panel. Renders nothing on empty
+          vaults so first-run users don't see a "no threads" placeholder. */}
+      <RecentThreads />
     </nav>
   );
 }

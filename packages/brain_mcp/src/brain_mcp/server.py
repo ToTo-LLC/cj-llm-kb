@@ -46,6 +46,7 @@ from brain_mcp.tools import ingest as _ingest_tool
 from brain_mcp.tools import lint as _lint_tool
 from brain_mcp.tools import list_domains as _list_domains_tool
 from brain_mcp.tools import list_pending_patches as _list_pending_patches_tool
+from brain_mcp.tools import list_threads as _list_threads_tool
 from brain_mcp.tools import mcp_install as _mcp_install_tool
 from brain_mcp.tools import mcp_selftest as _mcp_selftest_tool
 from brain_mcp.tools import mcp_status as _mcp_status_tool
@@ -102,6 +103,8 @@ _TOOL_MODULES: list[ToolModule] = [
     _backup_list_tool,
     _backup_restore_tool,
     _delete_domain_tool,
+    # Issue #18 — left-nav recent-chats panel data source.
+    _list_threads_tool,
 ]
 
 

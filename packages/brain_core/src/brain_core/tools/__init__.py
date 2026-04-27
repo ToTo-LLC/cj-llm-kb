@@ -85,6 +85,7 @@ from brain_core.tools import ingest as _ingest  # noqa: E402, F401
 from brain_core.tools import lint as _lint  # noqa: E402, F401
 from brain_core.tools import list_domains as _list_domains  # noqa: E402, F401
 from brain_core.tools import list_pending_patches as _list_pending_patches  # noqa: E402, F401
+from brain_core.tools import list_threads as _list_threads  # noqa: E402, F401
 from brain_core.tools import mcp_install as _mcp_install  # noqa: E402, F401
 from brain_core.tools import mcp_selftest as _mcp_selftest  # noqa: E402, F401
 from brain_core.tools import mcp_status as _mcp_status  # noqa: E402, F401

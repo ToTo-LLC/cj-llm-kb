@@ -103,6 +103,24 @@ export const recent = (
 ): Promise<ToolResponse<{ items: RecentEntry[] }>> =>
   callTool<{ items: RecentEntry[] }>("brain_recent", args);
 
+/** Issue #18: list recent chat threads in scope. The state.sqlite
+ *  ``chat_threads`` table is the source of truth — populated by the chat
+ *  persistence layer on every turn write. */
+export interface ChatThreadEntry {
+  thread_id: string;
+  path: string;
+  domain: string;
+  mode: string;
+  turns: number;
+  cost_usd: number;
+  updated_at: string;
+}
+
+export const listThreads = (
+  args: { domain?: string; query?: string; limit?: number } = {},
+): Promise<ToolResponse<{ threads: ChatThreadEntry[] }>> =>
+  callTool<{ threads: ChatThreadEntry[] }>("brain_list_threads", args);
+
 /** Fetch the top-level ``BRAIN.md`` meta-index. */
 export const getBrainMd = (): Promise<
   ToolResponse<{ path: string; content: string }>
@@ -690,6 +708,8 @@ export const ALL_TOOL_NAMES = [
   "brain_backup_list",
   "brain_backup_restore",
   "brain_delete_domain",
+  // Issue #18 — left-nav recent-chats data source.
+  "brain_list_threads",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];

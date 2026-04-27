@@ -132,10 +132,11 @@ describe("apiFetch", () => {
     expect((err as ApiError).code).toBe("unauthorized");
   });
 
-  test("per-tool bindings cover all 34 tools + hit same-origin /api path", async () => {
-    // Plan 08 Task 2: bindings now target ``/api/tools/<name>`` directly
-    // (no proxy prefix). The ALL_TOOL_NAMES count still holds at 34.
-    expect(ALL_TOOL_NAMES.length).toBe(34);
+  test("per-tool bindings cover all 35 tools + hit same-origin /api path", async () => {
+    // Plan 08 Task 2: bindings target ``/api/tools/<name>`` directly
+    // (no proxy prefix). Issue #18 brought the count to 35 by adding
+    // ``brain_list_threads``.
+    expect(ALL_TOOL_NAMES.length).toBe(35);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "", data: { domains: ["research"] } }), {

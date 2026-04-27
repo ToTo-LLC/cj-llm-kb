@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_lists_thirty_four_tools_after_plan07_task25a(client: TestClient) -> None:
-    """After Plan 07 Task 25 sub-task A, the registry has all 34 tools auto-registered.
+def test_lists_thirty_five_tools_after_issue_18(client: TestClient) -> None:
+    """After issue #18 the registry has all 35 tools auto-registered.
 
     Plan 05 baseline: 18. Plan 07 Task 4 added 4
     (brain_recent_ingests, brain_create_domain, brain_rename_domain,
@@ -25,12 +25,13 @@ def test_lists_thirty_four_tools_after_plan07_task25a(client: TestClient) -> Non
     backup / domain admin (brain_mcp_install, brain_mcp_uninstall,
     brain_mcp_status, brain_mcp_selftest, brain_set_api_key,
     brain_ping_llm, brain_backup_create, brain_backup_list,
-    brain_backup_restore, brain_delete_domain) → 34.
+    brain_backup_restore, brain_delete_domain) → 34. Issue #18 added
+    ``brain_list_threads`` for the left-nav recent-chats panel → 35.
     """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 34
+    assert len(body["tools"]) == 35
     # Spot-check a few names across all groups.
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
@@ -56,6 +57,8 @@ def test_lists_thirty_four_tools_after_plan07_task25a(client: TestClient) -> Non
     assert "brain_backup_list" in names
     assert "brain_backup_restore" in names
     assert "brain_delete_domain" in names
+    # Issue #18 — left-nav recent-chats data source.
+    assert "brain_list_threads" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:
