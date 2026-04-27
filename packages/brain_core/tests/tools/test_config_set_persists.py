@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pydantic
 import pytest
 from brain_core.config.loader import load_config
 from brain_core.config.schema import Config
@@ -180,5 +181,8 @@ async def test_invalid_value_currently_persists_without_validation(tmp_path: Pat
     assert result.data["persisted"] is True
     assert cfg.budget.daily_usd == -1.0
     # The bad value was persisted — load_config will reject this file.
-    with pytest.raises(Exception):  # noqa: B017 — pydantic ValidationError specifically
+    # Pin to ``pydantic.ValidationError`` specifically so a future
+    # regression that raises a different exception type fails loudly
+    # instead of being swallowed by a bare ``Exception`` match.
+    with pytest.raises(pydantic.ValidationError):
         load_config(config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={})

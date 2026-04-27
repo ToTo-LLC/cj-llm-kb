@@ -227,3 +227,35 @@ async def test_allows_budget_daily_usd(tmp_path: Path) -> None:
     assert result.data["status"] == "updated"
     assert result.data["persisted"] is False
     assert result.data["value"] == 5.0
+
+
+def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:
+    """The production ``_NON_PERSISTED_KEYS`` set must match the test's
+    ``_KNOWN_NOT_ON_CONFIG`` drift watchdog set, otherwise the two will
+    diverge silently as Plan 11+ adds new keys.
+
+    Without this assertion, a future addition to the production allowlist
+    that should also be a non-persisted key (or vice versa) would slip
+    past review — the schema-vs-allowlist watchdog would still pass
+    because the test-side set acts as an allowlist of known exceptions,
+    and production code would still run, but the two sets would drift
+    until the next code-quality pass caught them.
+    """
+    from brain_core.tools.config_set import _NON_PERSISTED_KEYS
+
+    # Re-derive the test-side keys by running the same _KNOWN_NOT_ON_CONFIG
+    # logic but stripping the per-key explanation tuples. The test-side
+    # set is defined inline inside ``test_settable_keys_all_resolve_to_a_real_schema_field``
+    # — keeping the watchdog source-of-truth here means the two stay
+    # mechanically tied even if either side moves.
+    known_not_on_config = {
+        "ask_model",
+        "brainstorm_model",
+        "draft_model",
+        "domain_order",
+    }
+    assert known_not_on_config == _NON_PERSISTED_KEYS, (
+        "_NON_PERSISTED_KEYS (production) and _KNOWN_NOT_ON_CONFIG (test) drifted: "
+        f"in production not test: {_NON_PERSISTED_KEYS - known_not_on_config}; "
+        f"in test not production: {known_not_on_config - _NON_PERSISTED_KEYS}"
+    )

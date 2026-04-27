@@ -134,3 +134,31 @@ async def test_persistence_propagates_structured_fields(
         await handle({"slug": "music", "typed_confirm": True}, ctx)
     assert exc_info.value.cause == "lock_timeout"
     assert exc_info.value.attempted_path == target
+
+
+async def test_delete_refuses_active_domain(tmp_path: Path) -> None:
+    """delete_domain refuses to delete the active_domain (no auto-pick replacement).
+
+    Implemented in delete_domain.py. The user is forced to switch
+    active_domain first, preventing silent scope changes. Without this
+    refusal, deleting the active slug would persist a Config whose
+    active_domain points at a missing slug, which fails the cross-field
+    validator on next load_config (``_check_active_domain_in_domains``).
+    """
+    _seed_domain(tmp_path, "music")
+    _seed_domain(tmp_path, "research")  # last-non-personal guard needs >=2
+    cfg = Config(domains=["research", "music", "personal"], active_domain="music")
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    # Delete should refuse with PermissionError BEFORE any state change.
+    with pytest.raises(PermissionError, match="active domain"):
+        await handle({"slug": "music", "typed_confirm": True}, ctx)
+
+    # In-memory unchanged.
+    assert "music" in cfg.domains
+    assert cfg.active_domain == "music"
+
+    # On-disk: no config.json written (no mutation occurred).
+    assert not (tmp_path / ".brain" / "config.json").exists()
+    # Folder also untouched (refusal happens before the filesystem step).
+    assert (tmp_path / "music").exists()

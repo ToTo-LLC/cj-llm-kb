@@ -91,13 +91,16 @@ def test_save_config_mid_write_crash_leaves_no_target(
     # Simulate ``os.replace`` failing mid-write: the target should not
     # exist (replace never landed), and the tmp file should be cleaned
     # up by the writer's exception handler so a retry isn't confused.
+    # The OSError is wrapped as ConfigPersistenceError(cause="replace_failed")
+    # so callers see the writer's documented structured-cause contract.
     def boom(_src: object, _dst: object) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr("brain_core.config.writer.os.replace", boom)
 
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(ConfigPersistenceError, match="disk full") as excinfo:
         save_config(Config(), tmp_path)
+    assert excinfo.value.cause == "replace_failed"
 
     assert not (tmp_path / ".brain" / "config.json").exists()
     assert not (tmp_path / ".brain" / "config.json.tmp").exists()
@@ -117,10 +120,37 @@ def test_save_config_preserves_existing_target_on_crash(
 
     monkeypatch.setattr("brain_core.config.writer.os.replace", boom)
 
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(ConfigPersistenceError, match="disk full"):
         save_config(Config(active_domain="work"), tmp_path)
 
     assert target.read_text(encoding="utf-8") == pre_crash
+
+
+def test_save_config_wraps_os_replace_failure_as_replace_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ``os.replace`` fails (disk full, permission denied, EACCES, etc.),
+    ``save_config`` raises ``ConfigPersistenceError`` with
+    ``cause='replace_failed'`` so callers can render distinct UI from the
+    other documented causes (``lock_timeout`` / ``io_error`` / ``parse_error``).
+    Closes the writer's structured-cause contract — every token listed in
+    ``ConfigPersistenceError``'s docstring is now actually emitted somewhere.
+    """
+
+    def boom(_src: object, _dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("brain_core.config.writer.os.replace", boom)
+
+    with pytest.raises(ConfigPersistenceError) as excinfo:
+        save_config(Config(), tmp_path)
+
+    assert excinfo.value.cause == "replace_failed"
+    assert excinfo.value.attempted_path == tmp_path / ".brain" / "config.json"
+    assert "disk full" in str(excinfo.value)
+    # The wrapped exception is preserved via ``raise ... from exc`` so a
+    # debugger / structured-log handler can still see the underlying OS error.
+    assert isinstance(excinfo.value.__cause__, OSError)
 
 
 def test_save_config_raises_on_lock_contention(tmp_path: Path) -> None:

@@ -106,3 +106,33 @@ async def test_persistence_propagates_structured_fields(
         await handle({"from": "research", "to": "lab-notes"}, ctx)
     assert exc_info.value.cause == "lock_timeout"
     assert exc_info.value.attempted_path == target
+
+
+async def test_rename_follows_active_domain(tmp_path: Path) -> None:
+    """When the renamed slug is the active_domain, active_domain follows the rename.
+
+    Without this behavior, a rename followed by save_config would persist
+    a Config whose active_domain points at a slug not in domains, which
+    fails the cross-field validator on next load_config (schema.py
+    ``_check_active_domain_in_domains``). The follow-along is implemented
+    at rename_domain.py inside the persist_config_or_revert block.
+    """
+    _seed_research(tmp_path)
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    await handle({"from": "research", "to": "lab-notes"}, ctx)
+
+    # In-memory: active_domain follows the rename.
+    assert "lab-notes" in cfg.domains
+    assert "research" not in cfg.domains
+    assert cfg.active_domain == "lab-notes"
+
+    # On-disk: rehydrated config preserves both the rename AND the
+    # active_domain update — without the follow-along the next
+    # ``load_config`` would raise on the cross-field validator.
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert "lab-notes" in rehydrated.domains
+    assert rehydrated.active_domain == "lab-notes"

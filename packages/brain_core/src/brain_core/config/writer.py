@@ -161,14 +161,30 @@ def save_config(
         try:
             with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(payload)
-            os.replace(tmp, target)
+            try:
+                os.replace(tmp, target)
+            except OSError as exc:
+                # Wrap so the structured-cause contract documented on
+                # ``ConfigPersistenceError`` is fully honored: every
+                # cause token in that docstring (``lock_timeout``,
+                # ``io_error``, ``parse_error``, ``replace_failed``)
+                # is now actually emitted somewhere. Callers (Plan 11
+                # Task 4 mutation tools) branch on ``.cause`` for
+                # uniform error UX rather than parsing message strings.
+                raise ConfigPersistenceError(
+                    f"failed to atomically replace config.json at {target}: {exc}",
+                    attempted_path=target,
+                    cause="replace_failed",
+                ) from exc
         except BaseException:
             # BaseException (not Exception) so KeyboardInterrupt /
             # SystemExit mid-write also scrubs tmp; we re-raise
             # immediately so signal semantics are preserved. ``target``
             # is either untouched (replace never ran) or fully replaced
             # (replace is atomic) — either way no partial file lives at
-            # the canonical path.
+            # the canonical path. The ``ConfigPersistenceError`` raised
+            # for ``replace_failed`` above also flows through here so
+            # tmp gets scrubbed before propagation.
             tmp.unlink(missing_ok=True)
             raise
 
