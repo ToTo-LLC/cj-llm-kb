@@ -1,15 +1,80 @@
-"""Typed Config model. Source of truth for all user-configurable behavior."""
+"""Typed Config model. Source of truth for all user-configurable behavior.
+
+Plan 10 / issue #21 — domain set is configurable. ``Config.domains`` holds
+the user's runtime list of top-level vault domains; the v0.1 ``Domain``
+``Literal`` and ``ALLOWED_DOMAINS`` tuple are kept as deprecation aliases
+so external callers that still import them get a string type and the
+default tuple respectively. Plan 10 Task 2 drops ``ALLOWED_DOMAINS`` once
+``vault.paths.scope_guard`` reads the live domain set from its caller.
+
+Slug rules (D2 in plan 10):
+  * lowercase ASCII
+  * regex ``[a-z][a-z0-9_-]{1,30}``
+  * may not start with a digit, ``_``, or ``-``
+  * may not end with ``_`` or ``-``
+  * may not contain path separators (``/``, ``\\``)
+
+Privacy rail (D5): ``personal`` is hardcoded as the privacy-railed slug.
+``Config.domains`` MUST contain it; removing it raises a validation
+error. Generalizing this to a per-domain flag is filed for Plan 11.
+"""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Deprecation aliases — kept so external callers compile through the
+# Plan 10 transition. Plan 10 Task 2 drops ``ALLOWED_DOMAINS``; the
+# ``Domain`` alias becomes ``str`` once every internal call site has
+# migrated to ``Config.domains``. Treat both as read-only legacy.
 Domain = Literal["research", "work", "personal"]
 ALLOWED_DOMAINS: tuple[Domain, ...] = ("research", "work", "personal")
+
+# Plan 10 D5: ``personal`` is the privacy-railed slug. Hardcoded here so
+# the Config validator (and every other call site) can reference one
+# canonical name. Renaming this constant in code without also renaming
+# the slug on disk would silently disable the privacy rail.
+PRIVACY_RAILED_SLUG = "personal"
+
+# Plan 10 D1: default domain set for a fresh vault.
+DEFAULT_DOMAINS: tuple[str, ...] = ("research", "work", PRIVACY_RAILED_SLUG)
+
+# Plan 10 D2: slug-validation rule. The pattern enforces:
+#   - first char: ASCII lowercase letter (no digit / dash / underscore start)
+#   - 2..31 chars total (so the regex max length is 31; matches the
+#     ``{1,30}`` suffix because the leading char counts separately)
+#   - body: lowercase letters, digits, ``-``, ``_``
+# Trailing ``_`` or ``-`` is rejected by a separate post-match check
+# below — extending the regex to forbid trailing punctuation works but
+# costs readability for no validation gain.
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
+
+
+def _validate_domain_slug(slug: str) -> str:
+    """Apply the Plan 10 D2 slug rules. Returns the slug or raises ValueError."""
+    if not isinstance(slug, str):
+        raise ValueError(f"domain slug must be a string, got {type(slug).__name__}")
+    if not slug:
+        raise ValueError("domain slug must not be empty")
+    if "/" in slug or "\\" in slug:
+        raise ValueError(f"domain slug {slug!r} must not contain path separators")
+    if not _SLUG_RE.match(slug):
+        raise ValueError(
+            f"domain slug {slug!r} must match [a-z][a-z0-9_-]{{0,30}} "
+            "(start with a lowercase letter; 1-31 chars; lowercase / digits / "
+            "underscore / hyphen only)"
+        )
+    if slug.endswith("_") or slug.endswith("-"):
+        raise ValueError(
+            f"domain slug {slug!r} must not end with '_' or '-' "
+            "(reserved for filesystem-tooling separators)"
+        )
+    return slug
 
 
 class LLMConfig(BaseModel):
@@ -125,7 +190,17 @@ class AutonomousConfig(BaseModel):
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
     vault_path: Path = Field(default_factory=lambda: Path.home() / "Documents" / "brain")
-    active_domain: Domain = "research"
+    # Plan 10 D1: ``domains`` is the user-configurable list of vault
+    # top-level dirs. Order in the list is preserved for UI affordances
+    # (Settings → Domains drag-reorder, classify prompt template) but
+    # has no semantic meaning on disk. Field validator below enforces
+    # D2 slug rules and the D5 ``personal``-required rail.
+    domains: list[str] = Field(default_factory=lambda: list(DEFAULT_DOMAINS))
+    # Plan 10 D3: ``active_domain`` is widened from the v0.1
+    # ``Literal["research","work","personal"]`` to ``str``; the
+    # cross-field check (must be in ``domains``) is enforced by the
+    # ``model_validator`` below so we can read the live domain set.
+    active_domain: str = "research"
     autonomous_mode: bool = False
     llm: LLMConfig = Field(default_factory=LLMConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
@@ -134,9 +209,42 @@ class Config(BaseModel):
     web_port: int = Field(default=4317, ge=1024, le=65535)
     log_llm_payloads: bool = False
 
-    @field_validator("active_domain")
+    @field_validator("domains")
     @classmethod
-    def _check_domain(cls, v: str) -> str:
-        if v not in ALLOWED_DOMAINS:
-            raise ValueError(f"active_domain must be one of {ALLOWED_DOMAINS}, got {v!r}")
+    def _check_domains(cls, v: list[str]) -> list[str]:
+        # D1: at least one domain. The ``personal`` rail check below
+        # also enforces non-empty as a side effect, but we check
+        # length explicitly so the error message is the right one
+        # when a user sends ``[]``.
+        if not v:
+            raise ValueError("domains must contain at least one entry")
+        # D2: per-slug rules.
+        for slug in v:
+            _validate_domain_slug(slug)
+        # D2: no duplicates. ``set(v) != len(v)`` would mask which slug
+        # collided; iterate so the error message names it.
+        seen: set[str] = set()
+        for slug in v:
+            if slug in seen:
+                raise ValueError(f"domain slug {slug!r} appears more than once in domains list")
+            seen.add(slug)
+        # D5: privacy rail. ``personal`` is hardcoded and may not be
+        # removed. The error wording matches the plan-10 spec verbatim
+        # so the Settings UI can show it directly.
+        if PRIVACY_RAILED_SLUG not in v:
+            raise ValueError(
+                f"{PRIVACY_RAILED_SLUG} is required and may not be removed; "
+                "use Settings → Domains to control its visibility."
+            )
         return v
+
+    @model_validator(mode="after")
+    def _check_active_domain_in_domains(self) -> Config:
+        # D3: ``active_domain`` must be a member of the live ``domains``
+        # list. Pydantic field validators can't see other fields cleanly
+        # in v2, so we do the cross-field check here.
+        if self.active_domain not in self.domains:
+            raise ValueError(
+                f"active_domain {self.active_domain!r} is not in domains {self.domains!r}"
+            )
+        return self
