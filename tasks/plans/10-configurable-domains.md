@@ -35,24 +35,24 @@ If any of these come up during implementation, file a TODO and keep moving.
 
 ---
 
-## Decisions to pin before Task 1
+## Decisions (locked 2026-04-27)
 
-The plan author should resolve these with the user before authoring task prompts. Each is one of the rules from `docs/style/plan-authoring.md`:
+User signed off on all ten recommendations on 2026-04-27. Implementers MUST treat these as load-bearing — any deviation requires a new round of plan-author sign-off before changing scope. The "Decision" column is the locked decision; the "Why" column is the rationale that survives in the source comments / docstrings.
 
-| # | Decision | Default we'd pick | Why we'd pick it | Block on |
-|---|---|---|---|---|
-| D1 | What's the **default domain set** for a fresh vault? | `{research, work, personal}` (unchanged) | Zero-cost compatibility with the v0.1 setup wizard. Existing users see no change. | None — strict default. |
-| D2 | What slug-validation rules apply on Add Domain? | Lowercase, `[a-z][a-z0-9_-]{1,30}`, no leading digit, no `_` or `-` at start/end, no path-separator chars. | Filesystem-safe across Mac/Win/Linux. Disallows `con`/`prn`/etc. on Windows. Aligns with vault slug rules already in `vault/paths.py`. | None — `vault/paths.py` already has `_is_valid_slug` we extend. |
-| D3 | When the user **deletes** a domain, what happens to its content? | Move the folder to `<vault>/.brain/trash/<slug>.<ts>/` and emit an undo entry. NEVER `rm -rf`. | Matches the v0.1 `brain_delete_domain` semantics (already shipped). | None — already implemented; Plan 10 just exposes it from the UI. |
-| D4 | When the user **renames** a domain, what happens to wikilinks pointing into it? | Rewrite every `[[slug]]` reference whose resolved target is under the renamed folder. | Matches the v0.1 `brain_rename_domain` (already shipped). Plan 10 surfaces it. | None. |
-| D5 | Is **`personal` the only privacy-railed slug**, or is the privacy rail a per-domain flag the user can toggle? | Hardcoded slug, NOT a flag. | Generalizing now widens the safety surface and contradicts the spec's "personal never in default queries" wording. Move to a flag in Plan 11 if real demand surfaces. | Confirm with the user. |
-| D6 | Does the classify prompt enum need to include **every** configured domain, or only the ones in the call's `allowed_domains`? | Only `allowed_domains` (the active scope at call time). | Smaller enums classify more reliably; out-of-scope domains aren't valid targets anyway. | None. |
-| D7 | What's the migration story for users who **edit `Config.domains` to remove a slug** that still has notes on disk? | The slug stays usable for read paths but is hidden from the UI and from `allowed_domains` defaults. The folder is NOT deleted. The user must run Delete via the UI to actually remove the data. | "Edit a config field" should never destroy data. | Confirm — alternative is to refuse the config edit until the folder is empty. |
-| D8 | Does the classify prompt render the domain enum at **load time** (cached per process) or **per call** (fresh from `Config`)? | Per call. | The user can add/remove domains while the server is running; the next ingest must see the new set without a restart. Cost is one string format per ingest classify call. | None. |
-| D9 | What does the **Settings → Domains** panel call when the user adds a domain? | `brain_create_domain` (already shipped — Plan 07 Task 4). Plan 10 adds the form + accent-swatch picker on top. | Reuse over rebuild. | None. |
-| D10 | Should the `BRAIN.md` template be auto-updated when domains change? | NO. The user's BRAIN.md is hand-edited and out of scope for automatic rewriting. | Spec principle: BRAIN.md is the user's voice, not the LLM's. | Confirm. |
+| # | Decision | Locked | Why |
+|---|---|---|---|
+| D1 | **Default domain set:** `{research, work, personal}` (unchanged from v0.1). | ✅ | Zero-cost compatibility with the v0.1 setup wizard. Existing users see no change. |
+| D2 | **Slug validation rules:** lowercase regex `[a-z][a-z0-9_-]{1,30}`; no leading digit; no `_`/`-` at start/end; no path-separator chars. | ✅ | Filesystem-safe across Mac/Win/Linux. Disallows `con`/`prn`/etc. on Windows. Extends the existing `_is_valid_slug` in `vault/paths.py`. |
+| D3 | **Delete behavior:** move the folder to `<vault>/.brain/trash/<slug>.<ts>/` and emit an undo entry. **Never `rm -rf`.** | ✅ | Matches v0.1's `brain_delete_domain` semantics (already shipped in Plan 07 Task 25A). |
+| D4 | **Rename behavior:** rewrite every `[[slug]]` reference whose resolved target is under the renamed folder. | ✅ | Matches v0.1's `brain_rename_domain` (already shipped). Plan 10 surfaces it from the UI. |
+| D5 | **Privacy rail:** `personal` is privacy-railed by SLUG (hardcoded), not by a per-domain flag. | ✅ | Generalizing now widens the safety surface and contradicts the spec's "personal never in default queries" wording. Per-domain flag is filed as a Plan 11 idea. |
+| D6 | **Classify prompt enum scope:** only the call's `allowed_domains`, not every configured domain. | ✅ | Smaller enums classify more reliably; out-of-scope domains aren't valid targets anyway. |
+| D7 | **Editing `Config.domains` to remove a slug that still has notes:** the slug stays usable for read paths but is hidden from the UI and from `allowed_domains` defaults. The folder is NOT deleted. The user must run Delete via the UI to actually remove data. | ✅ | "Edit a config field" should never destroy data. |
+| D8 | **Classify prompt render time:** per call (fresh from `Config`), not cached at module load. | ✅ | The user can add/remove domains while the server is running; the next ingest must see the new set without a restart. Cost is one string format per classify call. |
+| D9 | **Add Domain UI tool call:** `brain_create_domain` (already shipped — Plan 07 Task 4). Plan 10 adds the form + accent-swatch picker on top. | ✅ | Reuse over rebuild. |
+| D10 | **`BRAIN.md` auto-update on domain change:** NO. The user's BRAIN.md is hand-edited and out of scope for automatic rewriting. | ✅ | Spec principle — BRAIN.md is the user's voice, not the LLM's. |
 
-The implementer routes any unrecognized rule edge case (D7 alternative, D5 flag, D10 auto-rewrite) back to the plan author for resolution before changing scope.
+The implementer routes any unrecognized rule edge case (D7 alternative semantics, D5 flag-vs-slug, D10 auto-rewrite) back to the plan author for re-sign-off before changing scope.
 
 ---
 
