@@ -9,10 +9,7 @@ import { applyPatch, brainSetApiKey, proposeNote } from "@/lib/api/tools";
 import { WelcomeStep } from "./steps/welcome";
 import { VaultLocationStep } from "./steps/vault-location";
 import { ApiKeyStep } from "./steps/api-key";
-import {
-  StartingThemeStep,
-  type ThemeKey,
-} from "./steps/starting-theme";
+import { BLANK_THEME, StartingThemeStep } from "./steps/starting-theme";
 import { BrainMdStep, DEFAULT_BRAIN_MD } from "./steps/brain-md";
 import { ClaudeDesktopStep } from "./steps/claude-desktop";
 
@@ -50,7 +47,10 @@ export function Wizard({ onDone }: WizardProps) {
   // skips the Test button, ``handleNext`` falls back to persisting on
   // step 3 → step 4 advance (issue #20).
   const [apiKeySaved, setApiKeySaved] = useState(false);
-  const [theme, setTheme] = useState<ThemeKey>("blank");
+  // Plan 10 Task 8: theme is now a domain slug (or ``BLANK_THEME``)
+  // since the cards are driven by ``Config.domains`` rather than a
+  // hardcoded enum.
+  const [theme, setTheme] = useState<string>(BLANK_THEME);
   const [brainMd, setBrainMd] = useState(DEFAULT_BRAIN_MD);
   const [busy, setBusy] = useState(false);
 
@@ -70,9 +70,12 @@ export function Wizard({ onDone }: WizardProps) {
   const canContinue =
     step !== 2 ? true : vaultPath.trim().length > 0;
 
-  const seedTheme = useCallback(async (pick: ThemeKey) => {
-    if (pick === "blank") return;
-    const seed = THEME_SEEDS[pick];
+  const seedTheme = useCallback(async (pick: string) => {
+    if (pick === BLANK_THEME) return;
+    // Plan 10 Task 8: built-in slugs (research / work) keep the v0.1
+    // seed copy; user-added slugs get a generic stub. ``personal``
+    // never reaches this path because the picker filters it out.
+    const seed = THEME_SEEDS[pick] ?? genericSeed(pick);
     // `proposeNote` throws ApiError on non-2xx; let errors bubble — the
     // wizard stays in-place and the user can retry by re-clicking Continue.
     const res = await proposeNote({
@@ -260,10 +263,11 @@ export function Wizard({ onDone }: WizardProps) {
 }
 
 /**
- * Seed content for the 3 non-blank starting themes. Kept inline — this is
- * setup-wizard-specific copy, not something that belongs in brain_core.
+ * Seed content for the v0.1 built-in starting themes. Kept inline — this
+ * is setup-wizard-specific copy, not something that belongs in brain_core.
+ * User-added slugs (Plan 10) fall through to ``genericSeed()`` below.
  */
-const THEME_SEEDS: Record<Exclude<ThemeKey, "blank">, string> = {
+const THEME_SEEDS: Record<string, string> = {
   research: `# Research
 
 Reading notes, paper summaries, and questions to chase down.
@@ -280,12 +284,21 @@ Calls, deals, customers, decisions — the day job.
 
 _No notes yet._
 `,
-  personal: `# Personal
+};
 
-Journal, ideas, and things that don't fit anywhere else.
+/** Plan 10 Task 8: generic index seed for user-added domain slugs. */
+function genericSeed(slug: string): string {
+  const title = slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((p) => p[0]!.toUpperCase() + p.slice(1))
+    .join(" ");
+  return `# ${title}
+
+Notes for ${title}.
 
 ## Recent
 
 _No notes yet._
-`,
-};
+`;
+}

@@ -25,6 +25,41 @@ vi.mock("@/lib/api/tools", () => ({
   brainPingLlm: brainPingLlmMock,
 }));
 
+// Plan 10 Task 8: starting-theme step now reads from useDomains. Stub
+// the hook so the wizard's step 4 renders the v0.1 default triple
+// without a live ``listDomains`` round-trip in the test env.
+vi.mock("@/lib/hooks/use-domains", () => ({
+  useDomains: () => ({
+    domains: [
+      {
+        slug: "research",
+        label: "Research",
+        accent: "var(--dom-research)",
+        configured: true,
+        on_disk: true,
+      },
+      {
+        slug: "work",
+        label: "Work",
+        accent: "var(--dom-work)",
+        configured: true,
+        on_disk: true,
+      },
+      {
+        slug: "personal",
+        label: "Personal",
+        accent: "var(--dom-personal)",
+        configured: true,
+        on_disk: true,
+      },
+    ],
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+  invalidateDomainsCache: vi.fn(),
+}));
+
 import { Wizard } from "@/components/setup/wizard";
 
 describe("Wizard", () => {
@@ -177,5 +212,23 @@ describe("Wizard", () => {
       }),
     );
     expect(applyPatchMock).toHaveBeenCalledWith({ patch_id: "p-1" });
+  });
+
+  test("Plan 10 Task 8: step 4 hides personal, renders cards for other Config.domains + Blank", async () => {
+    const user = userEvent.setup();
+    render(<Wizard onDone={vi.fn()} />);
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /continue/i }));
+    }
+    expect(screen.getByText(/step 4 of 6/i)).toBeInTheDocument();
+    // ``personal`` MUST NOT be a seed-able card on the wizard — D5
+    // privacy rail. The other two built-ins + the Blank sentinel all
+    // render.
+    expect(screen.getByRole("radio", { name: /research/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /work/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^blank$/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: /^personal$/i }),
+    ).not.toBeInTheDocument();
   });
 });
