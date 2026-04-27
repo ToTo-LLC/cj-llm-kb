@@ -39,6 +39,9 @@ out/
 **/.brain/run/
 **/.brain/costs.sqlite
 **/.brain/state.sqlite
+**/.brain/config.json
+**/.brain/config.json.bak
+**/.brain/config.json.lock
 
 # Broader secret/log safety net (catches stray .env files at any level)
 .env

@@ -41,7 +41,26 @@ class ConfigPersistenceError(Exception):
     Wraps ``filelock.Timeout`` (and any future I/O failure modes) into a
     single exception type so callers can render one user-facing error
     message instead of branching on the underlying SDK's exception tree.
+
+    Carries optional structured fields so callers (the Plan 11 Task 4
+    mutation tools) can render uniform error UX without parsing the
+    message string. ``attempted_path`` is the resolved target path the
+    writer was about to commit to; ``cause`` is a short stable token
+    (e.g. ``"lock_timeout"``, ``"replace_failed"``) the UI layer can
+    branch on. Both default to ``None`` so direct
+    ``raise ConfigPersistenceError("msg")`` callers stay valid.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempted_path: Path | None = None,
+        cause: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.attempted_path = attempted_path
+        self.cause = cause
 
 
 def _is_posix() -> bool:
@@ -63,6 +82,12 @@ def _json_default(obj: object) -> str:
     space-separated form. ``Path`` becomes its string representation.
     Anything else raises ``TypeError`` — silent ``str()`` fallbacks would
     let an unexpected type ride into ``config.json`` undetected.
+
+    Intentionally narrow — only handles types currently surfaced by
+    ``Config.persisted_dict()``. Add a branch when a real persisted
+    field requires a new type (e.g. ``Decimal``, ``UUID``) rather than
+    expanding speculatively. The unknown-type ``TypeError`` is the
+    safety net that forces this decision to be deliberate.
     """
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -119,7 +144,9 @@ def save_config(
         lock.acquire(timeout=lock_timeout)
     except filelock.Timeout as exc:
         raise ConfigPersistenceError(
-            "another brain process is writing config.json; try again"
+            "another brain process is writing config.json; try again",
+            attempted_path=target,
+            cause="lock_timeout",
         ) from exc
 
     try:
@@ -134,8 +161,9 @@ def save_config(
                 f.write(payload)
             os.replace(tmp, target)
         except BaseException:
-            # Mid-write failure: scrub the half-written tmp so a
-            # subsequent save isn't confused by stale state. ``target``
+            # BaseException (not Exception) so KeyboardInterrupt /
+            # SystemExit mid-write also scrubs tmp; we re-raise
+            # immediately so signal semantics are preserved. ``target``
             # is either untouched (replace never ran) or fully replaced
             # (replace is atomic) — either way no partial file lives at
             # the canonical path.

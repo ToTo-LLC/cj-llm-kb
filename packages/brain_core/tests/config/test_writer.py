@@ -125,7 +125,10 @@ def test_save_config_preserves_existing_target_on_crash(
 def test_save_config_raises_on_lock_contention(tmp_path: Path) -> None:
     # Hold the lock from a separate thread, then assert the foreground
     # ``save_config`` surfaces a structured ``ConfigPersistenceError``
-    # (not a bare ``filelock.Timeout``).
+    # (not a bare ``filelock.Timeout``). Extended to also pin the
+    # structured ``attempted_path`` + ``cause`` fields the Plan 11 Task 4
+    # mutation tools rely on for uniform error UX — keeping these in one
+    # test avoids duplicating the lock-contention threading scaffold.
     brain_dir = tmp_path / ".brain"
     brain_dir.mkdir(parents=True)
     lock_path = brain_dir / "config.json.lock"
@@ -143,11 +146,25 @@ def test_save_config_raises_on_lock_contention(tmp_path: Path) -> None:
     t.start()
     try:
         assert holder_acquired.wait(timeout=5.0)
-        with pytest.raises(ConfigPersistenceError, match="another brain process"):
+        with pytest.raises(ConfigPersistenceError, match="another brain process") as excinfo:
             save_config(Config(), tmp_path, lock_timeout=0.5)
+        # Structured fields: caller (Plan 11 Task 4) branches on these
+        # rather than parsing the message string.
+        assert excinfo.value.attempted_path == brain_dir / "config.json"
+        assert excinfo.value.cause == "lock_timeout"
     finally:
         release_holder.set()
         t.join(timeout=5.0)
+
+
+def test_config_persistence_error_backward_compat_no_kwargs() -> None:
+    # Direct construction without the new kwargs must still work — both
+    # for any external caller that hand-rolls the exception and for our
+    # own future raise sites that don't have a meaningful path/cause.
+    err = ConfigPersistenceError("just a message")
+    assert str(err) == "just a message"
+    assert err.attempted_path is None
+    assert err.cause is None
 
 
 def test_save_config_release_lock_after_success(tmp_path: Path) -> None:
