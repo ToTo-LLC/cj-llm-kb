@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from brain_core.config.schema import PRIVACY_RAILED_SLUG, _validate_domain_slug
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.frontmatter import (
     FrontmatterError,
@@ -50,7 +51,9 @@ from brain_core.vault.frontmatter import (
 NAME = "brain_rename_domain"
 DESCRIPTION = (
     "Atomically rename a top-level domain (folder + every domain: frontmatter "
-    "field + qualifying wikilinks). Returns an undo_id; brain_undo_last reverses."
+    "field + qualifying wikilinks). Returns an undo_id; brain_undo_last reverses. "
+    f"Refuses to rename {PRIVACY_RAILED_SLUG!r} (Plan 10 D5 privacy rail) and "
+    "refuses TO a slug already in Config.domains."
 )
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -61,8 +64,6 @@ INPUT_SCHEMA: dict[str, Any] = {
     },
     "required": ["from", "to"],
 }
-
-_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,24}$")
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -161,12 +162,39 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     to_slug = str(arguments["to"])
     rewrite_frontmatter = bool(arguments.get("rewrite_frontmatter", True))
 
-    if not _SLUG_RE.match(from_slug):
-        raise ValueError(f"from-slug {from_slug!r} fails ^[a-z][a-z0-9-]{{1,24}}$")
-    if not _SLUG_RE.match(to_slug):
-        raise ValueError(f"to-slug {to_slug!r} fails ^[a-z][a-z0-9-]{{1,24}}$")
+    # Plan 10 D5: ``personal`` is the privacy-railed slug. Renaming it
+    # would break the structural privacy rail since it's hardcoded by
+    # name in scope_guard / Config.domains validation / the classify
+    # prompt's privacy rule. Refusal is unconditional.
+    if from_slug == PRIVACY_RAILED_SLUG:
+        raise PermissionError(
+            f"refusing to rename {PRIVACY_RAILED_SLUG!r} — it is the privacy-"
+            "railed slug (Plan 10 D5) and is referenced by hardcoded name in "
+            "scope_guard, Config validation, and the classify prompt. "
+            "Renaming would silently disable the privacy rail."
+        )
+    if to_slug == PRIVACY_RAILED_SLUG:
+        raise PermissionError(
+            f"refusing to rename TO {PRIVACY_RAILED_SLUG!r} — that slug is "
+            "reserved as the privacy-railed name; pick a different target."
+        )
+
+    # Plan 10 D2: slug rules unified with Config.domains validation.
+    # ``_validate_domain_slug`` raises ValueError with a slug-specific message.
+    _validate_domain_slug(from_slug)
+    _validate_domain_slug(to_slug)
     if from_slug == to_slug:
         raise ValueError(f"from and to slugs are identical: {from_slug!r}")
+
+    # Plan 10 Task 5: reject TO if the slug is already configured. The
+    # on-disk check below catches the typical case (folder exists), but
+    # a slug configured-without-folder (D7) would slip past.
+    cfg = ctx.config
+    if cfg is not None and to_slug in (getattr(cfg, "domains", None) or []):
+        raise FileExistsError(
+            f"destination slug {to_slug!r} is already in Config.domains. "
+            "Pick a target that's not already configured."
+        )
 
     from_dir = ctx.vault_root / from_slug
     to_dir = ctx.vault_root / to_slug
@@ -215,6 +243,18 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     # Step 3: COMMIT — the atomic folder rename.
     os.rename(from_dir, to_dir)
+
+    # Plan 10 Task 5: rewrite ``Config.domains`` in-memory so any
+    # ``allowed_domains`` reads from the live config see the new slug
+    # immediately. Disk persistence is issue #27 / Plan 07 Task 5.
+    if cfg is not None and isinstance(getattr(cfg, "domains", None), list):
+        try:
+            idx = cfg.domains.index(from_slug)
+            cfg.domains[idx] = to_slug
+        except ValueError:
+            # ``from_slug`` wasn't configured — append the new one so
+            # the config reflects what's now on disk.
+            cfg.domains.append(to_slug)
 
     # Step 4: write the single undo record. The absolute paths in
     # edits_for_undo still point under <from>/ (the source-of-truth at

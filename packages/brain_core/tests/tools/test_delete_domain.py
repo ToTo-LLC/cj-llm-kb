@@ -34,12 +34,23 @@ def _seed_domain(vault: Path, slug: str) -> None:
     )
 
 
+def _seed_two_non_personal_domains(vault: Path, target: str) -> None:
+    """Seed ``target`` plus an extra non-personal domain so the
+    Plan 10 Task 5 "last non-personal" guard doesn't fire when the
+    test wants to delete ``target``. Used by tests that pre-date the
+    guard.
+    """
+    _seed_domain(vault, target)
+    extra = "research" if target != "research" else "work"
+    _seed_domain(vault, extra)
+
+
 def test_name() -> None:
     assert NAME == "brain_delete_domain"
 
 
 async def test_requires_typed_confirm(tmp_path: Path) -> None:
-    _seed_domain(tmp_path, "music")
+    _seed_two_non_personal_domains(tmp_path, "music")
     with pytest.raises(PermissionError, match="typed_confirm"):
         await handle(
             {"slug": "music", "typed_confirm": False},
@@ -61,7 +72,7 @@ async def test_refuses_personal_slug(tmp_path: Path) -> None:
 
 
 async def test_moves_domain_to_trash_and_records_undo(tmp_path: Path) -> None:
-    _seed_domain(tmp_path, "music")
+    _seed_two_non_personal_domains(tmp_path, "music")
     result = await handle(
         {"slug": "music", "typed_confirm": True},
         _mk_ctx(tmp_path),
@@ -82,7 +93,7 @@ async def test_moves_domain_to_trash_and_records_undo(tmp_path: Path) -> None:
 
 
 async def test_undo_restores_domain(tmp_path: Path) -> None:
-    _seed_domain(tmp_path, "music")
+    _seed_two_non_personal_domains(tmp_path, "music")
     ctx = _mk_ctx(tmp_path)
     result = await handle({"slug": "music", "typed_confirm": True}, ctx)
     assert result.data is not None
@@ -98,6 +109,9 @@ async def test_undo_restores_domain(tmp_path: Path) -> None:
 
 
 async def test_refuses_invalid_slug(tmp_path: Path) -> None:
+    # Seed two non-personal domains so the Plan 10 last-non-personal
+    # guard doesn't pre-empt the slug-format check.
+    _seed_two_non_personal_domains(tmp_path, "research")
     with pytest.raises(ValueError, match="must match"):
         await handle(
             {"slug": "BAD-SLUG", "typed_confirm": True},
@@ -106,8 +120,25 @@ async def test_refuses_invalid_slug(tmp_path: Path) -> None:
 
 
 async def test_refuses_missing_domain(tmp_path: Path) -> None:
+    # Seed two non-personal domains so the Plan 10 last-non-personal
+    # guard doesn't pre-empt the missing-domain check.
+    _seed_two_non_personal_domains(tmp_path, "research")
     with pytest.raises(FileNotFoundError):
         await handle(
             {"slug": "nonexistent", "typed_confirm": True},
             _mk_ctx(tmp_path),
         )
+
+
+async def test_refuses_last_non_personal_domain(tmp_path: Path) -> None:
+    """Plan 10 Task 5 rail 3: deleting the last non-``personal`` domain
+    is refused so the user can't end up with only ``personal`` configured.
+    """
+    _seed_domain(tmp_path, "music")  # only one non-personal domain on disk
+    with pytest.raises(PermissionError, match="last non-"):
+        await handle(
+            {"slug": "music", "typed_confirm": True},
+            _mk_ctx(tmp_path),
+        )
+    # Folder still there — guard fired before the move.
+    assert (tmp_path / "music" / "index.md").exists()

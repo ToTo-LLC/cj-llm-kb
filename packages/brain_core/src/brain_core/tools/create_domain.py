@@ -1,8 +1,12 @@
 """brain_create_domain — create a new top-level vault domain.
 
 Creates ``<vault>/<slug>/`` plus the canonical ``index.md`` + ``log.md``
-seed pair. Fails if the slug fails ``^[a-z][a-z0-9-]{1,24}$`` or if a
-folder with that slug already exists.
+seed pair. Plan 10 Task 5 routes slug validation through
+``brain_core.config.schema._validate_domain_slug`` (the D2 rules:
+``^[a-z][a-z0-9_-]{0,30}$``, no leading digit/``_``/``-``, no trailing
+``_``/``-``, no path separators). This means the rules now match
+``Config.domains`` validation 1:1 — the slug a user creates here is by
+definition acceptable for in-place ``Config.domains.append(slug)``.
 
 The domain folder is created via ``mkdir`` rather than via a PatchSet —
 PatchSets are scope-guarded against ``allowed_domains``, and a brand-new
@@ -13,26 +17,33 @@ companion (D2b in spirit). The atomic-cleanup branch (try/except) ensures
 that a partial create (folder + index but no log) leaves the vault as it
 was found.
 
-Slug appendage to ``config.domain_order`` is deferred to Plan 07 Task 5
-(real config persistence). For now the returned ``data['domain_order']``
-field surfaces the new slug so the frontend can mirror the expected order
-client-side.
+Plan 10 Task 5: after a successful create, the slug is appended to
+``ctx.config.domains`` (in-memory). Disk-level config persistence is
+issue #27 / Plan 07 Task 5 follow-up — until that lands, the slug
+survives only for the lifetime of the running process; restart loses the
+edit unless the on-disk folder is what the next list_domains crawl
+picks up. The append also fails silently when ``ctx.config`` is None
+(low-level tests, harness contexts) — the on-disk folder still exists,
+so ``brain_list_domains`` would still surface the slug as
+``on_disk=True, configured=False``.
 """
 
 from __future__ import annotations
 
-import re
 import shutil
 import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from brain_core.config.schema import _validate_domain_slug
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_create_domain"
 DESCRIPTION = (
     "Create a new top-level vault domain (folder + seed index.md + log.md). "
-    "Slug must match ^[a-z][a-z0-9-]{1,24}$. Fails if the slug already exists."
+    "Slug must match the Plan 10 D2 rules (^[a-z][a-z0-9_-]{0,30}$, no "
+    "leading digit/_/-, no trailing _/-, no path separators). Fails if the "
+    "slug already exists."
 )
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -47,8 +58,6 @@ INPUT_SCHEMA: dict[str, Any] = {
     },
     "required": ["slug", "name"],
 }
-
-_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,24}$")
 
 
 def _seed_index_md(name: str) -> str:
@@ -74,10 +83,21 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     name = str(arguments["name"])
     accent_color = str(arguments.get("accent_color", "#888888"))
 
-    if not _SLUG_RE.match(slug):
-        raise ValueError(
-            f"slug {slug!r} must match ^[a-z][a-z0-9-]{{1,24}}$ "
-            "(lowercase letter then up to 24 lowercase alnum/hyphen chars)"
+    # Plan 10 D2: slug rules now live on the schema module so create
+    # and Config.domains validation can't drift. ``_validate_domain_slug``
+    # raises ValueError with a slug-specific message that the UI can
+    # surface verbatim.
+    _validate_domain_slug(slug)
+
+    # Reject if the slug is already in Config.domains. The on-disk
+    # check below catches the common case (folder exists), but a slug
+    # configured-without-folder (D7's allowed divergence) would slip
+    # past that check — explicit Config.domains check covers it.
+    cfg = ctx.config
+    if cfg is not None and slug in (getattr(cfg, "domains", None) or []):
+        raise FileExistsError(
+            f"domain {slug!r} is already in Config.domains. Remove it from "
+            "Settings → Domains first, or pick a different slug."
         )
 
     domain_dir = ctx.vault_root / slug
@@ -98,6 +118,13 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             shutil.rmtree(domain_dir, ignore_errors=True)
         raise
 
+    # Plan 10 Task 5: in-memory append so ``brain_list_domains`` and the
+    # classifier's ``allowed_domains`` see the new slug immediately,
+    # without needing the user to restart. Disk-level config persistence
+    # (issue #27) lands in a follow-up.
+    if cfg is not None and isinstance(getattr(cfg, "domains", None), list):
+        cfg.domains.append(slug)
+
     domain = {"slug": slug, "name": name, "accent_color": accent_color}
     return ToolResult(
         text=f"created domain {slug!r} (name={name!r})",
@@ -105,8 +132,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "status": "created",
             "domain": domain,
             "note": (
-                "Plan 07 Task 4: domain_order persistence lands in Task 5. "
-                "Append this slug to your client-side domain_order until then."
+                "Slug appended to Config.domains in-memory. Disk-level "
+                "persistence is issue #27; restart loses the edit unless "
+                "the on-disk folder remains."
             ),
         },
     )

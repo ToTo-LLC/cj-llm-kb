@@ -57,3 +57,59 @@ async def test_existing_slug_rejected(tmp_path: Path) -> None:
     (tmp_path / "music").mkdir()
     with pytest.raises(FileExistsError):
         await handle({"slug": "music", "name": "Music"}, _mk_ctx(tmp_path))
+
+
+async def test_appends_slug_to_config_domains_in_memory(tmp_path: Path) -> None:
+    """Plan 10 Task 5: a successful create appends the slug to
+    ``ctx.config.domains`` in-memory so subsequent classify / list_domains
+    calls see the new slug without a restart. Disk persistence is
+    deferred to issue #27.
+    """
+    from brain_core.config.schema import Config
+
+    cfg = Config(domains=["research", "work", "personal"])
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research", "work", "personal"),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+        config=cfg,
+    )
+    result = await handle({"slug": "hobby", "name": "Hobby"}, ctx)
+
+    assert result.data is not None
+    assert result.data["status"] == "created"
+    assert "hobby" in cfg.domains  # in-memory append landed
+    assert (tmp_path / "hobby" / "index.md").exists()
+
+
+async def test_rejects_slug_already_in_config_domains(tmp_path: Path) -> None:
+    """Plan 10 Task 5: refusing a slug already configured prevents the
+    state-divergence case where Config has it but no folder yet.
+    """
+    from brain_core.config.schema import Config
+
+    cfg = Config(domains=["research", "work", "personal", "hobby"])
+    ctx = ToolContext(
+        vault_root=tmp_path,
+        allowed_domains=("research", "work", "personal", "hobby"),
+        retrieval=None,
+        pending_store=None,
+        state_db=None,
+        writer=None,
+        llm=None,
+        cost_ledger=None,
+        rate_limiter=None,
+        undo_log=None,
+        config=cfg,
+    )
+    # No folder for "hobby" on disk, but it IS in Config.domains.
+    with pytest.raises(FileExistsError, match=r"Config\.domains"):
+        await handle({"slug": "hobby", "name": "Hobby"}, ctx)
+    assert not (tmp_path / "hobby").exists()

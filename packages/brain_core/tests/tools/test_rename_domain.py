@@ -100,9 +100,39 @@ async def test_rejects_when_destination_exists(tmp_path: Path) -> None:
 
 
 async def test_rejects_invalid_slug(tmp_path: Path) -> None:
+    """Plan 10 Task 5: slug rules unified with Config.domains validation.
+
+    The error message wording shifted from the v0.1 ``"... fails ^[a-z]..."``
+    to the schema-level ``"... must match [a-z][a-z0-9_-]..."`` form when
+    the tool was migrated to ``_validate_domain_slug``. We assert on the
+    stable substring ``"must match"``.
+    """
     _seed_research(tmp_path)
-    with pytest.raises(ValueError, match="fails"):
+    with pytest.raises(ValueError, match="must match"):
         await handle(
             {"from": "research", "to": "Lab-Notes"},
+            _mk_ctx(tmp_path),
+        )
+
+
+async def test_rejects_renaming_personal_slug(tmp_path: Path) -> None:
+    """Plan 10 D5: ``personal`` is the privacy-railed slug; rename is refused
+    in either direction.
+    """
+    (tmp_path / "personal" / "notes").mkdir(parents=True)
+    (tmp_path / "personal" / "index.md").write_text(
+        "---\ntitle: Personal\ndomain: personal\n---\n# Personal\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PermissionError, match="privacy"):
+        await handle(
+            {"from": "personal", "to": "private"},
+            _mk_ctx(tmp_path),
+        )
+    # And the inverse — renaming TO ``personal`` is also refused.
+    _seed_research(tmp_path)
+    with pytest.raises(PermissionError, match="reserved"):
+        await handle(
+            {"from": "research", "to": "personal"},
             _mk_ctx(tmp_path),
         )
