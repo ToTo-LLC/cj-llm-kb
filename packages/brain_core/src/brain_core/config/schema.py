@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -191,6 +191,48 @@ class AutonomousConfig(BaseModel):
     draft: bool = False
 
 
+class DomainOverride(BaseModel):
+    """Per-domain LLM/autonomy overrides (Plan 11 D8).
+
+    Every field is ``None`` by default — a missing override means "fall
+    back to the global value from :class:`LLMConfig` / :class:`Config`".
+    A populated field replaces the global value when the active scope
+    matches this override's slug. The bounds on ``temperature`` and
+    ``max_output_tokens`` mirror :class:`LLMConfig` 1:1 so a user can't
+    write an override that would itself fail global validation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    classify_model: str | None = None
+    default_model: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=1.5)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    autonomous_mode: bool | None = None
+
+
+# Plan 11 D4: persistence whitelist. ``Config.persisted_dict()`` (below)
+# uses this set to drive ``model_dump(include=...)`` so the on-disk
+# ``config.json`` only carries fields the user is allowed to set.
+# ``vault_path`` is deliberately excluded — it's a chicken-and-egg field
+# (we need it to find ``config.json`` itself) and is sourced from the
+# environment / setup wizard, not the persisted config blob.
+_PERSISTED_FIELDS: frozenset[str] = frozenset(
+    {
+        "domains",
+        "active_domain",
+        "autonomous_mode",
+        "web_port",
+        "log_llm_payloads",
+        "llm",
+        "budget",
+        "autonomous",
+        "handlers",
+        "domain_overrides",
+        "privacy_railed",
+    }
+)
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
     vault_path: Path = Field(default_factory=lambda: Path.home() / "Documents" / "brain")
@@ -212,6 +254,18 @@ class Config(BaseModel):
     handlers: HandlersConfig = Field(default_factory=HandlersConfig)
     web_port: int = Field(default=4317, ge=1024, le=65535)
     log_llm_payloads: bool = False
+    # Plan 11 D11: privacy-rail slug list. ``personal`` is required (the
+    # field validator enforces it) so the user can never accidentally
+    # un-rail their personal content; additional slugs can be opted in to
+    # the rail, but membership is gated against ``self.domains`` by the
+    # cross-field model validator below — you cannot rail a slug that
+    # doesn't exist as a domain.
+    privacy_railed: list[str] = Field(default_factory=lambda: [PRIVACY_RAILED_SLUG])
+    # Plan 11 D8: per-domain LLM/autonomy overrides. Keys are domain
+    # slugs; values are :class:`DomainOverride` instances. Cross-field
+    # validator below enforces that every key is also in ``self.domains``
+    # (no orphan overrides for deleted domains).
+    domain_overrides: dict[str, DomainOverride] = Field(default_factory=dict)
 
     @field_validator("domains")
     @classmethod
@@ -252,3 +306,70 @@ class Config(BaseModel):
                 f"active_domain {self.active_domain!r} is not in domains {self.domains!r}"
             )
         return self
+
+    @field_validator("privacy_railed")
+    @classmethod
+    def _check_privacy_railed(cls, v: list[str]) -> list[str]:
+        # D2 slug rules + D11 personal-required. Single-field rules only
+        # — the cross-field "must also be a domain" check is handled by
+        # the model validator below (it needs ``self.domains``).
+        for slug in v:
+            _validate_domain_slug(slug)
+        # D2: no duplicates within the rail list.
+        seen: set[str] = set()
+        for slug in v:
+            if slug in seen:
+                raise ValueError(
+                    f"privacy_railed slug {slug!r} appears more than once in privacy_railed list"
+                )
+            seen.add(slug)
+        # D11: ``personal`` is mandatory in the privacy rail. The user
+        # may extend the rail to additional slugs but may NOT remove the
+        # ``personal`` rail. Wording mirrors the ``_check_domains`` voice
+        # so the Settings UI can surface either error consistently.
+        if PRIVACY_RAILED_SLUG not in v:
+            raise ValueError(
+                f"{PRIVACY_RAILED_SLUG} is required in privacy_railed and may not be removed; "
+                "use Settings → Privacy to control which additional domains are railed."
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _check_privacy_railed_subset_of_domains(self) -> Config:
+        # D11: every railed slug must also exist as a domain — railing a
+        # slug that isn't a domain would silently do nothing on disk and
+        # mislead the user about their privacy posture.
+        missing = [slug for slug in self.privacy_railed if slug not in self.domains]
+        if missing:
+            raise ValueError(
+                f"privacy_railed entries {missing!r} are not in domains {self.domains!r}; "
+                "every railed slug must also be a configured domain."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_domain_overrides_keys_in_domains(self) -> Config:
+        # D8: orphan overrides (keys for slugs that aren't in ``domains``)
+        # are rejected — silently keeping them would let a deleted domain
+        # come back with stale overrides if it were re-added.
+        orphans = [slug for slug in self.domain_overrides if slug not in self.domains]
+        if orphans:
+            raise ValueError(
+                f"domain_overrides keys {orphans!r} are not in domains {self.domains!r}; "
+                "remove the override or add the domain first."
+            )
+        return self
+
+    def persisted_dict(self) -> dict[str, Any]:
+        """Return only the fields the user is allowed to persist (Plan 11 D4).
+
+        Excludes ``vault_path`` (sourced from the environment / setup
+        wizard, not the persisted blob) and any other field not in
+        :data:`_PERSISTED_FIELDS`. Use this anywhere ``config.json`` is
+        about to hit disk.
+        """
+        # ``model_dump(include=...)`` typing requires a regular ``set``
+        # (or ``dict``), not a ``frozenset``. The module-level constant
+        # is kept frozen so external callers can't mutate the canonical
+        # whitelist; we materialise a fresh ``set`` per call.
+        return self.model_dump(include=set(_PERSISTED_FIELDS))
