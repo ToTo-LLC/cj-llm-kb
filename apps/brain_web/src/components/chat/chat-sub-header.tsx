@@ -8,9 +8,11 @@ import {
   Upload,
 } from "lucide-react";
 
+import { exportThread } from "@/lib/api/tools";
 import { useAppStore } from "@/lib/state/app-store";
 import { useChatStore } from "@/lib/state/chat-store";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
+import { useSystemStore } from "@/lib/state/system-store";
 
 /**
  * ChatSubHeader (Plan 07 Task 15).
@@ -23,7 +25,8 @@ import { useDialogsStore } from "@/lib/state/dialogs-store";
  * first message".
  *
  * Task 20 wired the Fork button into the ForkDialog via dialogs-store.
- * Export remains a Task 25 follow-up (no tool yet).
+ * Issue #17 wired Export to ``brain_export_thread`` — fetches the
+ * thread's markdown from the vault and triggers a browser download.
  */
 
 export interface ChatSubHeaderThread {
@@ -47,14 +50,53 @@ export function ChatSubHeader({
   const openDialog = useDialogsStore((s) => s.open);
   const activeThreadId = useAppStore((s) => s.activeThreadId);
   const transcriptLength = useChatStore((s) => s.transcript.length);
+  const pushToast = useSystemStore((s) => s.pushToast);
 
-  const handleExport = React.useCallback(() => {
-    // TODO(Task 25): wire thread export once a ``brain_export_thread`` tool
-    // lands. Stubbed to a log for now so the affordance is visible in
-    // devtools during manual QA.
-    // eslint-disable-next-line no-console
-    console.log("TODO Task 25 — export thread");
-  }, []);
+  const handleExport = React.useCallback(async () => {
+    if (!activeThreadId) {
+      // No persisted thread yet (new chat that hasn't sent a turn) —
+      // nothing to export. The button is disabled in this state below.
+      return;
+    }
+    try {
+      const res = await exportThread({ thread_id: activeThreadId });
+      const data = res.data;
+      if (!data || typeof data.markdown !== "string") {
+        throw new Error("export returned no markdown");
+      }
+      // Trigger a browser download of the returned markdown. Using a
+      // Blob + object URL lets us specify a filename via the anchor
+      // ``download`` attribute, which the data: URL approach doesn't
+      // honor consistently across browsers. Object URLs are revoked
+      // after the click so we don't leak the blob in memory.
+      const blob = new Blob([data.markdown], {
+        type: "text/markdown;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = data.filename ?? `${activeThreadId}.md`;
+        anchor.rel = "noopener";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      pushToast({
+        lead: "Exported.",
+        msg: `${data.filename} downloaded (${data.byte_length} bytes).`,
+        variant: "default",
+      });
+    } catch (err) {
+      pushToast({
+        lead: "Export failed.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    }
+  }, [activeThreadId, pushToast]);
 
   const handleFork = React.useCallback(() => {
     if (!activeThreadId) return;
@@ -95,9 +137,14 @@ export function ChatSubHeader({
       <button
         type="button"
         onClick={handleExport}
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        aria-label="Export"
-        title="Export"
+        disabled={!activeThreadId}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+        aria-label="Export thread"
+        title={
+          activeThreadId
+            ? "Export thread as markdown"
+            : "Send a message before exporting"
+        }
       >
         <Upload className="h-4 w-4" aria-hidden="true" />
       </button>

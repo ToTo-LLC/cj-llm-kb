@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_lists_thirty_five_tools_after_issue_18(client: TestClient) -> None:
-    """After issue #18 the registry has all 35 tools auto-registered.
+def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
+    """After issue #17 the registry has all 36 tools auto-registered.
 
     Plan 05 baseline: 18. Plan 07 Task 4 added 4
     (brain_recent_ingests, brain_create_domain, brain_rename_domain,
@@ -27,11 +27,13 @@ def test_lists_thirty_five_tools_after_issue_18(client: TestClient) -> None:
     brain_ping_llm, brain_backup_create, brain_backup_list,
     brain_backup_restore, brain_delete_domain) → 34. Issue #18 added
     ``brain_list_threads`` for the left-nav recent-chats panel → 35.
+    Issue #17 added ``brain_export_thread`` for the chat-sub-header
+    export action → 36.
     """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 35
+    assert len(body["tools"]) == 36
     # Spot-check a few names across all groups.
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
@@ -59,6 +61,8 @@ def test_lists_thirty_five_tools_after_issue_18(client: TestClient) -> None:
     assert "brain_delete_domain" in names
     # Issue #18 — left-nav recent-chats data source.
     assert "brain_list_threads" in names
+    # Issue #17 — chat-sub-header export-thread action.
+    assert "brain_export_thread" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:

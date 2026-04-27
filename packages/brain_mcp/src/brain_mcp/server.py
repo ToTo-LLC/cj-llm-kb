@@ -38,6 +38,7 @@ from brain_mcp.tools import config_set as _config_set_tool
 from brain_mcp.tools import cost_report as _cost_report_tool
 from brain_mcp.tools import create_domain as _create_domain_tool
 from brain_mcp.tools import delete_domain as _delete_domain_tool
+from brain_mcp.tools import export_thread as _export_thread_tool
 from brain_mcp.tools import fork_thread as _fork_thread_tool
 from brain_mcp.tools import get_brain_md as _get_brain_md_tool
 from brain_mcp.tools import get_index as _get_index_tool
@@ -105,6 +106,8 @@ _TOOL_MODULES: list[ToolModule] = [
     _delete_domain_tool,
     # Issue #18 — left-nav recent-chats panel data source.
     _list_threads_tool,
+    # Issue #17 — chat-sub-header export-thread action.
+    _export_thread_tool,
 ]
 
 

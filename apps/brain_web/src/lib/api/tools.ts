@@ -121,6 +121,30 @@ export const listThreads = (
 ): Promise<ToolResponse<{ threads: ChatThreadEntry[] }>> =>
   callTool<{ threads: ChatThreadEntry[] }>("brain_list_threads", args);
 
+/** Issue #17: read a thread file from the vault and return its markdown
+ *  content. The frontend turns ``data.markdown`` into a downloadable
+ *  ``.md`` file via a data URL. */
+export const exportThread = (
+  args: { thread_id: string },
+): Promise<
+  ToolResponse<{
+    thread_id: string;
+    path: string;
+    domain: string;
+    markdown: string;
+    filename: string;
+    byte_length: number;
+  }>
+> =>
+  callTool<{
+    thread_id: string;
+    path: string;
+    domain: string;
+    markdown: string;
+    filename: string;
+    byte_length: number;
+  }>("brain_export_thread", args);
+
 /** Fetch the top-level ``BRAIN.md`` meta-index. */
 export const getBrainMd = (): Promise<
   ToolResponse<{ path: string; content: string }>
@@ -710,6 +734,8 @@ export const ALL_TOOL_NAMES = [
   "brain_delete_domain",
   // Issue #18 — left-nav recent-chats data source.
   "brain_list_threads",
+  // Issue #17 — chat-sub-header export-thread action.
+  "brain_export_thread",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
