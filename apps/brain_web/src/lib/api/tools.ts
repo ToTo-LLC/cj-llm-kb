@@ -407,6 +407,24 @@ export const setActiveDomain = (
 ): Promise<ToolResponse<{ key: string; value: unknown }>> =>
   configSet({ key: "active_domain", value: slug });
 
+/**
+ * Persist the cross-domain confirmation acknowledgment flag (Plan 12 D8 /
+ * Task 9). ``true`` suppresses the modal in future sessions; ``false``
+ * re-enables it.
+ *
+ * Self-documenting wrapper around ``configSet({key:
+ * "cross_domain_warning_acknowledged", value})`` — mirrors the
+ * ``setActiveDomain`` shape so cross-domain modal call sites and the
+ * Settings toggle share one helper. The Config field is whitelisted in
+ * ``_SETTABLE_KEYS`` (Plan 12 Task 1 added the schema field; the key
+ * is settable because it's a top-level Config bool — same path as
+ * ``classify_model``, ``default_model``, etc.).
+ */
+export const setCrossDomainWarningAcknowledged = (
+  value: boolean,
+): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({ key: "cross_domain_warning_acknowledged", value });
+
 // ---------- Plan 07 Task 4 additions (4) ----------
 
 /** Recently ingested sources (feeds the inbox). */

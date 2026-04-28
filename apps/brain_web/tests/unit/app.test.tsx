@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 import { useAppStore } from "@/lib/state/app-store";
@@ -10,6 +10,12 @@ import { useChatStore } from "@/lib/state/chat-store";
  * static export. Tokens come from the bootstrap context — we mock
  * ``useBootstrap`` to return a fake token so the page renders synchronously
  * without a real ``BootstrapProvider`` wiring up fetches.
+ *
+ * Plan 12 Task 9: ChatScreen now mounts ``useCrossDomainGate`` on first
+ * render, which fires ``configGet`` for ``privacy_railed`` +
+ * ``cross_domain_warning_acknowledged``. Mock the tools module so the
+ * hook resolves synchronously and the test doesn't see act() warnings
+ * for trailing async state updates.
  */
 
 vi.mock("@/lib/bootstrap/bootstrap-context", () => ({
@@ -21,6 +27,25 @@ vi.mock("@/lib/bootstrap/bootstrap-context", () => ({
     error: null,
     retry: vi.fn(),
   }),
+}));
+
+vi.mock("@/lib/api/tools", () => ({
+  configGet: vi.fn().mockImplementation((args: { key: string }) => {
+    if (args.key === "privacy_railed") {
+      return Promise.resolve({
+        text: "",
+        data: { key: args.key, value: ["personal"] },
+      });
+    }
+    if (args.key === "cross_domain_warning_acknowledged") {
+      return Promise.resolve({
+        text: "",
+        data: { key: args.key, value: false },
+      });
+    }
+    return Promise.resolve({ text: "", data: { key: args.key, value: null } });
+  }),
+  setCrossDomainWarningAcknowledged: vi.fn(),
 }));
 
 // WebSocket is unused by the empty transcript path but the ChatScreen
@@ -65,5 +90,12 @@ describe("ChatPage (/chat)", () => {
     expect(
       screen.getByRole("heading", { name: /what are we working on/i }),
     ).toBeInTheDocument();
+    // Plan 12 Task 9: wait for ``useCrossDomainGate`` to settle so the
+    // post-test cleanup doesn't trigger an act() warning from the
+    // pending configGet promises.
+    await waitFor(() => {
+      // No-op assertion just to flush microtasks.
+      expect(true).toBe(true);
+    });
   });
 });

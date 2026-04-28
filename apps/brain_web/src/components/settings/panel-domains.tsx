@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Edit2, Lock, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
@@ -23,6 +24,7 @@ import {
   configGet,
   listDomains,
   setActiveDomain,
+  setCrossDomainWarningAcknowledged,
   setPrivacyRailed,
 } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
@@ -108,6 +110,121 @@ async function readPrivacyRailed(): Promise<string[]> {
   } catch {
     return ["personal"];
   }
+}
+
+async function readCrossDomainAcknowledged(): Promise<boolean> {
+  try {
+    const r = await configGet({ key: "cross_domain_warning_acknowledged" });
+    const v = r.data?.value;
+    return typeof v === "boolean" ? v : false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * CrossDomainWarningToggle (Plan 12 D8 / Task 9).
+ *
+ * Surfaces ``Config.cross_domain_warning_acknowledged`` as a toggle
+ * inside Settings → Domains. The UI sense is INVERTED relative to the
+ * underlying field — toggle ON means "show the warning" (modal active,
+ * ``cross_domain_warning_acknowledged === false``); toggle OFF means
+ * the user has acknowledged the warning and the modal is suppressed.
+ *
+ * Microcopy is locked by ``docs/design/cross-domain-modal/microcopy.md``
+ * (Task 7 § "Settings toggle text"). The helper text below the switch
+ * swaps between two strings depending on the current toggle state so
+ * the user always sees the right framing for what's about to happen.
+ *
+ * Pattern matches ``ActiveDomainSelector``: optimistic local-state
+ * update for snappy UI, API helper call (Plan 12 Task 9
+ * ``setCrossDomainWarningAcknowledged``), revert on failure with a
+ * danger-variant toast surfacing the structured error.
+ */
+function CrossDomainWarningToggle(): React.ReactElement {
+  const pushToast = useSystemStore((s) => s.pushToast);
+  // ``acknowledged`` mirrors ``Config.cross_domain_warning_acknowledged``;
+  // ``showWarning`` is its inverse — what the toggle visually represents.
+  const [acknowledged, setAcknowledged] = React.useState<boolean>(false);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const v = await readCrossDomainAcknowledged();
+      if (!cancelled) {
+        setAcknowledged(v);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const showWarning = !acknowledged;
+
+  const onCheckedChange = async (next: boolean) => {
+    // ``next`` is the new toggle state (UI sense). Translate to the
+    // field sense: toggle ON → show warning → acknowledged=false;
+    // toggle OFF → suppress warning → acknowledged=true.
+    const previousAck = acknowledged;
+    const newAck = !next;
+    if (newAck === previousAck) return;
+
+    setAcknowledged(newAck);
+    try {
+      await setCrossDomainWarningAcknowledged(newAck);
+      pushToast({
+        lead: next ? "Cross-domain warning on." : "Cross-domain warning off.",
+        msg: next
+          ? "brain will confirm before mixing private domains."
+          : "Mixed-scope chats will start without a prompt.",
+        variant: "success",
+      });
+    } catch (err) {
+      setAcknowledged(previousAck);
+      pushToast({
+        lead: "Couldn't update cross-domain warning.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    }
+  };
+
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-md border border-[var(--hairline)] bg-[var(--surface-1)] p-3"
+      data-testid="cross-domain-warning-toggle-container"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col">
+          <span className="text-xs font-semibold text-[var(--text)]">
+            Cross-domain warning
+          </span>
+          <label
+            htmlFor="cross-domain-warning-toggle"
+            className="text-[11px] text-[var(--text-muted)]"
+          >
+            Show cross-domain warning
+          </label>
+        </div>
+        <Switch
+          id="cross-domain-warning-toggle"
+          data-testid="cross-domain-warning-toggle"
+          checked={showWarning}
+          disabled={loading}
+          onCheckedChange={(v) => void onCheckedChange(Boolean(v))}
+          aria-label="Show cross-domain warning"
+        />
+      </div>
+      <p className="text-[11px] text-[var(--text-muted)]">
+        {showWarning
+          ? "Before starting a chat that mixes a private domain (like personal) with another domain, brain will ask you to confirm."
+          : "The confirmation is off. Mixed-scope chats including private domains will start without a prompt. Turn this back on if you want the check back."}
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -396,6 +513,13 @@ export function PanelDomains(): React.ReactElement {
             per-domain rows so users never need to hand-edit
             ``config.json`` to change the persisted scope default. */}
         <ActiveDomainSelector />
+
+        {/* Plan 12 Task 9 (D8): cross-domain confirmation toggle —
+            below the active-domain dropdown, above the per-domain
+            rows. UI sense is INVERTED relative to the underlying
+            ``Config.cross_domain_warning_acknowledged`` field; see
+            the component docstring for the mapping. */}
+        <CrossDomainWarningToggle />
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">

@@ -48,6 +48,10 @@ def test_settable_keys_match_plan_07_task_4() -> None:
     Plan 12 D2: adds ``active_domain`` (policy inversion — Settings UI
     is the new persistence path; Plan 10's cross-field validator
     enforces "must be in ``Config.domains``").
+    Plan 12 D8 / Task 9: adds ``cross_domain_warning_acknowledged``
+    (per-vault acknowledgment for the cross-domain confirmation modal;
+    bound by both the modal's "Don't show this again" checkbox and the
+    Settings → Domains "Show cross-domain warning" toggle).
     """
     assert (
         frozenset(
@@ -70,6 +74,7 @@ def test_settable_keys_match_plan_07_task_4() -> None:
                 "handlers.tweet.timeout_seconds",
                 "handlers.pdf.min_chars",
                 "privacy_railed",
+                "cross_domain_warning_acknowledged",
             }
         )
         == _SETTABLE_KEYS

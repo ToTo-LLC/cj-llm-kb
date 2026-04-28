@@ -111,6 +111,17 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         # list (add/remove a slug) and posts it here; the Config
         # validators enforce ``personal``-required + subset-of-domains.
         "privacy_railed",
+        # Plan 12 D8 / Task 9: per-vault acknowledgment for the
+        # cross-domain confirmation modal. ``true`` suppresses the
+        # modal in future cross-domain-into-railed sessions; ``false``
+        # re-enables it. Bound by the modal's "Don't show this again"
+        # checkbox AND the Settings → Domains "Show cross-domain
+        # warning" toggle (inverted UI sense). Schema field landed in
+        # Plan 12 Task 1; this entry was added in Task 9 alongside
+        # the typed helper ``setCrossDomainWarningAcknowledged`` to
+        # close the cross-task gap (Task 1 added the field but did
+        # not whitelist it for the open-set ``brain_config_set`` path).
+        "cross_domain_warning_acknowledged",
     }
 )
 
