@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
@@ -35,11 +35,26 @@ vi.mock("@/lib/hooks/use-domains", () => ({
       { slug: "work", label: "Work", accent: "var(--dom-work)", configured: true, on_disk: true },
       { slug: "personal", label: "Personal", accent: "var(--dom-personal)", configured: true, on_disk: true },
     ],
+    activeDomain: "research",
     loading: false,
     error: null,
     refresh: vi.fn(),
   }),
   invalidateDomainsCache: vi.fn(),
+}));
+
+// Plan 11 Task 8: topbar reads ``vaultPath`` from the bootstrap context
+// to key its per-vault first-mount-hydration flag. Stub a stable path
+// here so the hydration effect runs deterministically.
+vi.mock("@/lib/bootstrap/bootstrap-context", () => ({
+  useBootstrap: () => ({
+    token: "test-token",
+    isFirstRun: false,
+    vaultPath: "/test/vault",
+    loading: false,
+    error: null,
+    retry: vi.fn(),
+  }),
 }));
 
 import { Topbar } from "@/components/shell/topbar";
@@ -53,7 +68,12 @@ function resetStore() {
     theme: "dark",
     density: "comfortable",
     mode: "ask",
-    scope: ["research", "work"],
+    // Plan 11 Task 8: scope starts empty + scopeInitialized=false so
+    // the topbar's first-mount hydration effect can fire on each test
+    // mount. Tests that need a pre-hydrated scope opt in by setting
+    // ``scopeInitialized: true`` and ``scope: [...]`` explicitly.
+    scope: [],
+    scopeInitialized: false,
     view: "chat",
     railOpen: true,
     activeThreadId: null,
@@ -134,6 +154,10 @@ describe("Shell components", () => {
 
   test("scope picker opens a popover listing domains", async () => {
     const user = userEvent.setup();
+    // Pre-hydrate so the popover renders with a deterministic scope —
+    // the hydration effect would also resolve to ["research"] but
+    // forcing it here keeps the test about the popover itself.
+    useAppStore.setState({ scope: ["research"], scopeInitialized: true });
     render(<Topbar />);
     // Closed initially — no list.
     expect(screen.queryByRole("checkbox", { name: /research/i })).not.toBeInTheDocument();
@@ -142,6 +166,43 @@ describe("Shell components", () => {
     expect(await screen.findByRole("checkbox", { name: /research/i })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /work/i })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /personal/i })).toBeInTheDocument();
+  });
+
+  // ---------- Plan 11 Task 8 — first-mount scope hydration ----------
+
+  test("first-mount: hydrates scope from activeDomain when scopeInitialized=false", async () => {
+    // Fresh store: scope=[], scopeInitialized=false. The mocked
+    // useDomains returns activeDomain="research" — topbar should set
+    // scope to ["research"] and flip the flag.
+    expect(useAppStore.getState().scope).toEqual([]);
+    expect(useAppStore.getState().scopeInitialized).toBe(false);
+
+    render(<Topbar />);
+
+    await waitFor(() =>
+      expect(useAppStore.getState().scopeInitialized).toBe(true),
+    );
+    expect(useAppStore.getState().scope).toEqual(["research"]);
+    // Per-vault localStorage key was written.
+    expect(localStorage.getItem("brain.scopeInitialized./test/vault")).toBe(
+      "true",
+    );
+  });
+
+  test("subsequent mount: scopeInitialized=true honors user-set scope", async () => {
+    // Simulate "user already hydrated, then edited to two domains".
+    useAppStore.setState({
+      scope: ["research", "work"],
+      scopeInitialized: true,
+    });
+    localStorage.setItem("brain.scopeInitialized./test/vault", "true");
+
+    render(<Topbar />);
+
+    // Hydration effect must NOT fire — scope stays as the user left it.
+    // Use a small wait to make sure no async setState clobbers it.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(useAppStore.getState().scope).toEqual(["research", "work"]);
   });
 });
 

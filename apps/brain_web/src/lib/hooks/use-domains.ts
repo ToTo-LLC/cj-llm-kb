@@ -64,10 +64,24 @@ interface RawListDomainsEntry {
   on_disk: boolean;
 }
 
-function entriesFromResponse(
-  data: { domains?: string[]; entries?: RawListDomainsEntry[] } | null | undefined,
-): DomainEntry[] {
-  if (!data) return [];
+interface DomainsPayload {
+  entries: DomainEntry[];
+  /** ``Config.active_domain`` from the backend (Plan 11 Task 6). Empty
+   *  string when the backend pre-dates Task 6 — callers must guard. */
+  activeDomain: string;
+}
+
+function payloadFromResponse(
+  data:
+    | {
+        domains?: string[];
+        entries?: RawListDomainsEntry[];
+        active_domain?: string;
+      }
+    | null
+    | undefined,
+): DomainsPayload {
+  if (!data) return { entries: [], activeDomain: "" };
   // Prefer the new ``entries`` array (Plan 10 Task 5) so we get the
   // configured/on_disk flags. Fall back to the legacy ``domains``
   // string-list if the backend is older — assumes both flags True.
@@ -81,7 +95,7 @@ function entriesFromResponse(
         }));
 
   let userIdx = 0;
-  return raw.map((r) => {
+  const entries = raw.map((r) => {
     const isBuiltin = BUILTIN_SLUGS.has(r.slug);
     const accent = accentFor(r.slug, isBuiltin ? 0 : userIdx);
     if (!isBuiltin) userIdx += 1;
@@ -93,14 +107,15 @@ function entriesFromResponse(
       on_disk: r.on_disk,
     };
   });
+  return { entries, activeDomain: data.active_domain ?? "" };
 }
 
-let cachedPromise: Promise<DomainEntry[]> | null = null;
+let cachedPromise: Promise<DomainsPayload> | null = null;
 
-function fetchDomains(): Promise<DomainEntry[]> {
+function fetchDomains(): Promise<DomainsPayload> {
   if (cachedPromise) return cachedPromise;
   cachedPromise = listDomains()
-    .then((r) => entriesFromResponse(r.data ?? null))
+    .then((r) => payloadFromResponse(r.data ?? null))
     .catch((err: unknown) => {
       // Drop the failed promise so the next subscriber retries.
       cachedPromise = null;
@@ -117,12 +132,24 @@ export function invalidateDomainsCache(): void {
 }
 
 /** Reset the cache to the given entries. Used by tests. */
-export function _setDomainsCacheForTesting(entries: DomainEntry[] | null): void {
-  cachedPromise = entries === null ? null : Promise.resolve(entries);
+export function _setDomainsCacheForTesting(
+  entries: DomainEntry[] | null,
+  activeDomain = "",
+): void {
+  cachedPromise =
+    entries === null ? null : Promise.resolve({ entries, activeDomain });
 }
 
 export interface UseDomainsResult {
   domains: DomainEntry[];
+  /**
+   * ``Config.active_domain`` from the most recent ``brain_list_domains``
+   * response (Plan 11 Task 6). Empty string until the first fetch
+   * resolves, or when the backend pre-dates Task 6. The topbar uses this
+   * to hydrate ``app-store.scope`` once per vault on first mount
+   * (Plan 11 Task 8 / D8).
+   */
+  activeDomain: string;
   loading: boolean;
   error: Error | null;
   /** Force-refetch (also invalidates the module cache so peers re-read). */
@@ -131,6 +158,7 @@ export interface UseDomainsResult {
 
 export function useDomains(): UseDomainsResult {
   const [domains, setDomains] = React.useState<DomainEntry[]>([]);
+  const [activeDomain, setActiveDomain] = React.useState<string>("");
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<Error | null>(null);
   // Bumping ``tick`` forces a re-fetch by triggering the effect
@@ -142,9 +170,10 @@ export function useDomains(): UseDomainsResult {
     setLoading(true);
     setError(null);
     fetchDomains()
-      .then((entries) => {
+      .then((payload) => {
         if (cancelled) return;
-        setDomains(entries);
+        setDomains(payload.entries);
+        setActiveDomain(payload.activeDomain);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -162,5 +191,5 @@ export function useDomains(): UseDomainsResult {
     setTick((t) => t + 1);
   }, []);
 
-  return { domains, loading, error, refresh };
+  return { domains, activeDomain, loading, error, refresh };
 }

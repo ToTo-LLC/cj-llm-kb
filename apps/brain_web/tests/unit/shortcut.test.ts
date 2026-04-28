@@ -37,6 +37,20 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+// Plan 11 Task 8 — Topbar (rendered inside AppShell) now consumes
+// ``useBootstrap()`` for the per-vault scope-init key. Stub it so the
+// AppShell tree mounts without a real BootstrapProvider.
+vi.mock("@/lib/bootstrap/bootstrap-context", () => ({
+  useBootstrap: () => ({
+    token: "test-token",
+    isFirstRun: false,
+    vaultPath: "/test/vault",
+    loading: false,
+    error: null,
+    retry: vi.fn(),
+  }),
+}));
+
 import { AppShell } from "@/components/shell/app-shell";
 import { useSystemStore } from "@/lib/state/system-store";
 

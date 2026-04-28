@@ -5,8 +5,13 @@ import { usePathname } from "next/navigation";
 import * as React from "react";
 import { Sun, Moon, PanelRight, Settings as SettingsIcon } from "lucide-react";
 
-import { useAppStore, type ChatMode } from "@/lib/state/app-store";
+import {
+  useAppStore,
+  readScopeInitialized,
+  type ChatMode,
+} from "@/lib/state/app-store";
 import { useDomains } from "@/lib/hooks/use-domains";
+import { useBootstrap } from "@/lib/bootstrap/bootstrap-context";
 import { Button } from "@/components/ui/button";
 import {
   ToggleGroup,
@@ -42,27 +47,118 @@ export function Topbar() {
   const scope = useAppStore((s) => s.scope);
   const setScope = useAppStore((s) => s.setScope);
   const toggleRail = useAppStore((s) => s.toggleRail);
+  const scopeInitialized = useAppStore((s) => s.scopeInitialized);
+  const markScopeInitialized = useAppStore((s) => s.markScopeInitialized);
+  const loadScopeInitializedFor = useAppStore(
+    (s) => s.loadScopeInitializedFor,
+  );
 
   const [scopeOpen, setScopeOpen] = React.useState(false);
 
   // Plan 10 Task 7: live domain list (Config.domains ∪ on-disk).
   // Renders as `[]` while the first fetch is in-flight; the topbar's
   // dot row stays empty until the response lands rather than
-  // briefly painting the v0.1 stub triple.
-  const { domains: liveDomains } = useDomains();
+  // briefly painting the v0.1 stub triple. Plan 11 Task 8 added
+  // ``activeDomain`` here for the first-mount scope hydration below.
+  const { domains: liveDomains, activeDomain } = useDomains();
+
+  // Plan 11 Task 8 — bootstrap context exposes the resolved vault path,
+  // which keys the per-vault ``brain.scopeInitialized.<vault>``
+  // localStorage flag. Topbar may render before the bootstrap fetch
+  // finishes (vaultPath === null) — guard the hydration effect on a
+  // truthy path so we never persist a flag against the empty key.
+  const { vaultPath } = useBootstrap();
+
+  // Plan 11 Task 8 — rehydrate the in-memory ``scopeInitialized``
+  // mirror from the per-vault localStorage flag once the vault path is
+  // known. Lives in its own effect so the hydration effect below can
+  // bail purely on the in-memory mirror without touching localStorage
+  // every render. Re-runs when ``vaultPath`` changes (different vault
+  // → different key → different stored value).
+  React.useEffect(() => {
+    if (!vaultPath) return;
+    loadScopeInitializedFor(vaultPath);
+  }, [vaultPath, loadScopeInitializedFor]);
+
+  // Plan 11 Task 8 / D8 — first-mount scope hydration.
+  //
+  // On a fresh localStorage (``scopeInitialized=false``) AND a resolved
+  // domain list, hydrate ``scope = [activeDomain]`` then flip the flag.
+  // Subsequent mounts skip this branch and read scope from app-store as
+  // today. Effect is idempotent: once ``markScopeInitialized()`` flips
+  // the flag, the early-return gate keeps it from re-firing even though
+  // ``setScope`` is in the dep list (which would otherwise cycle since
+  // a new scope value invalidates the closure).
+  //
+  // Fallback path: if ``activeDomain`` isn't in the live domain list
+  // (rare race — user changed ``active_domain`` in another window then
+  // deleted that domain before this mount finished hydrating), fall
+  // back to the first non-``personal`` slug, or the first slug overall
+  // if every slug is privacy-railed (theoretically impossible per
+  // Config validators, but the fallback keeps the UI from rendering
+  // an empty scope on the edge case).
+  React.useEffect(() => {
+    if (scopeInitialized) return;
+    if (!vaultPath) return;
+    if (liveDomains.length === 0) return;
+    if (!activeDomain) return;
+    // Cross-effect race guard: the sibling ``loadScopeInitializedFor``
+    // effect runs in the same commit cycle as this one. If the
+    // durable per-vault flag is set, that effect WILL flip the mirror
+    // — but its store ``set()`` hasn't propagated to the closure
+    // ``scopeInitialized`` here yet. Read the durable flag directly
+    // to short-circuit before clobbering the user's persisted scope
+    // on a vault that's already been hydrated. (Matches the ``D8``
+    // guarantee: each vault hydrates exactly once.)
+    if (readScopeInitialized(vaultPath)) return;
+
+    const inLive = liveDomains.some((d) => d.slug === activeDomain);
+    const target = inLive
+      ? activeDomain
+      : (liveDomains.find((d) => d.slug !== "personal")?.slug ??
+          liveDomains[0]!.slug);
+
+    if (!inLive) {
+      // eslint-disable-next-line no-console -- diagnostic for the rare
+      // race where active_domain isn't in the live list. Surfacing this
+      // helps the user (or the devtools console) see why scope didn't
+      // match their settings choice.
+      console.warn(
+        `[brain] active_domain "${activeDomain}" not in live domain list; falling back to "${target}"`,
+      );
+    }
+
+    setScope([target]);
+    markScopeInitialized(vaultPath);
+  }, [
+    scopeInitialized,
+    liveDomains,
+    activeDomain,
+    vaultPath,
+    setScope,
+    markScopeInitialized,
+  ]);
 
   // Plan 10 Task 7 prune: drop persisted scope slugs that aren't in
   // the live list anymore. Without this, deleting a domain in
   // settings would leave a dangling chip in the scope picker that
   // toggles a slug the rest of the app no longer routes to.
+  //
+  // Plan 11 Task 8 caveat: skip the prune until first-mount hydration
+  // has run. Otherwise the prune sees ``scope === []`` and is a no-op,
+  // but worse, on a vault-switch the prune could fire before hydration
+  // and leave the scope empty even though the new vault has a valid
+  // ``active_domain``. The hydration effect above is the single source
+  // of truth for the post-hydration scope baseline.
   React.useEffect(() => {
+    if (!scopeInitialized) return;
     if (liveDomains.length === 0) return;
     const liveSet = new Set(liveDomains.map((d) => d.slug));
     const pruned = scope.filter((s) => liveSet.has(s));
     if (pruned.length !== scope.length) {
       setScope(pruned);
     }
-  }, [liveDomains, scope, setScope]);
+  }, [scopeInitialized, liveDomains, scope, setScope]);
 
   const scopeLabel =
     scope.length === 0

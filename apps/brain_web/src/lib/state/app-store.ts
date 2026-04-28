@@ -28,6 +28,22 @@ export interface AppState {
   railOpen: boolean;
   activeThreadId: string | null; // URL-derived; do NOT persist.
   streaming: boolean; // set by chat stream lifecycle (Task 15). Not persisted.
+  /**
+   * Plan 11 Task 8 / D8 — has the topbar already hydrated ``scope`` from
+   * ``Config.active_domain`` for the current vault?
+   *
+   * In-memory mirror of the per-vault ``brain.scopeInitialized.<vault>``
+   * localStorage flag. Kept here so React effects can subscribe and bail
+   * without poking ``localStorage`` on every render. The actual durable
+   * record is the localStorage key — this slot is rehydrated from it via
+   * ``loadScopeInitializedFor()`` once ``vaultPath`` is known.
+   *
+   * Deliberately NOT in the persisted ``brain-app`` payload: the flag
+   * MUST scope to the active vault (D8: switching vaults re-runs first-
+   * mount hydration), which is impossible to express through the single
+   * persist key without per-vault forks of the whole store.
+   */
+  scopeInitialized: boolean;
 
   setTheme: (t: Theme) => void;
   setDensity: (d: Density) => void;
@@ -38,6 +54,46 @@ export interface AppState {
   setRailOpen: (open: boolean) => void;
   setActiveThreadId: (id: string | null) => void;
   setStreaming: (flag: boolean) => void;
+  /** Mark first-mount scope hydration done for ``vaultPath``. Writes the
+   *  per-vault localStorage flag and flips the in-memory mirror. */
+  markScopeInitialized: (vaultPath: string) => void;
+  /** Read the per-vault flag from localStorage and mirror it into the
+   *  store. Idempotent; safe to call from a useEffect on every mount. */
+  loadScopeInitializedFor: (vaultPath: string) => void;
+}
+
+// ---------- localStorage helpers (per-vault scopeInitialized) ----------
+
+/**
+ * localStorage key shape for the first-mount-hydration flag. Keying by
+ * vault path means two vaults at e.g. ``~/Documents/brain`` vs
+ * ``~/Documents/brain-work`` each get their own first-load hydration —
+ * no cross-talk, no explicit reset needed when the user changes vault.
+ */
+function scopeInitKey(vaultPath: string): string {
+  return `brain.scopeInitialized.${vaultPath}`;
+}
+
+/** SSR-safe read of the per-vault flag. Returns ``false`` on the
+ *  server, on a fresh localStorage, or on parse failure. */
+export function readScopeInitialized(vaultPath: string): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(scopeInitKey(vaultPath)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** SSR-safe write of the per-vault flag. */
+export function writeScopeInitialized(vaultPath: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(scopeInitKey(vaultPath), "true");
+  } catch {
+    // Quota / private-mode failures are non-fatal — the in-memory
+    // mirror still flips, so the current session won't re-hydrate.
+  }
 }
 
 // ---------- Helpers ----------
@@ -62,11 +118,17 @@ export const useAppStore = create<AppState>()(
       theme: "dark",
       density: "comfortable",
       mode: "ask",
-      scope: ["research", "work"],
+      // Plan 11 Task 8: default to empty until first-mount hydration
+      // resolves. Topbar fills this from ``activeDomain`` once the
+      // ``brain_list_domains`` response lands. Pre-Task-8 callers
+      // shouldn't observe the empty state — it's a single tick before
+      // hydration runs.
+      scope: [],
       view: "chat",
       railOpen: true,
       activeThreadId: null,
       streaming: false,
+      scopeInitialized: false,
 
       setTheme: (theme) => {
         if (typeof document !== "undefined") {
@@ -99,6 +161,21 @@ export const useAppStore = create<AppState>()(
       setRailOpen: (railOpen) => set({ railOpen }),
       setActiveThreadId: (activeThreadId) => set({ activeThreadId }),
       setStreaming: (streaming) => set({ streaming }),
+      markScopeInitialized: (vaultPath) => {
+        writeScopeInitialized(vaultPath);
+        set({ scopeInitialized: true });
+      },
+      loadScopeInitializedFor: (vaultPath) => {
+        // Idempotent: only flip the in-memory mirror when the
+        // localStorage flag is set AND the slot is currently false.
+        // The reverse direction (mirror=true, storage=false) means
+        // the user manually cleared localStorage — leave the mirror
+        // alone for the rest of this session; a reload re-reads.
+        const stored = readScopeInitialized(vaultPath);
+        if (stored && !get().scopeInitialized) {
+          set({ scopeInitialized: true });
+        }
+      },
     }),
     {
       name: "brain-app",

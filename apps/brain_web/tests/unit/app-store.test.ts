@@ -16,11 +16,12 @@ function resetStore() {
     theme: "dark",
     density: "comfortable",
     mode: "ask",
-    scope: ["research", "work"],
+    scope: [],
     view: "chat",
     railOpen: true,
     activeThreadId: null,
     streaming: false,
+    scopeInitialized: false,
   });
   delete document.documentElement.dataset.theme;
   delete document.documentElement.dataset.density;
@@ -37,7 +38,10 @@ describe("useAppStore", () => {
     expect(s.theme).toBe("dark");
     expect(s.density).toBe("comfortable");
     expect(s.mode).toBe("ask");
-    expect(s.scope).toEqual(["research", "work"]);
+    // Plan 11 Task 8: scope starts empty. Topbar hydrates from
+    // ``Config.active_domain`` on first mount (per-vault).
+    expect(s.scope).toEqual([]);
+    expect(s.scopeInitialized).toBe(false);
     expect(s.view).toBe("chat");
     expect(s.railOpen).toBe(true);
     expect(s.activeThreadId).toBeNull();

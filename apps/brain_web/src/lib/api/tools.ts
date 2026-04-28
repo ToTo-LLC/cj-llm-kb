@@ -65,9 +65,27 @@ export interface RecentIngestEntry {
 
 // ---------- read tools (6) ----------
 
-/** Return every domain slug the caller is allowed to read. */
-export const listDomains = (): Promise<ToolResponse<{ domains: string[] }>> =>
-  callTool<{ domains: string[] }>("brain_list_domains");
+/**
+ * Return every domain slug the caller is allowed to read.
+ *
+ * Plan 10 Task 5 added the per-slug ``entries`` array (configured / on_disk
+ * flags). Plan 11 Task 6 added ``active_domain`` so the frontend can
+ * hydrate the topbar scope picker on first mount (Task 8). Older
+ * back-ends that pre-date Task 6 simply omit ``active_domain`` — callers
+ * must guard for ``undefined``.
+ */
+export const listDomains = (): Promise<
+  ToolResponse<{
+    domains: string[];
+    entries?: Array<{ slug: string; configured: boolean; on_disk: boolean }>;
+    active_domain?: string;
+  }>
+> =>
+  callTool<{
+    domains: string[];
+    entries?: Array<{ slug: string; configured: boolean; on_disk: boolean }>;
+    active_domain?: string;
+  }>("brain_list_domains");
 
 /** Read ``<domain>/index.md``. ``domain`` defaults to the first allowed domain. */
 export const getIndex = (
