@@ -184,7 +184,7 @@ The vault lives at `~/Documents/brain/` (Mac) or `%USERPROFILE%\Documents\brain\
 ### Domain separation — Hybrid scoped model
 
 - Top-level folders provide soft separation.
-- Every query/chat thread has an **active scope**: one domain, or `cross-domain` (requires a one-time confirmation warning about personal content).
+- Every query/chat thread has an **active scope**: one domain, or `cross-domain` (requires a one-time confirmation warning when the scope crosses into a privacy-railed domain). The modal fires only when the scope contains ≥2 domains AND ≥1 of them is in `Config.privacy_railed`; single-domain railed access is already gated by §7's explicit-inclusion rule. Acknowledgment persists in `Config.cross_domain_warning_acknowledged: bool` (default `False`); a "Show cross-domain warning" toggle in Settings → Domains lets users re-enable the prompt.
 - Cross-scope is always opt-in; default queries stay in one domain. Any domain in `Config.privacy_railed` (defaulting to `["personal"]`) is excluded from default and wildcard queries — explicit inclusion in the `domains` argument is required for read access. The list is user-editable via Settings → Domains; `personal` is structurally required and cannot be removed.
 - Scope is fixed per thread; changing scope requires a new thread (prevents mid-conversation leakage).
 

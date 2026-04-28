@@ -33,10 +33,20 @@ test.describe("plan 10 — domains lifecycle", () => {
     testInfo.annotations.push({ type: "vault", description: seedPath });
 
     await page.goto("/settings/domains/");
-    // Panel list renders with the v0.1 default triple.
-    await expect(page.getByText("personal", { exact: true })).toBeVisible();
-    await expect(page.getByText("research", { exact: true })).toBeVisible();
-    await expect(page.getByText("work", { exact: true })).toBeVisible();
+    // Panel list renders with the v0.1 default triple. Plan 12 Task 8
+    // added an "Active domain" dropdown above the per-domain rows
+    // whose <option> elements also carry the slug text — match by
+    // role=button (the rename trigger inside each panel row) so the
+    // assertion targets the row chrome, not the dropdown options.
+    await expect(
+      page.getByRole("button", { name: /Rename personal/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Rename research/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Rename work/i }),
+    ).toBeVisible();
     // Personal has the privacy-railed badge + no delete button.
     await expect(page.getByTestId("personal-privacy-badge")).toBeVisible();
     await expect(
