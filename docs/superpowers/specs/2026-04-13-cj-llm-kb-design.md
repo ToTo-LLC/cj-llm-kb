@@ -25,7 +25,7 @@ Both target Mac 13+ and Windows 11 as first-class platforms.
 - Support ingestion on day one of: plain text / Markdown, web URLs, PDFs, pasted emails, meeting transcripts (`.txt` / `.vtt` / `.srt` / `.docx`), and single tweets via URL.
 - Provide conversational access in three modes: stateless Q&A (Ask), exploratory thinking partner (Brainstorm), and document collaboration (Draft).
 - Keep humans in the loop: every LLM-originated vault write is staged as a typed patch set and requires approval by default; an optional autonomous mode skips approval but never validation.
-- Enforce domain-level privacy: `personal` content never appears in default or cross-domain queries without an explicit opt-in.
+- Enforce domain-level privacy: privacy-railed domains (any slug in `Config.privacy_railed`, defaulting to `[personal]`) never appear in default or cross-domain queries without an explicit opt-in.
 - Track and cap spend: every LLM call is logged; daily/monthly budgets are hard kill switches with pre-call estimates in the UI.
 - Run non-technical users through a browser-based setup wizard; no terminal required for normal use.
 - Cross-platform first: Mac 13+ and Windows 11, bootstrap installer on both.
@@ -185,7 +185,7 @@ The vault lives at `~/Documents/brain/` (Mac) or `%USERPROFILE%\Documents\brain\
 
 - Top-level folders provide soft separation.
 - Every query/chat thread has an **active scope**: one domain, or `cross-domain` (requires a one-time confirmation warning about personal content).
-- Cross-scope is always opt-in; default queries stay in one domain.
+- Cross-scope is always opt-in; default queries stay in one domain. Any domain in `Config.privacy_railed` (defaulting to `["personal"]`) is excluded from default and wildcard queries — explicit inclusion in the `domains` argument is required for read access. The list is user-editable via Settings → Domains; `personal` is structurally required and cannot be removed.
 - Scope is fixed per thread; changing scope requires a new thread (prevents mid-conversation leakage).
 
 ### SQLite role
@@ -323,7 +323,7 @@ Chat is **not** an MCP tool — Claude Desktop is itself the chat. It uses the r
 ### Security
 
 - Refuse paths that resolve outside `~/Documents/brain/<domain>/`
-- `personal` domain reads require explicit inclusion in the `domains` argument — never in wildcards
+- Privacy-railed domain reads (any slug in `Config.privacy_railed`) require explicit inclusion in the `domains` argument — never in wildcards
 - Secrets are never returned by any tool
 - Patches capped at 50 files / 500 KB default
 - Per-session rate limit on patches/min and tokens/min
