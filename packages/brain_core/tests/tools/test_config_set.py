@@ -41,6 +41,10 @@ def test_settable_keys_match_plan_07_task_4() -> None:
     Plan 07 Task 2: adds the 3 per-mode ``{mode}_model`` overrides.
     Plan 07 Task 4: adds ``domain_order`` + 2 ``budget.override_*`` fields.
     Issue #23: adds 3 ``handlers.*`` per-handler tunables.
+    Plan 11 Task 7: adds ``privacy_railed`` (whole-list write); the
+    open-set ``domain_overrides.<slug>.<field>`` wildcard is matched
+    dynamically by ``_is_settable_domain_override_key`` and is NOT in
+    this static set.
     """
     assert (
         frozenset(
@@ -61,6 +65,7 @@ def test_settable_keys_match_plan_07_task_4() -> None:
                 "handlers.url.timeout_seconds",
                 "handlers.tweet.timeout_seconds",
                 "handlers.pdf.min_chars",
+                "privacy_railed",
             }
         )
         == _SETTABLE_KEYS
@@ -214,6 +219,54 @@ async def test_refuses_secret_like_key(tmp_path: Path) -> None:
 async def test_refuses_non_allowlisted_key(tmp_path: Path) -> None:
     with pytest.raises(PermissionError, match="not settable"):
         await handle({"key": "active_domain", "value": "research"}, _mk_ctx(tmp_path))
+
+
+async def test_domain_override_keys_pass_allowlist_via_wildcard(tmp_path: Path) -> None:
+    """Plan 11 Task 7: ``domain_overrides.<slug>.<field>`` is a wildcard
+    pattern, not a static ``_SETTABLE_KEYS`` entry. Each leaf field on
+    DomainOverride should flow through the allowlist gate without
+    raising. The actual mutation behavior is covered in
+    ``test_config_set_persists.py``; this test only proves the security
+    gate accepts the open-set shape.
+    """
+    # ctx.config=None routes through the no-config branch which still
+    # validates the key — so a PermissionError here would prove the gate
+    # was wrong, not the persistence path.
+    for field in ("classify_model", "default_model", "temperature", "max_output_tokens", "autonomous_mode"):
+        result = await handle(
+            {"key": f"domain_overrides.hobby.{field}", "value": None},
+            _mk_ctx(tmp_path),
+        )
+        assert result.data is not None
+        assert result.data["status"] == "updated"
+
+
+async def test_domain_override_rejects_unknown_field(tmp_path: Path) -> None:
+    """An unknown leaf field doesn't match the wildcard and is rejected
+    at the static-allowlist gate. Without the third-segment field check
+    in ``_is_settable_domain_override_key`` an attacker could write
+    ``domain_overrides.x.api_key`` and bypass the secret-substring
+    check (the substring check would catch ``api_key`` first, but the
+    field-allowlist is the real defense)."""
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "domain_overrides.hobby.unknown_field", "value": "x"},
+            _mk_ctx(tmp_path),
+        )
+
+
+async def test_domain_override_rejects_wrong_segment_count(tmp_path: Path) -> None:
+    """Two-segment ``domain_overrides.hobby`` and four-segment
+    ``domain_overrides.hobby.foo.bar`` both fail the wildcard shape
+    check and end up at the static-allowlist gate.
+    """
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle({"key": "domain_overrides.hobby", "value": {}}, _mk_ctx(tmp_path))
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "domain_overrides.hobby.foo.bar", "value": "x"},
+            _mk_ctx(tmp_path),
+        )
 
 
 async def test_allows_budget_daily_usd(tmp_path: Path) -> None:

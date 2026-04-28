@@ -159,6 +159,140 @@ async def test_no_config_attached_skips_save(tmp_path: Path) -> None:
     assert not (tmp_path / ".brain" / "config.json").exists()
 
 
+async def test_domain_override_dict_walk_creates_entry_and_persists(tmp_path: Path) -> None:
+    """Plan 11 Task 7: ``domain_overrides.<slug>.<field>`` writes auto-
+    create the per-slug DomainOverride if absent, then persist. The
+    Config instance reference must remain identical across the call
+    (in-place mutation; no model_copy in the dispatch path)."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg_id_before = id(cfg)
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    # No prior override for "hobby" — auto-create on first set.
+    assert "hobby" not in cfg.domain_overrides
+
+    result = await handle(
+        {"key": "domain_overrides.hobby.classify_model", "value": "claude-haiku-4-5-20251001"},
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["persisted"] is True
+    # Config instance identity preserved (Plan 11 Task 6 reviewer note).
+    assert id(cfg) == cfg_id_before
+    assert "hobby" in cfg.domain_overrides
+    assert cfg.domain_overrides["hobby"].classify_model == "claude-haiku-4-5-20251001"
+    # Other fields still default (None) — auto-create yielded a fresh
+    # DomainOverride() before the targeted setattr.
+    assert cfg.domain_overrides["hobby"].default_model is None
+
+    # Round-trip via load_config.
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert rehydrated.domain_overrides["hobby"].classify_model == "claude-haiku-4-5-20251001"
+
+
+async def test_domain_override_reset_to_global_clears_field(tmp_path: Path) -> None:
+    """Setting a field to None clears that override (returns to global).
+    When the LAST set field clears, the slug entry is pruned entirely
+    so config.json doesn't carry empty {} objects."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    # Seed two override fields.
+    await handle(
+        {"key": "domain_overrides.hobby.classify_model", "value": "haiku-X"},
+        ctx,
+    )
+    await handle({"key": "domain_overrides.hobby.temperature", "value": 0.7}, ctx)
+    assert cfg.domain_overrides["hobby"].classify_model == "haiku-X"
+    assert cfg.domain_overrides["hobby"].temperature == pytest.approx(0.7)
+
+    # Reset one field — slug entry stays.
+    await handle(
+        {"key": "domain_overrides.hobby.classify_model", "value": None},
+        ctx,
+    )
+    assert "hobby" in cfg.domain_overrides
+    assert cfg.domain_overrides["hobby"].classify_model is None
+    assert cfg.domain_overrides["hobby"].temperature == pytest.approx(0.7)
+
+    # Reset the last remaining field — slug entry is pruned.
+    await handle({"key": "domain_overrides.hobby.temperature", "value": None}, ctx)
+    assert "hobby" not in cfg.domain_overrides
+
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert "hobby" not in rehydrated.domain_overrides
+
+
+async def test_domain_override_rejects_orphan_slug(tmp_path: Path) -> None:
+    """Plan 11 D8 / D12: ``domain_overrides.<slug>`` keys must reference
+    a slug that exists in ``Config.domains``. The pre-check in
+    _apply_domain_override raises ValueError so the user gets immediate
+    feedback rather than waiting for the next ``load_config`` to fail.
+    Persist must NOT happen on this path."""
+    cfg = Config(domains=["research", "work", "personal"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle(
+            {"key": "domain_overrides.ghost.classify_model", "value": "haiku-X"},
+            ctx,
+        )
+
+    # Live Config not mutated.
+    assert "ghost" not in cfg.domain_overrides
+    # No config.json written.
+    assert not (tmp_path / ".brain" / "config.json").exists()
+
+
+async def test_privacy_railed_whole_list_persists(tmp_path: Path) -> None:
+    """Plan 11 D10/D11: ``privacy_railed`` is written as a whole list
+    via ``brain_config_set``. ``personal`` must remain in the list (the
+    Config validator enforces this on save)."""
+    cfg = Config(domains=["research", "personal", "journal"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    result = await handle(
+        {"key": "privacy_railed", "value": ["personal", "journal"]},
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["persisted"] is True
+    assert cfg.privacy_railed == ["personal", "journal"]
+
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert rehydrated.privacy_railed == ["personal", "journal"]
+
+
+async def test_privacy_railed_removing_personal_load_rejects(tmp_path: Path) -> None:
+    """The Config validator forbids removing ``personal`` from
+    privacy_railed. Because the Config object lacks
+    ``validate_assignment=True``, the in-memory mutation goes through;
+    the next ``load_config`` on the persisted file is what catches it.
+    Pin this behavior so it's an intentional decision when validation
+    tightens.
+    """
+    cfg = Config(domains=["research", "personal", "journal"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    # In-memory and on-disk write both go through.
+    result = await handle({"key": "privacy_railed", "value": ["journal"]}, ctx)
+    assert result.data is not None
+    assert result.data["persisted"] is True
+    assert cfg.privacy_railed == ["journal"]
+
+    # load_config rejects the bad on-disk file.
+    with pytest.raises(pydantic.ValidationError):
+        load_config(
+            config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+        )
+
+
 async def test_invalid_value_currently_persists_without_validation(tmp_path: Path) -> None:
     """KNOWN-LIMITATION pin (Plan 11 Task 4): pydantic v2 only validates on
     assignment when ``validate_assignment=True``, which Config and its

@@ -37,7 +37,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from brain_core.config.schema import Config
+from brain_core.config.schema import Config, DomainOverride
 from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools.base import ToolContext, ToolResult
 
@@ -98,8 +98,40 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         "handlers.url.timeout_seconds",
         "handlers.tweet.timeout_seconds",
         "handlers.pdf.min_chars",
+        # Plan 11 D10: privacy-rail slug list. The whole list is written
+        # at once (a `list[str]`) — list-mutation as dotted-path is
+        # awkward and error-prone. The Settings UI computes the new
+        # list (add/remove a slug) and posts it here; the Config
+        # validators enforce ``personal``-required + subset-of-domains.
+        "privacy_railed",
     }
 )
+
+# Plan 11 D12 / Task 7: ``domain_overrides.<slug>.<field>`` is settable for
+# every leaf field on ``DomainOverride``. The wildcard pattern is the same
+# shape as Plan 11's narrative reference to ``handlers.<name>.<field>``,
+# but expressed as a dynamic check rather than baked into _SETTABLE_KEYS
+# (it's an open set — any user-defined slug is a valid second segment, so
+# enumerating them statically would either rot or under-cover).
+_DOMAIN_OVERRIDE_FIELDS: frozenset[str] = frozenset(DomainOverride.model_fields.keys())
+
+
+def _is_settable_domain_override_key(key: str) -> bool:
+    """Return True if ``key`` matches ``domain_overrides.<slug>.<field>``.
+
+    The slug shape is validated by the Config schema's
+    ``_check_domain_overrides_keys_in_domains`` model validator on save —
+    we don't pre-validate it here so a user-entered "ghost" slug fails
+    with the canonical Config-validator error message rather than a
+    duplicate, drift-prone copy.
+    """
+    parts = key.split(".")
+    return (
+        len(parts) == 3
+        and parts[0] == "domain_overrides"
+        and parts[2] in _DOMAIN_OVERRIDE_FIELDS
+        and bool(parts[1])
+    )
 
 
 # Plan 11 Task 4: keys whose target is intentionally NOT a Config field.
@@ -128,6 +160,15 @@ def _resolve_parent_and_field(config: Config, dotted: str) -> tuple[BaseModel, s
     Raises ``KeyError`` if any segment doesn't exist on the live model
     (the allowlist + drift watchdog should prevent this — the explicit
     raise is the safety net).
+
+    NOTE: this helper handles only pydantic-model walks. Dict-keyed
+    paths (``domain_overrides.<slug>.<field>``) are routed through
+    :func:`_apply_domain_override` in :func:`handle` because the leaf
+    write semantics are different: the parent is a ``dict`` not a
+    pydantic model, the slug key may not exist yet (auto-create with
+    ``DomainOverride()``), and slug membership in ``Config.domains``
+    must round-trip through the Config validator on persist (not via
+    a parallel pre-check here).
     """
     parts = dotted.split(".")
     current: BaseModel = config
@@ -147,14 +188,105 @@ def _resolve_parent_and_field(config: Config, dotted: str) -> tuple[BaseModel, s
     return current, leaf
 
 
+def _apply_domain_override(config: Config, key: str, value: Any) -> None:
+    """Apply a ``domain_overrides.<slug>.<field>`` mutation in place.
+
+    Plan 11 Task 7 dict-walk extension. The standard
+    :func:`_resolve_parent_and_field` walker can't descend through
+    ``Config.domain_overrides`` because the value is a ``dict[str,
+    DomainOverride]``, not a pydantic model. This helper handles the
+    three-segment shape directly:
+
+    1. Parse ``domain_overrides.<slug>.<field>``. The caller has
+       already validated the shape via ``_is_settable_domain_override_key``.
+    2. Look up ``config.domain_overrides[slug]``. If absent, construct
+       a fresh ``DomainOverride()`` (all-None defaults — equivalent to
+       "no override for any field") and insert it. This is the
+       auto-create path: a setter call for a brand-new override slug
+       lands cleanly without requiring a separate "create override"
+       step. The Config-level
+       ``_check_domain_overrides_keys_in_domains`` validator runs on
+       :func:`save_config` and rejects orphan slugs (not in
+       ``Config.domains``), so the validation seam stays single.
+    3. Setattr ``<field> = value`` on the override model. ``value=None``
+       clears the override for that specific field (the field type is
+       ``X | None`` for every leaf, so None is a valid assignment).
+    4. If after the assignment every field on the override is None,
+       drop the slug entirely from ``domain_overrides`` to keep the
+       persisted shape minimal — an all-None entry is semantically
+       identical to "no entry" but pollutes ``config.json``.
+
+    The function mutates ``config`` IN PLACE — no ``model_copy``, no new
+    Config instance. The caller's reference stays live so the rest of
+    the request flow sees the mutation.
+    """
+    parts = key.split(".")
+    # The caller is _is_settable_domain_override_key-gated, so this
+    # assertion is a defense-in-depth assert rather than user-facing
+    # error UX.
+    assert len(parts) == 3 and parts[0] == "domain_overrides", (
+        f"_apply_domain_override called with non-domain-override key {key!r}"
+    )
+    slug = parts[1]
+    field = parts[2]
+    if field not in _DOMAIN_OVERRIDE_FIELDS:
+        raise KeyError(f"{field!r} is not a field of DomainOverride")
+
+    # Slug-membership pre-check. The Config-level
+    # ``_check_domain_overrides_keys_in_domains`` validator only runs at
+    # construction time (Pydantic v2 model_validator semantics), not on
+    # in-place dict mutation, and the writer's ``model_dump`` path
+    # doesn't re-trigger it either. Without this guard, an orphan slug
+    # would persist silently and only fail on the *next* ``load_config``
+    # (typically the next process boot) — terrible feedback latency.
+    # Mirror the validator's error message so the Settings UI surfaces
+    # the same wording regardless of which seam catches it.
+    if slug not in config.domains:
+        raise ValueError(
+            f"domain_overrides keys {[slug]!r} are not in domains "
+            f"{config.domains!r}; remove the override or add the domain first."
+        )
+
+    overrides = config.domain_overrides
+    existing = overrides.get(slug)
+    if existing is None:
+        # Auto-create on first override-set for this slug — the slug
+        # has already been validated as a member of ``config.domains``
+        # above, so the auto-create is safe.
+        existing = DomainOverride()
+        overrides[slug] = existing
+    setattr(existing, field, value)
+
+    # Prune empty overrides — if every field is None now, the entry is
+    # semantically a no-op and shouldn't show up in config.json. Without
+    # this prune, "set then reset to global on every field" would leave
+    # an empty {} object in the persisted dict.
+    if all(getattr(existing, f) is None for f in _DOMAIN_OVERRIDE_FIELDS):
+        del overrides[slug]
+
+
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     key = str(arguments["key"])
-    if any(s in key.lower() for s in _SECRET_SUBSTRINGS):
-        raise PermissionError(f"refusing to set secret-like key {key!r}")
-    if key not in _SETTABLE_KEYS:
-        raise PermissionError(
-            f"key {key!r} is not settable via MCP — settable keys: {sorted(_SETTABLE_KEYS)}"
-        )
+    # Plan 11 Task 7: ``domain_overrides.<slug>.<field>`` is an open-set
+    # wildcard pattern, not a static allowlist entry. Route through
+    # ``_is_settable_domain_override_key`` first so user-defined slugs
+    # don't fail the static membership check below. The wildcard
+    # check is also why the secret-substring check moved BELOW this
+    # branch: ``DomainOverride.max_output_tokens`` legitimately contains
+    # "token" as a substring, and the field-allowlist
+    # (``_DOMAIN_OVERRIDE_FIELDS``) is the real security gate for
+    # override-path keys — only known-safe leaf fields pass the
+    # wildcard check, so the secret-substring blocklist would
+    # double-cover and false-positive.
+    is_domain_override = _is_settable_domain_override_key(key)
+    if not is_domain_override:
+        if any(s in key.lower() for s in _SECRET_SUBSTRINGS):
+            raise PermissionError(f"refusing to set secret-like key {key!r}")
+        if key not in _SETTABLE_KEYS:
+            raise PermissionError(
+                f"key {key!r} is not settable via MCP — settable keys: "
+                f"{sorted(_SETTABLE_KEYS)} (plus domain_overrides.<slug>.<field>)"
+            )
 
     value = arguments["value"]
 
@@ -201,9 +333,19 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # what ultimately rejects the file. Pinning that behavior in
     # tests/tools/test_config_set_persists.py so a future tightening
     # (validate_assignment, or pre-write validation here) is intentional.
-    parent, leaf = _resolve_parent_and_field(cfg, key)
+    #
+    # Plan 11 Task 7: ``domain_overrides.<slug>.<field>`` writes route
+    # through ``_apply_domain_override`` (dict-walk on
+    # ``Config.domain_overrides``); everything else uses the standard
+    # pydantic-model walker. Both mutate ``cfg`` in place inside the
+    # ``persist_config_or_revert`` context so the helper's snapshot/
+    # revert path covers both shapes.
     with persist_config_or_revert(cfg, ctx.vault_root):
-        setattr(parent, leaf, value)
+        if is_domain_override:
+            _apply_domain_override(cfg, key, value)
+        else:
+            parent, leaf = _resolve_parent_and_field(cfg, key)
+            setattr(parent, leaf, value)
 
     return ToolResult(
         text=f"set {key} = {value!r} (persisted)",

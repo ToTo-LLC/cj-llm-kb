@@ -331,6 +331,49 @@ export const configSet = (args: {
 }): Promise<ToolResponse<{ key: string; value: unknown }>> =>
   callTool<{ key: string; value: unknown }>("brain_config_set", args);
 
+// ---------- Plan 11 Task 7 — domain overrides + privacy-rail helpers ----------
+
+/** Field names settable on ``DomainOverride`` (Plan 11 D12). */
+export type DomainOverrideField =
+  | "classify_model"
+  | "default_model"
+  | "temperature"
+  | "max_output_tokens"
+  | "autonomous_mode";
+
+/**
+ * Set a single per-domain override field (or clear it with ``null``).
+ * Routes through ``brain_config_set`` with the dotted key
+ * ``domain_overrides.<slug>.<field>``; the backend's dict-walk
+ * extension (Plan 11 Task 7) handles the open-set ``<slug>`` segment
+ * and auto-creates the per-slug ``DomainOverride`` entry on first set.
+ *
+ * Passing ``null`` clears the override for that field (Reset to
+ * global). When the last field on a slug is cleared, the slug entry
+ * is pruned from ``Config.domain_overrides`` server-side.
+ */
+export const setDomainOverride = (args: {
+  slug: string;
+  field: DomainOverrideField;
+  value: string | number | boolean | null;
+}): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({
+    key: `domain_overrides.${args.slug}.${args.field}`,
+    value: args.value,
+  });
+
+/**
+ * Replace the privacy-rail slug list. ``personal`` is required (the
+ * Config validator enforces it on persist) — callers should never send
+ * a list missing ``personal``. Mutations are whole-list — the caller
+ * computes the new list (existing + added slug, or existing minus
+ * removed slug) and posts it here.
+ */
+export const setPrivacyRailed = (
+  list: string[],
+): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({ key: "privacy_railed", value: list });
+
 // ---------- Plan 07 Task 4 additions (4) ----------
 
 /** Recently ingested sources (feeds the inbox). */
