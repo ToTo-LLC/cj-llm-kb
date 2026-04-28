@@ -9,13 +9,15 @@ round trip. These tests pin:
   (c) Read-after-write within a session: mutating ``ctx.config.active_domain``
       mid-session is visible on the *next* call (the tool reads
       ``ctx.config`` live, not a cached snapshot).
-  (d) ``ctx.config is None`` fallback → ``DEFAULT_DOMAINS[0]`` (``"research"``).
+  (d) Plan 13 Task 1 / D1: ``ctx.config is None`` raises ``RuntimeError``
+      (lifecycle violation, not a fallback case).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from brain_core.config.schema import DEFAULT_DOMAINS, Config
 from brain_core.tools.base import ToolContext
 from brain_core.tools.list_domains import handle
@@ -86,14 +88,14 @@ async def test_active_domain_read_after_write_within_session(tmp_path: Path) -> 
     assert second.data["active_domain"] == "work"
 
 
-async def test_no_config_falls_back_to_default_domains_first(tmp_path: Path) -> None:
-    """When ctx.config is None (low-level tests / harness contexts), the
-    response active_domain falls back to DEFAULT_DOMAINS[0]. Mirrors the
-    _configured_slugs fallback so the field is never absent from the
-    response shape — the frontend can rely on it being a non-empty str.
+async def test_no_config_raises_runtime_error(tmp_path: Path) -> None:
+    """Plan 13 Task 1 / D1: ``ctx.config is None`` raises ``RuntimeError``
+    rather than falling back to ``DEFAULT_DOMAINS[0]``. Pre-Plan-13 the
+    silent fallback was tolerable as a unit-test escape hatch, but
+    post-Plan 11 Task 7 (brain_api lifespan wires Config) and Plan 12
+    Task 4 (brain_mcp ``_build_ctx`` wires Config), every production
+    path supplies Config; the lenient branch was dead code in production.
+    Mirrors ``brain_config_get``'s strict policy (Plan 12 Task 3 / D5).
     """
-    result = await handle({}, _mk_ctx(tmp_path, config=None))
-
-    assert result.data is not None
-    assert result.data["active_domain"] == DEFAULT_DOMAINS[0]
-    assert result.data["active_domain"] == "research"
+    with pytest.raises(RuntimeError, match=r"ctx\.config to be a Config"):
+        await handle({}, _mk_ctx(tmp_path, config=None))

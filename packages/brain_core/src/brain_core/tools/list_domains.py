@@ -36,7 +36,6 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from brain_core.config.schema import DEFAULT_DOMAINS
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_list_domains"
@@ -74,37 +73,46 @@ def _on_disk_slugs(vault_root: Any) -> set[str]:
     return found
 
 
-def _configured_slugs(ctx: ToolContext) -> list[str]:
-    """Return ``ctx.config.domains`` if a config is wired in, else the v0.1 default tuple.
+_NO_CONFIG_MESSAGE = (
+    "brain_list_domains requires ctx.config to be a Config instance, but "
+    "got None. The brain_api lifespan (build_app_context) and brain_mcp "
+    "_build_ctx are responsible for threading the loaded Config through "
+    "ToolContext; a None config here means the wrapper hasn't wired it in. "
+    "Falling back to Config() defaults would make Settings reads lie about "
+    "the resolved configuration."
+)
 
-    The fallback exists so admin tools work in low-level tests / harness
-    contexts where ``ToolContext.config`` is left at ``None`` (the docstring
-    on ToolContext explicitly calls this out — 56+ construction sites still
-    leave it ``None``). Plan 10 Task 4 / future re-wiring will plumb the
-    real config into every brain_api / brain_mcp tool path.
+
+def _configured_slugs(ctx: ToolContext) -> list[str]:
+    """Return ``ctx.config.domains`` live.
+
+    Plan 13 Task 1 / D1: a ``None`` config is a lifecycle violation, not a
+    fallback case. The brain_api lifespan (Plan 11 Task 7) and the brain_mcp
+    ``_build_ctx`` (Plan 12 Task 4) are responsible for threading a real
+    Config through; raise ``RuntimeError`` if they haven't, mirroring
+    ``brain_config_get`` (Plan 12 Task 3 / D5). Silently falling back to
+    ``DEFAULT_DOMAINS`` made the response lie about the resolved configuration
+    in production-shape paths (Plan 11 lesson 343).
     """
     cfg = ctx.config
-    if cfg is not None and getattr(cfg, "domains", None):
-        return list(cfg.domains)
-    return list(DEFAULT_DOMAINS)
+    if cfg is None:
+        raise RuntimeError(_NO_CONFIG_MESSAGE)
+    return list(cfg.domains)
 
 
 def _active_domain(ctx: ToolContext) -> str:
-    """Return ``ctx.config.active_domain`` live, or the v0.1 default fallback.
+    """Return ``ctx.config.active_domain`` live.
 
-    Plan 11 Task 6 / D8: the response carries ``active_domain`` so the frontend
-    ``useDomains()`` hook hydrates scope on first mount. Mirrors the
-    ``_configured_slugs`` fallback pattern: when ``ctx.config is None``
-    (low-level tests / harness contexts that haven't plumbed config yet),
-    fall back to ``DEFAULT_DOMAINS[0]`` (``"research"`` in v0.1) so the field
-    is always a non-empty slug. When ``ctx.config`` IS wired in, the
-    Config validator guarantees ``active_domain in domains`` so the field
-    will always reference a slug present in the response's ``domains`` list.
+    Plan 13 Task 1 / D1: same strict policy as ``_configured_slugs``. Plan 11
+    Task 6 / D8 added this field so the frontend ``useDomains()`` hook
+    hydrates scope on first mount; the Config validator guarantees
+    ``active_domain in domains`` so the field always references a slug
+    present in the response's ``domains`` list.
     """
     cfg = ctx.config
-    if cfg is not None and getattr(cfg, "active_domain", None):
-        return str(cfg.active_domain)
-    return DEFAULT_DOMAINS[0]
+    if cfg is None:
+        raise RuntimeError(_NO_CONFIG_MESSAGE)
+    return str(cfg.active_domain)
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:

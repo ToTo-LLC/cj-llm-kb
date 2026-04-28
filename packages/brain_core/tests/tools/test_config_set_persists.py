@@ -146,16 +146,17 @@ async def test_non_persisted_keys_skip_save(tmp_path: Path) -> None:
     assert not (tmp_path / ".brain" / "config.json").exists()
 
 
-async def test_no_config_attached_skips_save(tmp_path: Path) -> None:
-    """Backwards-compat: ``ctx.config=None`` (low-level test contexts)
-    still validates the key but skips persistence and reports
-    ``persisted=False``. The existing test_config_set.py fixtures rely
-    on this — losing it would cascade-break a dozen tests.
+async def test_no_config_attached_raises_runtime_error(tmp_path: Path) -> None:
+    """Plan 13 Task 1 / D1: ``ctx.config=None`` is a lifecycle violation,
+    not a fallback case. The pre-Plan-13 lenient no-op (which returned
+    ``persisted=False``) was a unit-test escape hatch from the era
+    before both wrappers wired Config; post-Plan 12 D6, every
+    production-shape path supplies Config, and the lenient branch was
+    dead code. Mirrors ``brain_config_get``'s strict policy.
     """
     ctx = _mk_ctx(tmp_path, None)
-    result = await handle({"key": "log_llm_payloads", "value": True}, ctx)
-    assert result.data is not None
-    assert result.data["persisted"] is False
+    with pytest.raises(RuntimeError, match=r"ctx\.config to be a Config"):
+        await handle({"key": "log_llm_payloads", "value": True}, ctx)
     assert not (tmp_path / ".brain" / "config.json").exists()
 
 

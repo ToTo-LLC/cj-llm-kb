@@ -3,6 +3,13 @@
 Covers: secret-like refusal, non-settable-key refusal, and a successful
 in-memory "updated" write on an allowlisted key. brain_mcp's existing
 test_tool_config_get_set.py covers the transport wrapper behavior.
+
+Plan 13 Task 1 / D1: ``brain_config_set`` now raises ``RuntimeError`` when
+``ctx.config is None`` for persisted keys. Refusal-path tests (secret-like,
+non-allowlisted, wrong-shape domain-override) refuse BEFORE the cfg-None
+check, so they remain valid without a real Config; persistence-path tests
+seed a real ``Config`` to match the production shape (both wrappers thread
+Config through post-Plan 12 D6).
 """
 
 from __future__ import annotations
@@ -10,11 +17,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from brain_core.config.schema import Config
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.config_set import _SETTABLE_KEYS, NAME, handle
 
 
-def _mk_ctx(vault: Path) -> ToolContext:
+def _mk_ctx(vault: Path, *, config: Config | None = None) -> ToolContext:
+    """Build a ToolContext for config_set tests.
+
+    ``config`` defaults to ``None`` for backwards compatibility with refusal-path
+    tests (secret-like, non-allowlisted) that refuse BEFORE the cfg-None check
+    in ``handle``. Persistence-path tests pass an explicit ``Config(...)``.
+    """
     return ToolContext(
         vault_root=vault,
         allowed_domains=("research",),
@@ -26,6 +40,7 @@ def _mk_ctx(vault: Path) -> ToolContext:
         cost_ledger=None,
         rate_limiter=None,
         undo_log=None,
+        config=config,
     )
 
 
@@ -176,21 +191,12 @@ def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
 
 async def test_allows_handler_config_keys(tmp_path: Path) -> None:
     """Issue #23: ``handlers.<handler>.<field>`` paths flow through the
-    allowlist + secret-substring check without raising. Persistence is
-    deferred to the same Plan 07 Task 5 path as every other settable key.
+    allowlist + secret-substring check without raising. Plan 13 Task 1 /
+    D1: persisted keys require a real ``Config`` on the context; the
+    handler keys round-trip through ``persist_config_or_revert``.
     """
-    ctx = ToolContext(
-        vault_root=tmp_path,
-        allowed_domains=("research",),
-        retrieval=None,
-        pending_store=None,
-        state_db=None,
-        writer=None,
-        llm=None,
-        cost_ledger=None,
-        rate_limiter=None,
-        undo_log=None,
-    )
+    cfg = Config()
+    ctx = _mk_ctx(tmp_path, config=cfg)
     for key, value in (
         ("handlers.url.timeout_seconds", 60.0),
         ("handlers.tweet.timeout_seconds", 5.0),
@@ -204,7 +210,13 @@ async def test_allows_handler_config_keys(tmp_path: Path) -> None:
 
 
 async def test_allows_autonomous_flag(tmp_path: Path) -> None:
-    """Each new autonomy key accepts a bool without secret-refusal or allowlist-refusal."""
+    """Each new autonomy key accepts a bool without secret-refusal or allowlist-refusal.
+
+    Plan 13 Task 1 / D1: persisted keys require a real ``Config`` on the
+    context (production shape post-Plan 12 D6).
+    """
+    cfg = Config()
+    ctx = _mk_ctx(tmp_path, config=cfg)
     for key in (
         "autonomous.ingest",
         "autonomous.entities",
@@ -212,7 +224,7 @@ async def test_allows_autonomous_flag(tmp_path: Path) -> None:
         "autonomous.index_rewrites",
         "autonomous.draft",
     ):
-        result = await handle({"key": key, "value": True}, _mk_ctx(tmp_path))
+        result = await handle({"key": key, "value": True}, ctx)
         assert isinstance(result, ToolResult)
         assert result.data is not None
         assert result.data["status"] == "updated"
@@ -242,14 +254,17 @@ async def test_domain_override_keys_pass_allowlist_via_wildcard(tmp_path: Path) 
     raising. The actual mutation behavior is covered in
     ``test_config_set_persists.py``; this test only proves the security
     gate accepts the open-set shape.
+
+    Plan 13 Task 1 / D1: a real ``Config`` is now required for the
+    persistence branch. ``hobby`` must be in ``Config.domains`` because
+    ``_apply_domain_override`` enforces slug-membership.
     """
-    # ctx.config=None routes through the no-config branch which still
-    # validates the key — so a PermissionError here would prove the gate
-    # was wrong, not the persistence path.
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
     for field in ("classify_model", "default_model", "temperature", "max_output_tokens"):
         result = await handle(
             {"key": f"domain_overrides.hobby.{field}", "value": None},
-            _mk_ctx(tmp_path),
+            ctx,
         )
         assert result.data is not None
         assert result.data["status"] == "updated"
@@ -284,16 +299,37 @@ async def test_domain_override_rejects_wrong_segment_count(tmp_path: Path) -> No
 
 
 async def test_allows_budget_daily_usd(tmp_path: Path) -> None:
+    """Plan 13 Task 1 / D1: persisted keys (``budget.daily_usd`` is a
+    real Config field) require a real ``Config`` on the context; the
+    response carries ``persisted=True`` once the round-trip lands on
+    disk via ``persist_config_or_revert``.
+    """
+    cfg = Config()
+    ctx = _mk_ctx(tmp_path, config=cfg)
     result = await handle(
         {"key": "budget.daily_usd", "value": 5.0},
-        _mk_ctx(tmp_path),
+        ctx,
     )
 
     assert isinstance(result, ToolResult)
     assert result.data is not None
     assert result.data["status"] == "updated"
-    assert result.data["persisted"] is False
+    assert result.data["persisted"] is True
     assert result.data["value"] == 5.0
+
+
+async def test_raises_when_ctx_config_none(tmp_path: Path) -> None:
+    """Plan 13 Task 1 / D1: ``brain_config_set`` raises ``RuntimeError``
+    when ``ctx.config is None`` for persisted keys. Mirrors
+    ``brain_config_get``'s strict policy (Plan 12 Task 3) — a None config
+    is a lifecycle violation, not a fallback case. Pre-Plan-13 this branch
+    no-op'd with ``persisted=False``, which was a unit-test escape hatch
+    from before brain_api + brain_mcp wired Config; production-shape
+    integration tests post-Plan 12 D6 always supply Config.
+    """
+    ctx = _mk_ctx(tmp_path, config=None)
+    with pytest.raises(RuntimeError, match=r"ctx\.config to be a Config"):
+        await handle({"key": "log_llm_payloads", "value": True}, ctx)
 
 
 def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:

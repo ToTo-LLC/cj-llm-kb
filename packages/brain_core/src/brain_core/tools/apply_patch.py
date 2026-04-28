@@ -115,10 +115,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 def _resolve_config(ctx: ToolContext) -> Config:
     """Snapshot a defaults-backed Config with the session vault_root overlaid.
 
-    Mirrors the ``brain_config_get`` approach — no env / config-file read here
-    to keep the handler deterministic under test. Plan 07 Task 5 replaces the
-    body with a real loader call; Task 1 tests monkeypatch this function to
-    supply a custom :class:`AutonomousConfig`.
+    Returns a fresh ``Config(vault_path=ctx.vault_root)`` — no env or
+    config-file read — so the autonomy gate runs deterministically under
+    test. Plan 07 Task 1 tests monkeypatch this function to supply a
+    custom :class:`AutonomousConfig`; Plan 07 Task 5 will replace the body
+    with a real loader call. This is intentionally NOT a read of
+    ``ctx.config``: ``brain_apply_patch`` runs even in low-level harness
+    contexts that don't supply a Config, and the autonomy gate's defaults
+    (every category opt-in is False) are the safe fallback.
     """
     return Config(vault_path=ctx.vault_root)
 

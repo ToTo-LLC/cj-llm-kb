@@ -351,20 +351,24 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         )
 
     # Persisted keys: mutate ctx.config in place, persist via the helper.
-    # If ctx.config is None (low-level test contexts) we behave like the
-    # non-persisted branch above so the tool stays usable as a validator
-    # without a Config wired through.
+    # Plan 13 Task 1 / D1: a ``None`` config is a lifecycle violation, not a
+    # fallback case. The brain_api lifespan (Plan 11 Task 7) and the brain_mcp
+    # ``_build_ctx`` (Plan 12 Task 4) are responsible for threading a real
+    # Config through; raise ``RuntimeError`` if they haven't, mirroring
+    # ``brain_config_get`` (Plan 12 Task 3 / D5). The pre-Plan-13 lenient
+    # no-op was a unit-test escape hatch from the era before both wrappers
+    # wired Config; production-shape integration tests (Plan 11 lesson 343)
+    # post-Plan-12 D6 always supply Config, so the lenient branch was dead
+    # code in production.
     cfg = ctx.config
     if cfg is None:
-        return ToolResult(
-            text=f"set {key} = {value!r} (no Config attached — persistence skipped)",
-            data={
-                "status": "updated",
-                "key": key,
-                "value": value,
-                "persisted": False,
-                "note": "ctx.config is None; key validated but not applied.",
-            },
+        raise RuntimeError(
+            "brain_config_set requires ctx.config to be a Config instance, but "
+            "got None. The brain_api lifespan (build_app_context) and brain_mcp "
+            "_build_ctx are responsible for threading the loaded Config through "
+            "ToolContext; a None config here means the wrapper hasn't wired it in. "
+            "Falling back to Config() defaults would make Settings reads lie about "
+            "the resolved configuration."
         )
 
     # NOTE on validation: pydantic v2 only validates on assignment when
