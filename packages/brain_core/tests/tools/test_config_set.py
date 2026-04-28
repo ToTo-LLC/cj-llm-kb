@@ -232,7 +232,7 @@ async def test_domain_override_keys_pass_allowlist_via_wildcard(tmp_path: Path) 
     # ctx.config=None routes through the no-config branch which still
     # validates the key — so a PermissionError here would prove the gate
     # was wrong, not the persistence path.
-    for field in ("classify_model", "default_model", "temperature", "max_output_tokens", "autonomous_mode"):
+    for field in ("classify_model", "default_model", "temperature", "max_output_tokens"):
         result = await handle(
             {"key": f"domain_overrides.hobby.{field}", "value": None},
             _mk_ctx(tmp_path),

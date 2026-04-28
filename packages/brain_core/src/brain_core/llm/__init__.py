@@ -90,9 +90,14 @@ def resolve_autonomous_mode(config: Config, domain: str | None) -> bool:
     if domain is None or domain not in config.domain_overrides:
         return config.autonomous_mode
     override = config.domain_overrides[domain]
-    if override.autonomous_mode is None:
+    # Plan 12 D1 dropped ``DomainOverride.autonomous_mode``; this resolver
+    # is itself slated for deletion in Plan 12 Task 2 but keeps a
+    # ``getattr`` fallback so the schema-removal commit (Task 1) leaves
+    # the build green. Once Task 2 lands the function vanishes entirely.
+    override_autonomous: bool | None = getattr(override, "autonomous_mode", None)
+    if override_autonomous is None:
         return config.autonomous_mode
-    return override.autonomous_mode
+    return override_autonomous
 
 
 __all__ = [

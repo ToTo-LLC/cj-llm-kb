@@ -71,7 +71,6 @@ def test_full_override_replaces_every_overridable_field() -> None:
                 default_model="sonnet-OVERRIDE",
                 temperature=0.7,
                 max_output_tokens=8192,
-                autonomous_mode=True,
             )
         }
     )
@@ -146,27 +145,6 @@ def test_autonomous_domain_without_override_returns_global() -> None:
     assert resolve_autonomous_mode(cfg, "research") is True
 
 
-def test_autonomous_override_can_disable() -> None:
-    """Global on, per-domain off."""
-    cfg = _mk_config(
-        autonomous_mode=True,
-        domain_overrides={"hobby": DomainOverride(autonomous_mode=False)},
-    )
-    assert resolve_autonomous_mode(cfg, "hobby") is False
-    # Other domains still pick up the global.
-    assert resolve_autonomous_mode(cfg, "research") is True
-
-
-def test_autonomous_override_can_enable() -> None:
-    """Global off, per-domain on."""
-    cfg = _mk_config(
-        autonomous_mode=False,
-        domain_overrides={"hobby": DomainOverride(autonomous_mode=True)},
-    )
-    assert resolve_autonomous_mode(cfg, "hobby") is True
-    assert resolve_autonomous_mode(cfg, "research") is False
-
-
 def test_autonomous_override_none_falls_back_to_global() -> None:
     """An override entry exists for the slug but ``autonomous_mode`` is
     ``None`` (only other LLM fields are set) → global wins.
@@ -210,10 +188,13 @@ def test_llm_config_and_domain_override_field_divergence_is_intentional() -> Non
         "extend the expected set with a justification comment."
     )
 
-    # DomainOverride has fields LLMConfig doesn't (the autonomy bool):
+    # DomainOverride has no fields LLMConfig doesn't — Plan 12 D1 dropped
+    # ``autonomous_mode`` from the override (autonomy is governed by
+    # :class:`AutonomousConfig` per-category flags). Any future override-only
+    # field needs review: either add a corresponding field to LLMConfig or
+    # extend this expected set with a justification comment.
     only_on_override = override_fields - llm_fields
-    assert only_on_override == {"autonomous_mode"}, (
-        f"Unexpected divergence: {only_on_override - {'autonomous_mode'}} on "
-        "DomainOverride but not LLMConfig. autonomous_mode lives on Config "
-        "itself (not LLMConfig); any other override-only field needs review."
+    assert only_on_override == set(), (
+        f"Unexpected divergence: {only_on_override} on DomainOverride but "
+        "not LLMConfig. Override-only fields need explicit justification."
     )

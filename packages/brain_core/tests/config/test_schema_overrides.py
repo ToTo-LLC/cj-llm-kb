@@ -33,7 +33,6 @@ def test_domain_override_all_default_validates() -> None:
     assert o.default_model is None
     assert o.temperature is None
     assert o.max_output_tokens is None
-    assert o.autonomous_mode is None
 
 
 def test_domain_override_temperature_above_ceiling_is_rejected() -> None:
@@ -108,6 +107,7 @@ def test_persisted_dict_returns_exactly_the_d4_keys() -> None:
         "handlers",
         "domain_overrides",
         "privacy_railed",
+        "cross_domain_warning_acknowledged",
     }
     assert keys == expected
     # ``vault_path`` is the canonical excluded field — guard it

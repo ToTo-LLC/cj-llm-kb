@@ -192,12 +192,14 @@ class AutonomousConfig(BaseModel):
 
 
 class DomainOverride(BaseModel):
-    """Per-domain LLM/autonomy overrides (Plan 11 D8).
+    """Per-domain LLM overrides (Plan 11 D8; Plan 12 D1 dropped the
+    autonomy field — autonomy is governed by the per-category flags on
+    :class:`AutonomousConfig`, not a per-domain bool).
 
     Every field is ``None`` by default — a missing override means "fall
-    back to the global value from :class:`LLMConfig` / :class:`Config`".
-    A populated field replaces the global value when the active scope
-    matches this override's slug. The bounds on ``temperature`` and
+    back to the global value from :class:`LLMConfig`". A populated field
+    replaces the global value when the active scope matches this
+    override's slug. The bounds on ``temperature`` and
     ``max_output_tokens`` mirror :class:`LLMConfig` 1:1 so a user can't
     write an override that would itself fail global validation.
     """
@@ -207,7 +209,6 @@ class DomainOverride(BaseModel):
     default_model: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=1.5)
     max_output_tokens: int | None = Field(default=None, gt=0)
-    autonomous_mode: bool | None = None
 
 
 # Plan 11 D4: persistence whitelist. ``Config.persisted_dict()`` (below)
@@ -229,6 +230,7 @@ _PERSISTED_FIELDS: frozenset[str] = frozenset(
         "handlers",
         "domain_overrides",
         "privacy_railed",
+        "cross_domain_warning_acknowledged",
     }
 )
 
@@ -261,11 +263,20 @@ class Config(BaseModel):
     # cross-field model validator below — you cannot rail a slug that
     # doesn't exist as a domain.
     privacy_railed: list[str] = Field(default_factory=lambda: [PRIVACY_RAILED_SLUG])
-    # Plan 11 D8: per-domain LLM/autonomy overrides. Keys are domain
-    # slugs; values are :class:`DomainOverride` instances. Cross-field
-    # validator below enforces that every key is also in ``self.domains``
-    # (no orphan overrides for deleted domains).
+    # Plan 11 D8: per-domain LLM overrides. Keys are domain slugs;
+    # values are :class:`DomainOverride` instances. Cross-field validator
+    # below enforces that every key is also in ``self.domains`` (no
+    # orphan overrides for deleted domains). Plan 12 D1 dropped the
+    # per-domain ``autonomous_mode`` override field — autonomy is
+    # governed by :class:`AutonomousConfig` per-category flags.
     domain_overrides: dict[str, DomainOverride] = Field(default_factory=dict)
+    # Plan 12 D8 (spec §4): persistent acknowledgment of the cross-domain
+    # confirmation modal. Default ``False`` means the modal fires the
+    # next time scope crosses a privacy-railed domain (per the D7
+    # trigger: ``len(scope) >= 2 AND any(s in privacy_railed for s in
+    # scope)``). Toggling this back to ``False`` via Settings → Domains
+    # re-enables the prompt for one more firing.
+    cross_domain_warning_acknowledged: bool = Field(default=False)
 
     @field_validator("domains")
     @classmethod
