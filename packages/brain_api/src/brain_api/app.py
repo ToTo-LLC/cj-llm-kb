@@ -7,11 +7,13 @@ Tasks 10+ register the tool dispatcher.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from brain_core.config.loader import load_config
 from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
@@ -51,10 +53,29 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     token = app.state.token_override or generate_token()
     write_token_file(app.state.vault_root, token)
 
+    # Plan 11 Task 7 polish: load the live Config from
+    # ``<vault>/.brain/config.json`` and thread it through to ToolContext so
+    # mutation tools (config_set, create_domain, rename_domain,
+    # delete_domain, budget_override) can persist their changes via
+    # ``save_config``. Without this, every Plan 11 mutation dispatched via
+    # brain_web → brain_api would land on the ``ctx.config is None`` no-op
+    # branch — the toast would say "saved" but the disk write never happens.
+    #
+    # ``load_config`` uses Plan 11 D7's fallback chain
+    # (config.json → config.json.bak → ``Config()`` defaults), so first-run
+    # with no config.json on disk boots cleanly. ``vault_path`` is supplied
+    # via ``cli_overrides`` rather than the persisted blob — it's the
+    # chicken-and-egg field the loader's whitelist deliberately excludes.
+    config = load_config(
+        config_file=app.state.vault_root / ".brain" / "config.json",
+        env=os.environ,
+        cli_overrides={"vault_path": app.state.vault_root},
+    )
     ctx = build_app_context(
         vault_root=app.state.vault_root,
         allowed_domains=app.state.allowed_domains,
         token=token,
+        config=config,
     )
     app.state.ctx = ctx
 

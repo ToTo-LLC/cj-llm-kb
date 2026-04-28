@@ -20,6 +20,7 @@ from pathlib import Path
 
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.retrieval import BM25VaultIndex
+from brain_core.config.schema import Config
 from brain_core.cost.ledger import CostLedger
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.llm.provider import LLMProvider
@@ -61,6 +62,7 @@ def build_app_context(
     *,
     llm: LLMProvider | None = None,
     token: str | None = None,
+    config: Config | None = None,
 ) -> AppContext:
     """Build a fresh AppContext wired to all brain_core primitives.
 
@@ -74,6 +76,19 @@ def build_app_context(
         allowed_domains: Tuple of domain names this app may access.
         llm: Optional LLMProvider override. Defaults to FakeLLMProvider().
         token: Optional app-secret token (Task 7 populates in production).
+        config: Optional Config to thread through to ``ToolContext.config``.
+            Plan 11 mutation tools (config_set, create_domain, rename_domain,
+            delete_domain, budget_override) read this to persist changes via
+            :func:`save_config`; when ``None`` they short-circuit on a
+            "no-config attached" branch and skip the disk write. Production
+            callers (the lifespan in :mod:`brain_api.app`) MUST pass a real
+            :class:`Config` loaded via :func:`load_config`. Tests that don't
+            care about persistence may leave it ``None``.
+
+            The Config instance is stored by reference on
+            ``ctx.tool_ctx.config`` — no ``model_copy`` — so in-place
+            mutations made by mutation tools are visible to subsequent
+            reads within the same process (read-after-write contract).
 
     Returns:
         A fully-wired AppContext with an embedded ToolContext.
@@ -99,6 +114,7 @@ def build_app_context(
         cost_ledger=cost_ledger,
         rate_limiter=rate_limiter,
         undo_log=undo_log,
+        config=config,
     )
     # Build the name → module index once, up front. Task 10 dispatcher reads it
     # via ``ctx.tool_by_name[name]``; this also eliminates the O(n) scan that

@@ -315,12 +315,22 @@ def test_brain_config_get(api: ApiClient) -> None:
 
 
 def test_brain_config_set(api: ApiClient) -> None:
-    """brain_config_set reports ``persisted=False`` — Plan 07 lands persistence."""
+    """brain_config_set persists through brain_api.
+
+    Plan 11 Task 7 polish: brain_api's lifespan now loads Config via
+    ``load_config`` and threads it to the embedded ToolContext, so a
+    persisted-key write actually round-trips to ``<vault>/.brain/config.json``
+    (Plan 11 Task 4 already wrote ``ctx.config is None``-aware mutation
+    tools; the missing wire was the AppContext config field, not the tool
+    body). Before that fix, this assertion was ``persisted=False`` — that
+    was the BUG, not the contract: every Settings save toast lied about
+    success because the disk write was silently skipped.
+    """
     r = api.call("brain_config_set", {"key": "log_llm_payloads", "value": True})
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     assert data["status"] == "updated"
-    assert data["persisted"] is False
+    assert data["persisted"] is True
 
 
 # ---------------------------------------------------------------------------
