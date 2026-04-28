@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  brain · Cross-domain confirmation modal · State 1 initial trigger
+  Plan 12 Task 7 (D9 microcopy + interaction-state mocks)
+
+  Light theme; uses the brand-skin tokens documented in
+  docs/design/CJ Knowledge LLM v4/styles/brand-skin.css:
+    surface-0 paper      #F3EFE4   (page)
+    surface-1 bone       #FFFDF6   (chrome / dialog body)
+    surface-2 paper-3    #FBF8F0   (cards / tool-calls)
+    surface-3 paper-2    #EDE8DB   (hover / inputs)
+    hairline             rgba(17,17,17,0.09)
+    hairline-strong      rgba(17,17,17,0.20)
+    text   ink           #111111
+    text-muted graphite  #3A3A38
+    text-dim   pencil    #6F6E68
+    brand-ember          #C64B2E   (primary action, accent)
+    brand-sky            #6A8CAA   (research dot)
+    dom-personal         #C64B2E   (personal dot, also ember)
+    dom-personal-soft    rgba(198,75,46,0.10)
+
+  Concrete scope used for substitution: [research, personal].
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1280" height="800" viewBox="0 0 1280 800"
+     font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif">
+
+  <defs>
+    <!-- Soft drop shadow for the dialog -->
+    <filter id="dialogShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14"/>
+      <feOffset dx="0" dy="8" result="offsetblur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.18"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <!-- Italic serif placeholder for composer prompt (fallback to system serif) -->
+    <style>
+      .wm    { font-family: "EB Garamond", Georgia, serif; font-style: italic; font-weight: 500; }
+      .mono  { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+      .micro { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+    </style>
+  </defs>
+
+  <!-- ============================================================
+       Background page (surface-0 paper)
+       ============================================================ -->
+  <rect x="0" y="0" width="1280" height="800" fill="#F3EFE4"/>
+
+  <!-- ============================================================
+       Backdrop: chat screen behind the modal, dimmed
+       Drawn at full opacity, then a translucent ink wash on top.
+       ============================================================ -->
+  <g opacity="1">
+    <!-- Topbar -->
+    <rect x="0" y="0" width="1280" height="48" fill="#FFFDF6"/>
+    <line x1="0" y1="48" x2="1280" y2="48" stroke="rgba(17,17,17,0.20)"/>
+    <!-- brand mark -->
+    <circle cx="22" cy="24" r="9" fill="none" stroke="#111" stroke-width="1.5"/>
+    <circle cx="32" cy="24" r="3.5" fill="#C64B2E"/>
+    <text x="50" y="30" font-size="20" fill="#111" class="wm">brain<tspan fill="#C64B2E" font-weight="600">.</tspan></text>
+    <text x="118" y="29" font-size="9" fill="#6F6E68" class="mono" letter-spacing="2">V0.1.0</text>
+    <!-- top-right cluster -->
+    <rect x="900" y="10" width="190" height="28" rx="3" fill="none" stroke="rgba(17,17,17,0.20)"/>
+    <text x="912" y="29" font-size="11" fill="#3A3A38" class="mono">research + personal</text>
+    <rect x="1100" y="10" width="120" height="28" rx="3" fill="none" stroke="rgba(17,17,17,0.20)"/>
+    <text x="1112" y="29" font-size="11" fill="#3A3A38" class="mono">$0.42 · today</text>
+    <circle cx="1248" cy="24" r="9" fill="none" stroke="rgba(17,17,17,0.20)"/>
+
+    <!-- Left nav rail -->
+    <rect x="0" y="48" width="220" height="752" fill="#FFFDF6"/>
+    <line x1="220" y1="48" x2="220" y2="800" stroke="rgba(17,17,17,0.20)"/>
+    <!-- new chat -->
+    <rect x="14" y="68" width="192" height="40" rx="6" fill="#C64B2E"/>
+    <text x="110" y="93" font-size="13" fill="#FBF8F0" font-weight="500" text-anchor="middle">+ New chat</text>
+    <!-- nav sections -->
+    <text x="20" y="138" class="micro" fill="#6F6E68">WORKSPACE</text>
+    <g font-size="13" fill="#3A3A38">
+      <text x="20" y="166">Chat</text>
+      <text x="20" y="194">Inbox</text>
+      <text x="20" y="222">Browse</text>
+      <text x="20" y="250">Pending</text>
+      <circle cx="190" cy="246" r="9" fill="#C64B2E"/>
+      <text x="190" y="250" font-size="10" fill="#FBF8F0" text-anchor="middle" font-weight="600">3</text>
+      <text x="20" y="278">Bulk import</text>
+      <text x="20" y="306">Settings</text>
+    </g>
+    <text x="20" y="354" class="micro" fill="#6F6E68">TODAY</text>
+    <g font-size="12" fill="#6F6E68">
+      <rect x="14" y="368" width="192" height="36" rx="3" fill="#EDE8DB"/>
+      <text x="22" y="384" fill="#111" font-size="12" font-weight="500">karpathy LLM wiki</text>
+      <text x="22" y="397" fill="#6F6E68" font-size="10" class="mono">14:22 · ASK</text>
+      <text x="22" y="430" font-size="12">retro &amp; planning</text>
+      <text x="22" y="443" fill="#6F6E68" font-size="10" class="mono">11:08 · BRAIN</text>
+    </g>
+
+    <!-- Main content: faded "new chat" composer (shows we're at chat creation) -->
+    <text x="640" y="180" font-size="42" fill="#111" text-anchor="middle" class="wm">What would you like to start with?</text>
+    <text x="640" y="215" font-size="13" fill="#6F6E68" text-anchor="middle">Pick a scope below, then write your first message.</text>
+
+    <!-- Scope chooser preview -->
+    <g transform="translate(440,260)">
+      <rect x="0" y="0" width="400" height="44" rx="3" fill="none" stroke="rgba(17,17,17,0.20)"/>
+      <text x="14" y="20" class="micro" fill="#6F6E68">SCOPE</text>
+      <!-- research chip (selected) -->
+      <g transform="translate(12,22)">
+        <rect x="0" y="0" width="86" height="20" rx="3" fill="rgba(106,140,170,0.12)" stroke="rgba(106,140,170,0.30)"/>
+        <circle cx="11" cy="10" r="4" fill="#6A8CAA"/>
+        <text x="20" y="14" font-size="11" fill="#6A8CAA" class="mono">research</text>
+        <text x="76" y="14" font-size="11" fill="#6A8CAA">×</text>
+      </g>
+      <!-- personal chip (selected) -->
+      <g transform="translate(106,22)">
+        <rect x="0" y="0" width="80" height="20" rx="3" fill="rgba(198,75,46,0.10)" stroke="rgba(198,75,46,0.30)"/>
+        <circle cx="11" cy="10" r="4" fill="#C64B2E"/>
+        <text x="20" y="14" font-size="11" fill="#C64B2E" class="mono">personal</text>
+        <text x="70" y="14" font-size="11" fill="#C64B2E">×</text>
+      </g>
+      <text x="386" y="28" font-size="11" fill="#6F6E68" text-anchor="end" class="mono">+ add</text>
+    </g>
+
+    <!-- Composer preview -->
+    <g transform="translate(220,560)">
+      <rect x="220" y="0" width="840" height="160" rx="3" fill="#FBF8F0" stroke="rgba(17,17,17,0.20)"/>
+      <text x="240" y="34" font-size="17" fill="#6F6E68" class="wm">Ask me anything across research and personal…</text>
+      <!-- pills row -->
+      <g transform="translate(240,108)" font-size="11" class="mono" fill="#3A3A38">
+        <rect x="0" y="0" width="78" height="22" rx="999" fill="none" stroke="rgba(17,17,17,0.09)"/>
+        <text x="39" y="15" text-anchor="middle">Ask</text>
+        <rect x="86" y="0" width="148" height="22" rx="999" fill="none" stroke="rgba(17,17,17,0.09)"/>
+        <text x="160" y="15" text-anchor="middle">research + personal</text>
+        <rect x="242" y="0" width="78" height="22" rx="999" fill="none" stroke="rgba(17,17,17,0.09)"/>
+        <text x="281" y="15" text-anchor="middle">2K · 200K</text>
+      </g>
+      <rect x="996" y="106" width="60" height="28" rx="2" fill="#C64B2E"/>
+      <text x="1026" y="124" font-size="12" fill="#FBF8F0" text-anchor="middle" font-weight="500">Send</text>
+    </g>
+  </g>
+
+  <!-- ============================================================
+       Backdrop dim (Radix uses ~60% black; brand-tinted ink works
+       better against paper canvas)
+       ============================================================ -->
+  <rect x="0" y="0" width="1280" height="800" fill="#111111" opacity="0.42"/>
+
+  <!-- ============================================================
+       Modal dialog (520 px max-width per Modal default)
+       Centered horizontally; slightly above vertical center.
+       ============================================================ -->
+  <g transform="translate(380,196)" filter="url(#dialogShadow)">
+    <!-- Dialog frame -->
+    <rect x="0" y="0" width="520" height="356" rx="6" fill="#FFFDF6" stroke="rgba(17,17,17,0.20)"/>
+
+    <!-- Header: eyebrow + title + (sr-only description) -->
+    <g transform="translate(28,28)">
+      <text x="0" y="0" class="micro" fill="#6F6E68">CONFIRM SCOPE</text>
+      <text x="0" y="28" font-size="20" fill="#111" font-weight="600" letter-spacing="-0.01em">
+        Including a private domain in this chat
+      </text>
+    </g>
+
+    <!-- Body copy -->
+    <g transform="translate(28,92)" font-size="14" fill="#111">
+      <!-- Para 1 -->
+      <text x="0" y="0">
+        <tspan>You picked </tspan><tspan font-weight="600">personal</tspan><tspan> alongside </tspan><tspan font-weight="600">research</tspan><tspan> for this</tspan>
+      </text>
+      <text x="0" y="20">
+        <tspan>chat&#8217;s scope. </tspan><tspan font-weight="600">personal</tspan><tspan> is kept private by default — notes</tspan>
+      </text>
+      <text x="0" y="40">
+        <tspan>there only show up when you explicitly include it, like you</tspan>
+      </text>
+      <text x="0" y="60">
+        <tspan>just did.</tspan>
+      </text>
+
+      <!-- Para 2 -->
+      <text x="0" y="98">
+        <tspan>If you&#8217;d rather keep this chat single-domain, head back and</tspan>
+      </text>
+      <text x="0" y="118">
+        <tspan>adjust the scope. Otherwise continue, and brain will treat</tspan>
+      </text>
+      <text x="0" y="138">
+        <tspan>the included private notes as in-scope for this chat. See </tspan>
+        <tspan font-weight="600" fill="#C64B2E" text-decoration="underline">BRAIN.md</tspan>
+      </text>
+      <text x="0" y="158">
+        <tspan>for how scope and privacy work in your vault.</tspan>
+      </text>
+    </g>
+
+    <!-- Footer: checkbox left, action buttons right -->
+    <line x1="0" y1="288" x2="520" y2="288" stroke="rgba(17,17,17,0.09)"/>
+    <g transform="translate(28,308)">
+      <!-- Checkbox -->
+      <rect x="0" y="0" width="14" height="14" rx="2" fill="#FFFDF6" stroke="rgba(17,17,17,0.40)"/>
+      <text x="22" y="11" font-size="13" fill="#3A3A38">Don&#8217;t show this again</text>
+      <!-- Tooltip indicator (small ? in a circle) -->
+      <circle cx="184" cy="7" r="7" fill="none" stroke="rgba(17,17,17,0.20)"/>
+      <text x="184" y="11" font-size="9" fill="#6F6E68" text-anchor="middle" font-weight="600">?</text>
+    </g>
+
+    <!-- Buttons (footer right) -->
+    <g transform="translate(280,300)">
+      <!-- Back to scope (ghost) -->
+      <rect x="0" y="0" width="116" height="32" rx="3" fill="transparent" stroke="rgba(17,17,17,0.09)"/>
+      <text x="58" y="20" font-size="13" fill="#3A3A38" text-anchor="middle">Back to scope</text>
+      <!-- Continue (primary ember) -->
+      <rect x="128" y="0" width="84" height="32" rx="3" fill="#C64B2E"/>
+      <text x="170" y="20" font-size="13" fill="#FBF8F0" font-weight="500" text-anchor="middle">Continue</text>
+    </g>
+  </g>
+
+  <!-- ============================================================
+       Annotation strip (designer notes, not part of the rendered UI)
+       ============================================================ -->
+  <g transform="translate(28,756)" font-size="11" fill="#FBF8F0">
+    <rect x="-12" y="-18" width="1224" height="34" rx="3" fill="#1C1C1B" opacity="0.92"/>
+    <text x="0" y="3" class="mono" opacity="0.75">STATE 1 / INITIAL TRIGGER</text>
+    <text x="200" y="3" opacity="0.85">scope = [research, personal] · trigger fires per D7 (≥2 domains AND ≥1 in privacy_railed)</text>
+    <text x="800" y="3" opacity="0.65">light theme · 1280×800 · max-width 520 px</text>
+  </g>
+</svg>
