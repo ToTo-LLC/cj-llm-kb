@@ -392,6 +392,21 @@ export const setPrivacyRailed = (
 ): Promise<ToolResponse<{ key: string; value: unknown }>> =>
   configSet({ key: "privacy_railed", value: list });
 
+/**
+ * Persist a new ``active_domain`` slug (Plan 12 D2 / Task 6).
+ *
+ * Self-documenting wrapper around ``configSet({key:"active_domain",
+ * value: slug})`` — the inline call works too but is less clear at
+ * the Settings UI consumer site (Plan 12 Task 8). The backend's
+ * cross-field pre-check enforces "must be in ``Config.domains``" and
+ * raises a structured validation error otherwise; Settings UI awaits
+ * + toasts on error per Plan 12 Task 8.
+ */
+export const setActiveDomain = (
+  slug: string,
+): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({ key: "active_domain", value: slug });
+
 // ---------- Plan 07 Task 4 additions (4) ----------
 
 /** Recently ingested sources (feeds the inbox). */

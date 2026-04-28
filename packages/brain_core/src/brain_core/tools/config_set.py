@@ -57,14 +57,21 @@ INPUT_SCHEMA: dict[str, Any] = {
 }
 
 _SECRET_SUBSTRINGS: frozenset[str] = frozenset({"api_key", "secret", "token", "password"})
-# Allowlist of config keys that may be set via MCP. ``active_domain`` is
-# deliberately excluded: scope is set per-session by the caller's allowed
-# domains, not by a persisted mid-session toggle. ``vault_path`` and the
-# ``llm.*`` keys are also out of scope for MCP (clients must not reroot the
+# Allowlist of config keys that may be set via MCP. Plan 12 D2 inverted the
+# Plan 07-era policy that excluded ``active_domain``: with persistent disk
+# config (Plan 11) and the Settings UI scope picker (Plan 12 Task 8) as the
+# new persistence path, ``active_domain`` is now settable here rather than
+# requiring a dedicated ``brain_set_active_domain`` tool. The cross-field
+# validator ``Config._check_active_domain_in_domains`` (Plan 10) defines the
+# "must be a member of ``Config.domains``" invariant; ``handle`` mirrors that
+# rule with an explicit pre-check before mutation so the error surfaces at
+# write time rather than the next ``load_config``. ``vault_path`` and the
+# ``llm.*`` keys remain out of scope for MCP (clients must not reroot the
 # vault or swap the model from a tool call). ``budget.daily_usd`` matches the
 # real schema field (``BudgetConfig.daily_usd``).
 _SETTABLE_KEYS: frozenset[str] = frozenset(
     {
+        "active_domain",
         "budget.daily_usd",
         "log_llm_payloads",
         # Plan 07 Task 1: per-category autonomy flags. Each maps 1:1 to a
@@ -265,6 +272,29 @@ def _apply_domain_override(config: Config, key: str, value: Any) -> None:
         del overrides[slug]
 
 
+def _check_active_domain_membership(config: Config, value: Any) -> None:
+    """Mirror ``Config._check_active_domain_in_domains`` at write time.
+
+    Plan 12 D2 inverted the Plan 07-era exclusion of ``active_domain``
+    from ``_SETTABLE_KEYS``. The Plan 10 cross-field validator on
+    Config enforces "must be in ``self.domains``", but it only fires at
+    construction time (``load_config``) — Config does NOT enable
+    ``validate_assignment``, and ``save_config`` serializes via
+    ``persisted_dict`` without re-validating. Without this pre-check, a
+    bad slug would persist silently and only fail on the next process
+    boot. Mirror the validator's error wording so the Settings UI
+    surfaces the same message regardless of which seam catches it.
+
+    The ``value`` argument intentionally accepts ``Any`` and rejects
+    anything non-string before the membership check — passing a list or
+    None would otherwise produce a misleading "not in domains" error.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"active_domain must be a string slug, got {type(value).__name__}")
+    if value not in config.domains:
+        raise ValueError(f"active_domain {value!r} is not in domains {config.domains!r}")
+
+
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     key = str(arguments["key"])
     # Plan 11 Task 7: ``domain_overrides.<slug>.<field>`` is an open-set
@@ -344,6 +374,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if is_domain_override:
             _apply_domain_override(cfg, key, value)
         else:
+            # Plan 12 D2: ``active_domain`` membership is validated here
+            # because Config's cross-field validator only fires at
+            # construction time (validate_assignment=False, persisted_dict
+            # bypasses model_validate). Without this seam an orphan slug
+            # would persist silently and only fail on the next process
+            # boot — terrible feedback latency for the Settings UI.
+            if key == "active_domain":
+                _check_active_domain_membership(cfg, value)
             parent, leaf = _resolve_parent_and_field(cfg, key)
             setattr(parent, leaf, value)
 

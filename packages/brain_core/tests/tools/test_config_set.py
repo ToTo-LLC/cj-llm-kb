@@ -34,7 +34,7 @@ def test_name() -> None:
 
 
 def test_settable_keys_match_plan_07_task_4() -> None:
-    """Allowlist is deliberately narrow; active_domain is NOT settable.
+    """Allowlist is deliberately narrow.
 
     Plan 04 baseline: ``budget.daily_usd`` + ``log_llm_payloads``.
     Plan 07 Task 1: adds the 5 ``autonomous.<category>`` flags.
@@ -45,10 +45,14 @@ def test_settable_keys_match_plan_07_task_4() -> None:
     open-set ``domain_overrides.<slug>.<field>`` wildcard is matched
     dynamically by ``_is_settable_domain_override_key`` and is NOT in
     this static set.
+    Plan 12 D2: adds ``active_domain`` (policy inversion — Settings UI
+    is the new persistence path; Plan 10's cross-field validator
+    enforces "must be in ``Config.domains``").
     """
     assert (
         frozenset(
             {
+                "active_domain",
                 "budget.daily_usd",
                 "log_llm_payloads",
                 "autonomous.ingest",
@@ -151,8 +155,7 @@ def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
     assert not unresolved, (
         "Some keys in _SETTABLE_KEYS no longer resolve to real schema "
         "fields. Add the field to Config (or document the exception in "
-        f"_KNOWN_NOT_ON_CONFIG with a justification):\n  "
-        + "\n  ".join(unresolved)
+        f"_KNOWN_NOT_ON_CONFIG with a justification):\n  " + "\n  ".join(unresolved)
     )
 
     # Sanity-check the exceptions still resolve where they're documented
@@ -216,9 +219,15 @@ async def test_refuses_secret_like_key(tmp_path: Path) -> None:
         await handle({"key": "llm.api_key", "value": "nope"}, _mk_ctx(tmp_path))
 
 
-async def test_refuses_non_allowlisted_key(tmp_path: Path) -> None:
+async def test_refuses_non_allowlisted_vault_path(tmp_path: Path) -> None:
+    """``vault_path`` is permanently non-settable via MCP — clients must
+    not reroot the vault from a tool call (see ``_SETTABLE_KEYS`` comment).
+    Was previously ``active_domain``; Plan 12 D2 added ``active_domain``
+    to the allowlist, so this test was retargeted to the next-best
+    permanently-excluded Config field.
+    """
     with pytest.raises(PermissionError, match="not settable"):
-        await handle({"key": "active_domain", "value": "research"}, _mk_ctx(tmp_path))
+        await handle({"key": "vault_path", "value": "/tmp/elsewhere"}, _mk_ctx(tmp_path))
 
 
 async def test_domain_override_keys_pass_allowlist_via_wildcard(tmp_path: Path) -> None:

@@ -60,13 +60,28 @@ async def test_config_set_settable_field(
     assert data["persisted"] is True
 
 
-async def test_config_set_refuses_active_domain(
+async def test_config_set_active_domain_now_settable(
     seeded_vault: Path, make_ctx: Callable[..., ToolContext]
 ) -> None:
-    """active_domain is no longer settable via MCP (Plan 04 Task 25)."""
+    """Plan 12 D2 / Task 6: ``active_domain`` is now settable via MCP.
+
+    Was previously rejected (Plan 04 Task 25's "scope is set per-session,
+    not via persisted toggle" rationale). Plan 12 inverted that policy
+    because Plan 11 added persistent disk config + Plan 12 Task 8 will
+    surface a Settings UI scope picker — ``brain_config_set`` is the
+    persistence path.
+
+    The conftest's default ``Config()`` ships with ``domains`` containing
+    "work" (per ``DEFAULT_DOMAINS``), so the cross-field membership
+    pre-check passes.
+    """
     ctx = make_ctx(seeded_vault, allowed_domains=("research",))
-    with pytest.raises(PermissionError, match="not settable"):
-        await set_handle({"key": "active_domain", "value": "work"}, ctx)
+    out = await set_handle({"key": "active_domain", "value": "work"}, ctx)
+    data = json.loads(out[1].text)
+    assert data["status"] == "updated"
+    assert data["key"] == "active_domain"
+    assert data["value"] == "work"
+    assert data["persisted"] is True
 
 
 async def test_config_set_refuses_secret_key(

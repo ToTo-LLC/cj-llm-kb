@@ -288,9 +288,57 @@ async def test_privacy_railed_removing_personal_load_rejects(tmp_path: Path) -> 
 
     # load_config rejects the bad on-disk file.
     with pytest.raises(pydantic.ValidationError):
-        load_config(
-            config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
-        )
+        load_config(config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={})
+
+
+async def test_active_domain_settable_round_trip(tmp_path: Path) -> None:
+    """Plan 12 D2 / Task 6: ``active_domain`` is now settable via
+    ``brain_config_set``. Round-trip via ``load_config`` proves the
+    in-memory mutation AND on-disk persistence both land cleanly.
+
+    Mirrors ``test_top_level_key_persists`` but exercises the policy
+    inversion: pre-Plan-12 this call would have raised PermissionError
+    ("not settable"); post-inversion it joins the standard persisted
+    path with the explicit cross-field membership pre-check.
+    """
+    cfg = Config(domains=["research", "personal", "work"], active_domain="research")
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    result = await handle({"key": "active_domain", "value": "work"}, ctx)
+    assert result.data is not None
+    assert result.data["persisted"] is True
+    assert cfg.active_domain == "work"
+
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert rehydrated.active_domain == "work"
+
+
+async def test_active_domain_must_be_in_domains(tmp_path: Path) -> None:
+    """Plan 12 D2: setting ``active_domain`` to a slug outside
+    ``Config.domains`` raises a structured validation error and does
+    NOT mutate live Config or write config.json.
+
+    The pre-check in ``_check_active_domain_membership`` mirrors the
+    Plan 10 ``Config._check_active_domain_in_domains`` validator's
+    error wording — Config doesn't enable ``validate_assignment`` and
+    ``persisted_dict`` bypasses ``model_validate``, so without this
+    pre-check an orphan slug would persist silently and only fail on
+    the next ``load_config``. Same single-seam pattern as
+    ``test_domain_override_rejects_orphan_slug`` above.
+    """
+    cfg = Config(domains=["research", "personal", "work"], active_domain="research")
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle({"key": "active_domain", "value": "ghost-domain"}, ctx)
+
+    # Live Config not mutated.
+    assert cfg.active_domain == "research"
+    # No config.json written — persist_config_or_revert never reached
+    # save_config because the pre-check raised before the setattr.
+    assert not (tmp_path / ".brain" / "config.json").exists()
 
 
 async def test_invalid_value_currently_persists_without_validation(tmp_path: Path) -> None:
