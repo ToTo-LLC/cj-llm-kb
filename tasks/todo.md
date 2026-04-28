@@ -43,3 +43,16 @@ Legend: ⏸ not yet written · 📝 ready for execution · 🚧 in progress · �
 - **Section-by-section** feedback within a plan (per `CLAUDE.md` plan-mode directives).
 - **Plan-by-plan** feedback at demo gates.
 - Decisions surfaced as `AskUserQuestion` with ≤4 labeled options, recommended first, per the user's preference format (NUMBER.LETTER).
+
+## Plan 12 candidate scope (forwarded from Plan 11)
+
+Items deferred from Plan 11 that are candidate scope for Plan 12+. Plan 12 itself is not yet authored.
+
+- **`resolve_autonomous_mode` consumer wiring** — Plan 11 Task 5 landed `brain_core.llm.resolve_autonomous_mode(config, domain) -> bool` per D13's resolver pattern, but no production code reads the coarse `Config.autonomous_mode` bool today (the autonomy gate at `brain_core.autonomy` reads per-category flags via `Config.autonomous.<category>`). Plan 12+ should either (a) wire `resolve_autonomous_mode` into the autonomy gate (likely needs `Config.autonomous` to grow per-domain-per-category structure), or (b) delete the resolver as dead code. Right now it's tested but unused.
+- **Per-domain budget caps** — Plan 11 D4 persists `Config.budget` as a sub-config but the cap fields are global. Per-domain caps need a separate ledger schema change.
+- **Per-domain rate limits** — `LLMConfig` has no rate-limit field today; rate limits live in the provider client.
+- **Repair-config UI** — Spec §10 mentions a "Repair config" UI screen for corrupt `config.json`. Plan 11 D7 landed the auto-fallback chain (`config.json → .bak → defaults`); the UI surface is a deeper iteration.
+- **Hot-reload of config changes across processes** — Plan 11 persists changes; downstream processes that have cached `Config` see the change on next restart only. Cross-process invalidation (e.g., brain_api notifying brain_mcp of a domain rename) is a future iteration.
+- **`validate_assignment=True` on `Config` and sub-configs** — Plan 11 Task 4 added a KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`). Enabling `validate_assignment` would catch silent bad writes at the setattr point rather than next-load. Has performance implications for hot paths; needs measurement.
+
+These are NOT a Plan 12 commitment — Plan 12 will be authored just-in-time once Plan 11 closes. They're seed items so future-Claude doesn't re-discover them from scratch.

@@ -181,3 +181,39 @@ def test_autonomous_override_none_falls_back_to_global() -> None:
 def test_autonomous_unknown_domain_returns_global() -> None:
     cfg = _mk_config(autonomous_mode=False)
     assert resolve_autonomous_mode(cfg, "this-slug-does-not-exist") is False
+
+
+# ---------------------------------------------------------------------------
+# Schema divergence pin
+# ---------------------------------------------------------------------------
+
+
+def test_llm_config_and_domain_override_field_divergence_is_intentional() -> None:
+    """The resolver's hasattr-driven merge silently drops LLMConfig fields
+    not present on DomainOverride. That's intended for ``provider`` (per
+    Plan 11 D12 — overriding the LLM provider per-domain is out of scope).
+    Any other divergence is a sign that someone added a field to LLMConfig
+    without deciding whether it should be overridable per-domain.
+
+    If this test fails, EITHER add the new field to DomainOverride (with
+    appropriate field validation) OR add it to the expected difference set
+    below with a comment explaining why it's intentionally not overridable.
+    """
+    llm_fields = set(LLMConfig.model_fields)
+    override_fields = set(DomainOverride.model_fields)
+
+    # LLMConfig has fields DomainOverride doesn't override:
+    only_on_llm_config = llm_fields - override_fields
+    assert only_on_llm_config == {"provider"}, (
+        f"Unexpected divergence: {only_on_llm_config - {'provider'}} on "
+        "LLMConfig but not DomainOverride. Either add to DomainOverride or "
+        "extend the expected set with a justification comment."
+    )
+
+    # DomainOverride has fields LLMConfig doesn't (the autonomy bool):
+    only_on_override = override_fields - llm_fields
+    assert only_on_override == {"autonomous_mode"}, (
+        f"Unexpected divergence: {only_on_override - {'autonomous_mode'}} on "
+        "DomainOverride but not LLMConfig. autonomous_mode lives on Config "
+        "itself (not LLMConfig); any other override-only field needs review."
+    )
