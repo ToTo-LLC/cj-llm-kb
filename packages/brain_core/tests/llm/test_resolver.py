@@ -1,5 +1,4 @@
-"""Tests for :func:`brain_core.llm.resolve_llm_config` /
-:func:`brain_core.llm.resolve_autonomous_mode` (Plan 11 D8).
+"""Tests for :func:`brain_core.llm.resolve_llm_config` (Plan 11 D8).
 
 Covers:
   * domain=None → global config returned unchanged
@@ -8,8 +7,11 @@ Covers:
   * full and partial overrides → field-by-field merge
   * fields on ``LLMConfig`` but NOT on ``DomainOverride`` (today:
     ``provider``) stay from the global even when an override is present
-  * ``resolve_autonomous_mode`` flips both directions (True→False,
-    False→True) when the override is set, otherwise falls back to global
+
+Plan 12 Task 2 deleted the sibling ``resolve_autonomous_mode`` resolver
+along with its dedicated test cases; the divergence-pin test below still
+covers ``LLMConfig`` vs ``DomainOverride`` field-set drift, which remains
+meaningful after the resolver removal.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from brain_core.config.schema import Config, DomainOverride, LLMConfig
-from brain_core.llm import resolve_autonomous_mode, resolve_llm_config
+from brain_core.llm import resolve_llm_config
 
 
 def _mk_config(**kwargs: Any) -> Config:
@@ -126,39 +128,6 @@ def test_override_is_not_a_mutation_of_global() -> None:
     )
     _ = resolve_llm_config(cfg, "hobby")
     assert cfg.llm.temperature == 0.2  # global untouched
-
-
-# ---------------------------------------------------------------------------
-# resolve_autonomous_mode
-# ---------------------------------------------------------------------------
-
-
-def test_autonomous_domain_none_returns_global() -> None:
-    cfg_on = _mk_config(autonomous_mode=True)
-    cfg_off = _mk_config(autonomous_mode=False)
-    assert resolve_autonomous_mode(cfg_on, None) is True
-    assert resolve_autonomous_mode(cfg_off, None) is False
-
-
-def test_autonomous_domain_without_override_returns_global() -> None:
-    cfg = _mk_config(autonomous_mode=True)
-    assert resolve_autonomous_mode(cfg, "research") is True
-
-
-def test_autonomous_override_none_falls_back_to_global() -> None:
-    """An override entry exists for the slug but ``autonomous_mode`` is
-    ``None`` (only other LLM fields are set) → global wins.
-    """
-    cfg = _mk_config(
-        autonomous_mode=True,
-        domain_overrides={"hobby": DomainOverride(temperature=0.9)},
-    )
-    assert resolve_autonomous_mode(cfg, "hobby") is True
-
-
-def test_autonomous_unknown_domain_returns_global() -> None:
-    cfg = _mk_config(autonomous_mode=False)
-    assert resolve_autonomous_mode(cfg, "this-slug-does-not-exist") is False
 
 
 # ---------------------------------------------------------------------------

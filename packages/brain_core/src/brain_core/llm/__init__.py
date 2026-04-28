@@ -4,8 +4,14 @@ Plan 11 Task 5 adds the per-domain override resolution seam (D8). All
 LLM-routing consumers in brain_core MUST pass through
 :func:`resolve_llm_config` rather than reading ``config.llm.*`` directly,
 so any future override field (provider routing, per-domain temperature,
-etc.) lands in one place. Same pattern for autonomy-mode lookups:
-:func:`resolve_autonomous_mode` is the single seam.
+etc.) lands in one place.
+
+Plan 12 Task 2 deleted the sibling ``resolve_autonomous_mode`` resolver:
+Plan 11 lesson 351 confirmed it shipped without a consumer (autonomy is
+governed by per-category flags on :class:`AutonomousConfig`, not the
+coarse ``Config.autonomous_mode`` bool). D1 chose DELETE over WIRE; if a
+future plan needs per-domain autonomy it should reintroduce the seam
+alongside its first real consumer rather than land speculative dead code.
 
 Chicken-and-egg around classify (documented per-call site too):
 ``classify_model`` is a per-domain overridable field, but classification
@@ -71,35 +77,6 @@ def resolve_llm_config(config: Config, domain: str | None) -> LLMConfig:
     return LLMConfig(**merged)
 
 
-def resolve_autonomous_mode(config: Config, domain: str | None) -> bool:
-    """Resolve the effective ``autonomous_mode`` flag for ``domain``.
-
-    Same merge rule as :func:`resolve_llm_config`: override wins when
-    set, else fall back to ``config.autonomous_mode``. Returns the
-    global when ``domain`` is ``None``, has no override entry, or has an
-    override whose ``autonomous_mode`` is ``None``.
-
-    Note: this resolver lands without a consumer in Plan 11. The
-    autonomy gate at :mod:`brain_core.autonomy` reads per-category
-    flags from ``config.autonomous.<category>`` (a different field), not
-    the coarse ``Config.autonomous_mode`` bool. Wiring this seam into
-    that gate is Plan 12+ work — landing the resolver now keeps the
-    public API of :mod:`brain_core.llm` symmetric with the LLMConfig
-    resolver and lets future consumers route through one entry point.
-    """
-    if domain is None or domain not in config.domain_overrides:
-        return config.autonomous_mode
-    override = config.domain_overrides[domain]
-    # Plan 12 D1 dropped ``DomainOverride.autonomous_mode``; this resolver
-    # is itself slated for deletion in Plan 12 Task 2 but keeps a
-    # ``getattr`` fallback so the schema-removal commit (Task 1) leaves
-    # the build green. Once Task 2 lands the function vanishes entirely.
-    override_autonomous: bool | None = getattr(override, "autonomous_mode", None)
-    if override_autonomous is None:
-        return config.autonomous_mode
-    return override_autonomous
-
-
 __all__ = [
     "LLMMessage",
     "LLMProvider",
@@ -107,6 +84,5 @@ __all__ = [
     "LLMResponse",
     "LLMStreamChunk",
     "TokenUsage",
-    "resolve_autonomous_mode",
     "resolve_llm_config",
 ]
