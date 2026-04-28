@@ -18,6 +18,7 @@ import sys
 from typing import Any
 
 from brain_core.ingest.classifier import classify
+from brain_core.llm import resolve_llm_config
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_classify"
@@ -49,10 +50,21 @@ _CLASSIFY_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
 
 
 def _classify_model_for(ctx: ToolContext) -> str:
-    """Resolve the classify model name from config, with fallback (issue #31)."""
+    """Resolve the classify model name from config, with fallback (issue #31).
+
+    Plan 11 D8: routes through :func:`resolve_llm_config` for per-domain
+    override support. Classification is the auto-detect step (its whole
+    purpose is to *determine* the domain), so we pass ``domain=None`` —
+    the global ``classify_model`` is used. Per-domain ``classify_model``
+    overrides only apply when a caller has pre-specified a domain (e.g.,
+    :mod:`brain_core.tools.ingest` with ``domain_override``).
+    """
     cfg = ctx.config
     if cfg is not None and getattr(cfg, "llm", None) is not None:
-        model = getattr(cfg.llm, "classify_model", None)
+        # domain=None → resolver returns the global llm config; this is
+        # the auto-detect path's correct semantics.
+        llm_cfg = resolve_llm_config(cfg, None)
+        model = getattr(llm_cfg, "classify_model", None)
         if model:
             return str(model)
     return _CLASSIFY_MODEL_FALLBACK

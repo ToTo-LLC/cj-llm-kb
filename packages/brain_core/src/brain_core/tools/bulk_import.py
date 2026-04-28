@@ -32,6 +32,7 @@ from typing import Any
 from brain_core.ingest.bulk import BulkImporter
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestStatus
+from brain_core.llm import resolve_llm_config
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_bulk_import"
@@ -88,6 +89,15 @@ INPUT_SCHEMA: dict[str, Any] = {
 def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
     """Construct the IngestPipeline using the same shape as brain_ingest.
 
+    Plan 11 D8: routes model selection through
+    :func:`brain_core.llm.resolve_llm_config`. Bulk import is intrinsically
+    an auto-detect flow (each file is classified individually inside
+    :class:`brain_core.ingest.bulk.BulkImporter`), and the pipeline is
+    constructed once for the whole batch — so we pass ``domain=None`` and
+    use the global llm config. Per-domain overrides for bulk import are
+    a future enhancement (would require swapping models per-item, which
+    is a larger restructure).
+
     Resolves model strings from ``ctx.config.llm`` when present, falling
     back to the hardcoded constants otherwise (issue #31). Also resolves
     the source-handler list from ``ctx.config.handlers`` so per-handler
@@ -95,19 +105,12 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
     """
     from brain_core.ingest.dispatcher import _default_handlers
 
-    cfg_llm = getattr(ctx.config, "llm", None) if ctx.config is not None else None
-    cfg_handlers = (
-        getattr(ctx.config, "handlers", None) if ctx.config is not None else None
-    )
-    classify_model = (
-        getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
-    )
-    summarize_model = (
-        getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
-    )
-    integrate_model = (
-        getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
-    )
+    cfg = ctx.config
+    cfg_llm = resolve_llm_config(cfg, None) if cfg is not None else None
+    cfg_handlers = getattr(cfg, "handlers", None) if cfg is not None else None
+    classify_model = getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
+    summarize_model = getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
+    integrate_model = getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
     handlers = _default_handlers(cfg_handlers) if cfg_handlers is not None else None
     return IngestPipeline(
         vault_root=ctx.vault_root,

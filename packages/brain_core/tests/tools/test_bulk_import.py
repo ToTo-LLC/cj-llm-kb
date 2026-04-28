@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.bulk_import import NAME, handle
@@ -56,3 +57,44 @@ async def test_refuses_large_folder_without_max_files(tmp_path: Path) -> None:
     assert result.data is not None
     assert result.data["status"] == "refused"
     assert result.data["file_count"] == 25
+
+
+def test_build_pipeline_routes_through_resolve_llm_config_with_none(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Plan 11 D8: ``_build_pipeline`` MUST route model lookup through
+    :func:`brain_core.llm.resolve_llm_config`. Bulk import is intrinsically
+    auto-detect (per-file classification inside BulkImporter), and the
+    pipeline is constructed once for the whole batch — so the resolver
+    MUST be called with ``domain=None`` and the global llm config used.
+
+    Patch the resolver to a sentinel and verify both the call args AND
+    that the constructed pipeline picked up the sentinel's models.
+    """
+    from brain_core.config.schema import Config, LLMConfig
+    from brain_core.tools.bulk_import import _build_pipeline
+
+    captured: list[tuple[Any, Any]] = []
+
+    def _sentinel(config: Any, domain: Any) -> LLMConfig:
+        captured.append((config, domain))
+        return LLMConfig(
+            classify_model="bulk-classify-SENTINEL",
+            default_model="bulk-default-SENTINEL",
+        )
+
+    monkeypatch.setattr("brain_core.tools.bulk_import.resolve_llm_config", _sentinel)
+
+    cfg = Config()
+    from dataclasses import replace
+
+    ctx = replace(_mk_ctx(tmp_path), config=cfg)
+
+    pipeline = _build_pipeline(ctx)
+
+    assert len(captured) == 1
+    # domain=None is the correct semantics for bulk import (chicken-and-egg).
+    assert captured[0][1] is None
+    assert pipeline.classify_model == "bulk-classify-SENTINEL"
+    assert pipeline.summarize_model == "bulk-default-SENTINEL"
+    assert pipeline.integrate_model == "bulk-default-SENTINEL"

@@ -249,7 +249,9 @@ def test_build_pipeline_from_ctx_uses_config_handlers() -> None:
         }
     )
     ctx = replace(base, config=cfg)
-    pipeline = _build_pipeline_from_ctx(ctx)
+    # Plan 11 D8: ``_build_pipeline_from_ctx`` now requires an explicit
+    # ``domain``. ``None`` matches the legacy auto-detect path tested here.
+    pipeline = _build_pipeline_from_ctx(ctx, domain=None)
     assert pipeline.handlers is not None, (
         "tool layer must build a handler list when config is supplied"
     )
@@ -286,5 +288,7 @@ def test_build_pipeline_from_ctx_no_config_passes_none_handlers() -> None:
         undo_log=None,
     )
     assert ctx.config is None  # sanity
-    pipeline = _build_pipeline_from_ctx(ctx)
+    # Plan 11 D8: ``_build_pipeline_from_ctx`` now requires an explicit
+    # ``domain``. ``None`` matches the legacy auto-detect path tested here.
+    pipeline = _build_pipeline_from_ctx(ctx, domain=None)
     assert pipeline.handlers is None

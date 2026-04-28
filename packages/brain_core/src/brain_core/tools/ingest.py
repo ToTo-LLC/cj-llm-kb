@@ -19,6 +19,7 @@ from typing import Any
 from brain_core.chat.types import ChatMode
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestStatus
+from brain_core.llm import resolve_llm_config
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.paths import ScopeError
 from brain_core.vault.types import PatchCategory
@@ -62,11 +63,18 @@ _INTEGRATE_MODEL_FALLBACK = "claude-sonnet-4-6"
 _CLASSIFY_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
 
 
-def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
+def _build_pipeline_from_ctx(ctx: ToolContext, *, domain: str | None) -> IngestPipeline:
     """Construct the IngestPipeline using the ctx primitives.
 
-    Resolves model strings from ``ctx.config.llm`` (LLMConfig) when present,
-    falling back to the hardcoded constants when no config is wired (issue
+    Plan 11 D8: routes model selection through
+    :func:`brain_core.llm.resolve_llm_config` so per-domain overrides
+    apply when the caller has pre-specified a domain (``domain != None``).
+    Auto-detection callers (no ``domain_override``) pass ``domain=None``
+    → resolver returns the global. This handles the chicken-and-egg
+    where ``classify_model`` is overridable but classification is what
+    determines the domain in the auto-detect path.
+
+    Falls back to the hardcoded constants when no config is wired (issue
     #31). The fallback path keeps the 56+ existing ToolContext construction
     sites that don't pass a config working unchanged.
 
@@ -76,23 +84,16 @@ def _build_pipeline_from_ctx(ctx: ToolContext) -> IngestPipeline:
     """
     from brain_core.ingest.dispatcher import _default_handlers
 
-    cfg_llm = getattr(ctx.config, "llm", None) if ctx.config is not None else None
-    cfg_handlers = (
-        getattr(ctx.config, "handlers", None) if ctx.config is not None else None
-    )
-    classify_model = (
-        getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
-    )
+    cfg = ctx.config
+    cfg_llm = resolve_llm_config(cfg, domain) if cfg is not None else None
+    cfg_handlers = getattr(cfg, "handlers", None) if cfg is not None else None
+    classify_model = getattr(cfg_llm, "classify_model", None) or _CLASSIFY_MODEL_FALLBACK
     # ``default_model`` covers both summarize and integrate today (the spec
     # treats both as Sonnet-class). When/if the schema grows separate
     # summarize_model / integrate_model fields, this is the single point to
     # update.
-    summarize_model = (
-        getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
-    )
-    integrate_model = (
-        getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
-    )
+    summarize_model = getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
+    integrate_model = getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
     # Pass the resolved handler list only when a config was supplied;
     # otherwise leave it None so the pipeline falls back to the hardcoded
     # defaults (which is what the no-config tests expect).
@@ -135,7 +136,10 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     as_path = Path(source_arg)
     spec: str | Path = as_path if as_path.is_absolute() and as_path.exists() else source_arg
 
-    pipeline = _build_pipeline_from_ctx(ctx)
+    # Plan 11 D8: pass ``domain_override`` (may be None) so the per-domain
+    # LLM-config resolver picks up overrides when the caller pre-specified
+    # a domain. ``domain=None`` is the auto-detect path → global llm config.
+    pipeline = _build_pipeline_from_ctx(ctx, domain=domain_override)
 
     result = await pipeline.ingest(
         spec,
