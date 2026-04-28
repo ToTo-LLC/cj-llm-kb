@@ -139,6 +139,18 @@ describe("PanelDomains", () => {
       kind: string;
       onConfirm: () => void;
     };
+
+    // Plan 13 Task 2: the panel reads its domain list directly off
+    // ``useDomainsStore``; after ``brainDeleteDomain`` resolves, the
+    // delete handler calls ``useDomainsStore.getState().refresh()``
+    // which re-fetches ``listDomains`` and removes the slug from the
+    // store. Override the mock to mirror the post-delete state so
+    // the panel's row count drops once the refresh resolves.
+    listDomainsMock.mockResolvedValueOnce({
+      text: "",
+      data: { domains: ["research", "personal"] },
+    });
+
     // Simulate the user typing "work" + hitting Confirm.
     await act(async () => {
       await payload.onConfirm();
@@ -149,13 +161,12 @@ describe("PanelDomains", () => {
       typed_confirm: true,
     });
     await waitFor(() => {
-      // Plan 12 Task 8: the row label is gone after delete; the
-      // active-domain dropdown's <option value="work"> may or may
-      // not still be present (the panel keeps a local domains
-      // state separate from the store; the dropdown reads the
-      // store, which only updates after the next refresh). Scope
-      // the assertion to non-option matches so this test pins the
-      // per-row removal regardless of when the store refreshes.
+      // Plan 13 Task 2: the row label is gone after delete because
+      // the store re-fetched and broadcast the new list. Scope the
+      // assertion to non-option matches so we ignore the
+      // active-domain dropdown's stale ``<option>`` (which the test
+      // mock's ``configGet``/``setActiveDomain`` plumbing doesn't
+      // bother to re-hydrate).
       expect(screen.queryByText("work", { ignore: "option" })).not.toBeInTheDocument();
     });
   });

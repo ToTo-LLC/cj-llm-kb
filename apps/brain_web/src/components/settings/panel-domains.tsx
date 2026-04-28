@@ -17,12 +17,11 @@ import {
   DomainOverrideForm,
   type DomainOverrideValues,
 } from "@/components/settings/domain-override-form";
-import { invalidateDomainsCache } from "@/lib/hooks/use-domains";
+import { useDomains } from "@/lib/hooks/use-domains";
 import { useDomainsStore } from "@/lib/state/domains-store";
 import {
   brainDeleteDomain,
   configGet,
-  listDomains,
   setActiveDomain,
   setCrossDomainWarningAcknowledged,
   setPrivacyRailed,
@@ -31,14 +30,19 @@ import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
 /**
- * PanelDomains (Plan 07 Task 22 → Plan 10 Task 6 → Plan 11 Task 7).
+ * PanelDomains (Plan 07 Task 22 → Plan 10 Task 6 → Plan 11 Task 7 →
+ * Plan 13 Task 2).
  *
- * - List renders from ``listDomains``. Each row shows a colour swatch,
- *   the slug, a privacy-rail checkbox, and an expand caret. Rename
- *   opens the existing RenameDomainDialog via dialogs-store with an
- *   ``onRenamed`` callback so the list refreshes after a successful
- *   rename. Delete opens TypedConfirmDialog and on confirm calls
- *   ``brain_delete_domain``.
+ * - List renders from the zustand ``useDomainsStore`` (Plan 12 Task 5)
+ *   via the ``useDomains()`` selector. Plan 13 Task 2 dropped the
+ *   parallel local ``domains: string[]`` state that previously
+ *   hydrated from a separate ``listDomains()`` call: single source of
+ *   truth, peer-consumer pubsub, no drift. Each row shows a colour
+ *   swatch, the slug, a privacy-rail checkbox, and an expand caret.
+ *   Rename opens the existing RenameDomainDialog via dialogs-store
+ *   with an ``onRenamed`` callback so the list refreshes after a
+ *   successful rename. Delete opens TypedConfirmDialog and on confirm
+ *   calls ``brain_delete_domain``.
  *
  * - Personal's privacy-rail checkbox is ``disabled`` AND ``checked``
  *   with a tooltip "personal is required and cannot be un-railed" per
@@ -347,26 +351,36 @@ export function PanelDomains(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
   const openDialog = useDialogsStore((s) => s.open);
 
-  const [domains, setDomains] = React.useState<string[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  // Plan 13 Task 2 (D2): single source of truth for the domain list is
+  // the zustand store. Plan 12 Task 5 promoted ``useDomains()`` to a
+  // store-backed selector; this panel now reads through that selector
+  // instead of maintaining a parallel ``domains: string[]`` local
+  // state hydrated from a separate ``listDomains()`` call. The two
+  // read paths previously landed at the same backend so they stayed
+  // coincidentally aligned, but the seam was drift-prone (see Plan 12
+  // Task 5 + Task 8 reviews and ``tasks/lessons.md``).
+  const { domains: domainEntries, loading: domainsLoading } = useDomains();
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const [overrides, setOverrides] = React.useState<
     Record<string, DomainOverrideValues>
   >({});
   const [railed, setRailed] = React.useState<string[]>(["personal"]);
+  // ``railedLoading`` gates the loading shimmer alongside the store's
+  // own ``domainsLoading``. Combined the panel renders the shimmer
+  // until both fetches resolve once.
+  const [railedLoading, setRailedLoading] = React.useState(true);
 
   const refresh = React.useCallback(async () => {
-    // Plan 10 Task 7: blow the module-level cache so other live
-    // surfaces (topbar scope picker, Browse file tree) re-fetch on
-    // their next mount. The list call below populates a fresh cache
-    // for the panel itself.
-    invalidateDomainsCache();
+    // Plan 13 Task 2: domains-list refresh routes through the zustand
+    // store so every peer consumer (topbar scope chip, browse,
+    // active-domain dropdown, etc.) re-renders with the new list
+    // without a remount. Privacy-rail still goes through configGet —
+    // it isn't part of the store's scope.
     try {
-      const [domainsRes, railList] = await Promise.all([
-        listDomains(),
+      const [, railList] = await Promise.all([
+        useDomainsStore.getState().refresh(),
         readPrivacyRailed(),
       ]);
-      setDomains(domainsRes.data?.domains ?? []);
       setRailed(railList);
     } catch {
       pushToast({
@@ -375,13 +389,18 @@ export function PanelDomains(): React.ReactElement {
         variant: "danger",
       });
     } finally {
-      setLoading(false);
+      setRailedLoading(false);
     }
   }, [pushToast]);
 
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Render the placeholder until both the store-backed domains list
+  // AND the privacy-rail fetch have resolved at least once. Either
+  // alone leaves a partial UI that flashes incorrect state.
+  const loading = domainsLoading || railedLoading;
 
   /** Re-fetch the override values for a single slug — used after each
    *  ``DomainOverrideForm`` save so the form re-hydrates from the
@@ -428,7 +447,11 @@ export function PanelDomains(): React.ReactElement {
     setRailed(next);
     try {
       await setPrivacyRailed(next);
-      invalidateDomainsCache();
+      // Plan 13 Task 2: privacy-rail mutations don't change the
+      // domain list itself but downstream surfaces (e.g. browse) do
+      // re-render off the store; trigger a refresh so any cached
+      // configured/on-disk flags re-fetch.
+      void useDomainsStore.getState().refresh();
       pushToast({
         lead: checked ? "Privacy-rail on." : "Privacy-rail off.",
         msg: `${slug} ${checked ? "added to" : "removed from"} privacy rail.`,
@@ -480,10 +503,15 @@ export function PanelDomains(): React.ReactElement {
             setRailed(newRail);
           }
           const res = await brainDeleteDomain({ slug, typed_confirm: true });
-          // Plan 10 Task 7: invalidate the cache so the topbar +
-          // browse pick up the deletion on their next read.
-          invalidateDomainsCache();
-          setDomains((prev) => prev.filter((s) => s !== slug));
+          // Plan 13 Task 2: route through the zustand store so every
+          // peer consumer (topbar scope chip, browse, active-domain
+          // dropdown, etc.) re-renders with the new list. The store
+          // refresh re-fetches ``brain_list_domains`` once and
+          // broadcasts to every subscriber — including this panel
+          // (which now reads ``domains`` off the store via
+          // ``useDomains()``) so the deleted row falls out of the
+          // rendered list automatically.
+          void useDomainsStore.getState().refresh();
           // Drop any stale override state for the deleted slug.
           setOverrides((prev) => {
             const { [slug]: _omit, ...rest } = prev;
@@ -542,7 +570,8 @@ export function PanelDomains(): React.ReactElement {
               className="flex flex-col gap-1 rounded-md border border-[var(--hairline)] bg-[var(--surface-1)]"
               role="list"
             >
-              {domains.map((slug, idx) => {
+              {domainEntries.map((entry, idx) => {
+                const slug = entry.slug;
                 const protectedDomain = PROTECTED_DOMAINS.has(slug);
                 const builtinAccent = BUILTIN_DOMAIN_ACCENT[slug];
                 const accent =
@@ -555,6 +584,7 @@ export function PanelDomains(): React.ReactElement {
                 return (
                   <li
                     key={slug}
+                    data-testid="domain-row"
                     className="flex flex-col border-b border-[var(--hairline)] last:border-0"
                   >
                     <div className="flex items-center gap-3 px-3 py-2">
