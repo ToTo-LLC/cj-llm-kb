@@ -78,11 +78,15 @@ beforeEach(() => {
 describe("PanelDomains", () => {
   test("renders the domain list from listDomains", async () => {
     render(<PanelDomains />);
+    // Plan 12 Task 8 added an <ActiveDomainSelector /> above the list,
+    // so the slugs now appear inside both the per-row labels AND
+    // <option> elements. Scope to non-option matches with the testing-
+    // library ``ignore`` option so we assert on the row labels only.
     await waitFor(() => {
-      expect(screen.getByText("research")).toBeInTheDocument();
+      expect(screen.getByText("research", { ignore: "option" })).toBeInTheDocument();
     });
-    expect(screen.getByText("work")).toBeInTheDocument();
-    expect(screen.getByText("personal")).toBeInTheDocument();
+    expect(screen.getByText("work", { ignore: "option" })).toBeInTheDocument();
+    expect(screen.getByText("personal", { ignore: "option" })).toBeInTheDocument();
   });
 
   test("add form calls createDomain with name + slug + accent_color", async () => {
@@ -145,7 +149,14 @@ describe("PanelDomains", () => {
       typed_confirm: true,
     });
     await waitFor(() => {
-      expect(screen.queryByText("work")).not.toBeInTheDocument();
+      // Plan 12 Task 8: the row label is gone after delete; the
+      // active-domain dropdown's <option value="work"> may or may
+      // not still be present (the panel keeps a local domains
+      // state separate from the store; the dropdown reads the
+      // store, which only updates after the next refresh). Scope
+      // the assertion to non-option matches so this test pins the
+      // per-row removal regardless of when the store refreshes.
+      expect(screen.queryByText("work", { ignore: "option" })).not.toBeInTheDocument();
     });
   });
 
