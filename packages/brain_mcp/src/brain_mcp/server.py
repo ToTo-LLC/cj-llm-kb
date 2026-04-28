@@ -7,12 +7,14 @@ one list_tools / call_tool pair.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 import mcp.types as types
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.retrieval import BM25VaultIndex
+from brain_core.config.loader import load_config
 from brain_core.cost.ledger import CostLedger
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.state.db import StateDB
@@ -134,21 +136,49 @@ def create_server(
     # and bound to one (vault_root, allowed_domains) tuple closed over at
     # create_server() time, so the ToolContext (notably its BM25 index) is safe
     # to reuse instead of rebuilding on every tool call.
-    # TODO(Task 21): invalidate cache after writes when real config wiring lands.
+    #
+    # Plan 12 Task 4: Config is now loaded once in ``_build_ctx`` and stashed
+    # by reference on ``ctx.config``. Plan 11 mutation tools mutate this
+    # instance in place (no model_copy in the dispatch path) so subsequent
+    # reads via ``ctx.config`` see the updated values within the same session
+    # — read-after-write contract preserved without cache invalidation. This
+    # is symmetric to brain_api's ``build_app_context``, where the same Config
+    # reference is shared across the app lifespan.
     _cached_ctx: ToolContext | None = None
 
     def _build_ctx() -> ToolContext:
         """Return the session's ToolContext, building it lazily on first use.
 
-        Task 21 replaces this with a real builder that reads config from env;
-        for now, wires everything from the vault_root + allowed_domains closed
-        over at create_server() time.
+        Plan 12 Task 4 (mirrors Plan 11 Task 7's brain_api fix): load the live
+        Config from ``<vault>/.brain/config.json`` and thread it through to
+        ``ToolContext.config`` so Plan 11 mutation tools (config_set,
+        create_domain, rename_domain, delete_domain, budget_override) can
+        persist their changes via :func:`save_config`. Without this, every
+        Plan 11 mutation dispatched via Claude Desktop → brain_mcp would land
+        on the ``ctx.config is None`` no-op branch — the tool would report
+        "saved" but the disk write would never happen.
+
+        ``load_config`` uses Plan 11 D7's fallback chain
+        (config.json → config.json.bak → ``Config()`` defaults), so first-run
+        with no config.json on disk boots cleanly. ``vault_path`` is supplied
+        via ``cli_overrides`` rather than the persisted blob — it's the
+        chicken-and-egg field the loader's whitelist deliberately excludes.
+
+        The lazy ``_cached_ctx`` singleton means the load happens once per
+        server lifetime — that matches the brain_api eager-on-startup pattern
+        in spirit (one load per process), just deferred to first tool call so
+        a session that never invokes a tool pays nothing.
         """
         nonlocal _cached_ctx
         if _cached_ctx is not None:
             return _cached_ctx
         brain_dir = vault_root / ".brain"
         brain_dir.mkdir(parents=True, exist_ok=True)
+        config = load_config(
+            config_file=brain_dir / "config.json",
+            env=os.environ,
+            cli_overrides={"vault_path": vault_root},
+        )
         db = StateDB.open(brain_dir / "state.sqlite")
         writer = VaultWriter(vault_root=vault_root)
         pending = PendingPatchStore(brain_dir / "pending")
@@ -165,6 +195,7 @@ def create_server(
             cost_ledger=CostLedger(db_path=brain_dir / "costs.sqlite"),
             rate_limiter=RateLimiter(RateLimitConfig()),
             undo_log=UndoLog(vault_root=vault_root),
+            config=config,
         )
         return _cached_ctx
 
