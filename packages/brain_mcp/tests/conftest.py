@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.retrieval import BM25VaultIndex
+from brain_core.config.schema import Config
 from brain_core.cost.ledger import CostLedger
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.state.db import StateDB
@@ -119,6 +120,11 @@ def make_tool_context(
     undo = UndoLog(vault_root=vault)
     ledger = CostLedger(db_path=brain_dir / "costs.sqlite")
     limiter = RateLimiter(RateLimitConfig(patches_per_minute=1000, tokens_per_minute=1_000_000))
+    # Plan 12 Task 3: brain_config_get / brain_list_domains and other read
+    # tools now read live ``ctx.config`` and raise ``RuntimeError`` if it's
+    # ``None``. Wire a default ``Config()`` here so the conftest stays a
+    # production-shape fixture rather than triggering the lifecycle-violation
+    # raise on every direct-tool test that doesn't care about Config.
     return ToolContext(
         vault_root=vault,
         allowed_domains=allowed_domains,
@@ -130,6 +136,7 @@ def make_tool_context(
         cost_ledger=ledger,
         rate_limiter=limiter,
         undo_log=undo,
+        config=Config(),
     )
 
 

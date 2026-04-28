@@ -44,13 +44,20 @@ async def test_config_set_settable_field(
     active_domain was removed from the allowlist — mid-session scope changes
     are dodgy; scope is set per-session via allowed_domains, not via config.
     budget.daily_cap_usd was renamed to budget.daily_usd to match
-    BudgetConfig.daily_usd."""
+    BudgetConfig.daily_usd.
+
+    Plan 12 Task 3 update: the conftest fixture now wires a default
+    ``Config()`` into ToolContext (so ``brain_config_get`` doesn't raise on
+    the lifecycle-violation path), which means ``brain_config_set``
+    actually persists — flipping ``persisted`` from False to True. This
+    matches the brain_api production path post-Plan 11 Task 7.
+    """
     ctx = make_ctx(seeded_vault, allowed_domains=("research",))
     out = await set_handle({"key": "budget.daily_usd", "value": 10.0}, ctx)
     data = json.loads(out[1].text)
     assert data["status"] == "updated"
     assert data["key"] == "budget.daily_usd"
-    assert data["persisted"] is False
+    assert data["persisted"] is True
 
 
 async def test_config_set_refuses_active_domain(
