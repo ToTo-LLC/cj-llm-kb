@@ -2,142 +2,87 @@
 
 import * as React from "react";
 
-import { listDomains } from "@/lib/api/tools";
-import { ACCENT_SWATCHES } from "@/components/settings/domain-form";
+import {
+  useDomainsStore,
+  humaniseDomain as _humaniseDomain,
+  type DomainEntry as _DomainEntry,
+} from "@/lib/state/domains-store";
 
 /**
- * useDomains (Plan 10 Task 7).
+ * useDomains (Plan 10 Task 7 → Plan 12 Task 5).
  *
- * Module-level singleton cache around the ``brain_list_domains`` tool
- * so the topbar scope picker, the Browse file tree, and any future
- * settings views all share one fetch per session. Subsequent mounts
- * resolve immediately from the in-memory cache; an explicit
- * ``refresh()`` (or ``invalidateDomainsCache()`` for module-scope
- * invalidation) re-issues the call after a mutation
- * (``brain_create_domain`` / ``brain_rename_domain`` /
- * ``brain_delete_domain``).
+ * Selector over ``useDomainsStore`` (see ``lib/state/domains-store.ts``)
+ * around the ``brain_list_domains`` tool. Every consumer (topbar
+ * scope picker, browse file tree, settings panel, setup wizard,
+ * future active-domain dropdown) shares the same canonical store —
+ * one consumer mutates, all peers re-render.
+ *
+ * Pre-Plan-12 the cache lived in module state and each hook instance
+ * held its own React state, so panel-side mutations + ``invalidate
+ * DomainsCache()`` only re-fetched on the next mount of each peer
+ * (cross-instance divergence). The Plan 12 zustand promotion fixes
+ * this by routing every read through one store.
+ *
+ * Public API preserved for back-compat:
+ *
+ *   - ``useDomains()`` returns ``{domains, activeDomain, loading,
+ *     error, refresh}``. Same shape as Plan 10 / Plan 11.
+ *   - ``invalidateDomainsCache()`` is a thin alias for
+ *     ``useDomainsStore.getState().refresh()`` so existing call sites
+ *     in panel-domains.tsx work unchanged. Marked deprecated; new
+ *     code should call ``refresh()`` (or
+ *     ``useDomainsStore.getState().refresh()``) directly.
+ *   - ``humaniseDomain`` re-exported from the store module.
+ *   - ``_setDomainsCacheForTesting`` retained as a test seam routed
+ *     through the store's ``_resetForTesting`` action.
  *
  * The domain list returned here is the *union* of ``Config.domains``
- * + on-disk slugs (matching ``brain_list_domains``'s response). The
- * UI cares about the union: a configured-but-empty domain should
- * still surface so the user can ingest into it; a discovered-on-
- * disk domain that's not configured shows up with a hint so the
- * user can either add it to Config.domains or move the data.
+ * + on-disk slugs (matching ``brain_list_domains``'s response).
  */
 
-export interface DomainEntry {
-  slug: string;
-  /** Humanised name for chrome — Title Case with separators replaced. */
-  label: string;
-  /** CSS color value — built-ins use a ``--dom-{slug}`` variable, user-
-   *  added domains rotate through ``ACCENT_SWATCHES``. */
-  accent: string;
-  /** Listed in ``Config.domains``. */
-  configured: boolean;
-  /** A folder by this slug exists at the vault root. */
-  on_disk: boolean;
-}
+// Re-export the type so existing imports (``import type { DomainEntry }
+// from "@/lib/hooks/use-domains"``) keep working. Tests + components
+// alike read the alias from this module.
+export type DomainEntry = _DomainEntry;
 
-const BUILTIN_SLUGS = new Set(["research", "work", "personal"]);
+export const humaniseDomain = _humaniseDomain;
 
-export function humaniseDomain(slug: string): string {
-  // Title-Case + replace `-`/`_` with spaces. Mirrors what the
-  // settings panel already does inline so labels are stable across
-  // surfaces.
-  return slug
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part[0]!.toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function accentFor(slug: string, userIndex: number): string {
-  if (BUILTIN_SLUGS.has(slug)) {
-    return `var(--dom-${slug})`;
-  }
-  return ACCENT_SWATCHES[userIndex % ACCENT_SWATCHES.length] ?? "#6A8CAA";
-}
-
-interface RawListDomainsEntry {
-  slug: string;
-  configured: boolean;
-  on_disk: boolean;
-}
-
-interface DomainsPayload {
-  entries: DomainEntry[];
-  /** ``Config.active_domain`` from the backend (Plan 11 Task 6). Empty
-   *  string when the backend pre-dates Task 6 — callers must guard. */
-  activeDomain: string;
-}
-
-function payloadFromResponse(
-  data:
-    | {
-        domains?: string[];
-        entries?: RawListDomainsEntry[];
-        active_domain?: string;
-      }
-    | null
-    | undefined,
-): DomainsPayload {
-  if (!data) return { entries: [], activeDomain: "" };
-  // Prefer the new ``entries`` array (Plan 10 Task 5) so we get the
-  // configured/on_disk flags. Fall back to the legacy ``domains``
-  // string-list if the backend is older — assumes both flags True.
-  const raw: RawListDomainsEntry[] =
-    data.entries && Array.isArray(data.entries)
-      ? data.entries
-      : (data.domains ?? []).map((slug) => ({
-          slug,
-          configured: true,
-          on_disk: true,
-        }));
-
-  let userIdx = 0;
-  const entries = raw.map((r) => {
-    const isBuiltin = BUILTIN_SLUGS.has(r.slug);
-    const accent = accentFor(r.slug, isBuiltin ? 0 : userIdx);
-    if (!isBuiltin) userIdx += 1;
-    return {
-      slug: r.slug,
-      label: humaniseDomain(r.slug),
-      accent,
-      configured: r.configured,
-      on_disk: r.on_disk,
-    };
-  });
-  return { entries, activeDomain: data.active_domain ?? "" };
-}
-
-let cachedPromise: Promise<DomainsPayload> | null = null;
-
-function fetchDomains(): Promise<DomainsPayload> {
-  if (cachedPromise) return cachedPromise;
-  cachedPromise = listDomains()
-    .then((r) => payloadFromResponse(r.data ?? null))
-    .catch((err: unknown) => {
-      // Drop the failed promise so the next subscriber retries.
-      cachedPromise = null;
-      throw err;
-    });
-  return cachedPromise;
-}
-
-/** Invalidate the module-level cache so the next call re-fetches.
- *  Use this after ``brain_create_domain`` / ``brain_rename_domain``
- *  / ``brain_delete_domain`` so other surfaces see the change. */
+/**
+ * @deprecated Plan 12 Task 5 — call
+ * ``useDomainsStore.getState().refresh()`` directly. This alias
+ * remains so existing call sites (panel-domains.tsx mutation helpers)
+ * keep working without churn; remove once all callers migrate.
+ */
 export function invalidateDomainsCache(): void {
-  cachedPromise = null;
+  // Fire-and-forget — same semantics as the pre-Plan-12 helper. The
+  // returned Promise from ``refresh()`` is intentionally dropped so
+  // callers in event handlers (panel-domains.tsx) don't need to
+  // ``await`` it. The store's in-flight Promise cache prevents
+  // duplicate fetches if multiple mutations land in the same tick.
+  void useDomainsStore.getState().refresh();
 }
 
-/** Reset the cache to the given entries. Used by tests. */
+/** Reset the store to its initial state. Used by tests. */
 export function _setDomainsCacheForTesting(
   entries: DomainEntry[] | null,
   activeDomain = "",
 ): void {
-  cachedPromise =
-    entries === null ? null : Promise.resolve({ entries, activeDomain });
+  if (entries === null) {
+    useDomainsStore.getState()._resetForTesting();
+    return;
+  }
+  // Tests that pre-seed the cache need ``domainsLoaded=true`` so the
+  // first-mount auto-refresh in ``useDomains()`` skips the fetch.
+  // Setting state directly here (rather than going through
+  // ``refresh()``) keeps the test deterministic — no listDomains
+  // mock interaction required for tests that just want a known
+  // starting point.
+  useDomainsStore.setState({
+    domains: entries,
+    activeDomain,
+    domainsLoaded: true,
+    error: null,
+  });
 }
 
 export interface UseDomainsResult {
@@ -152,43 +97,43 @@ export interface UseDomainsResult {
   activeDomain: string;
   loading: boolean;
   error: Error | null;
-  /** Force-refetch (also invalidates the module cache so peers re-read). */
+  /** Force-refetch. Plan 12 Task 5: now equivalent to
+   *  ``useDomainsStore.getState().refresh()`` — every peer consumer
+   *  re-renders with the new data automatically. */
   refresh: () => void;
 }
 
 export function useDomains(): UseDomainsResult {
-  const [domains, setDomains] = React.useState<DomainEntry[]>([]);
-  const [activeDomain, setActiveDomain] = React.useState<string>("");
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<Error | null>(null);
-  // Bumping ``tick`` forces a re-fetch by triggering the effect
-  // below. Used by ``refresh()``.
-  const [tick, setTick] = React.useState(0);
+  const domains = useDomainsStore((s) => s.domains);
+  const activeDomain = useDomainsStore((s) => s.activeDomain);
+  const domainsLoaded = useDomainsStore((s) => s.domainsLoaded);
+  const error = useDomainsStore((s) => s.error);
 
+  // First-mount auto-refresh for cold caches. The store's in-flight
+  // Promise cache means concurrent first-mounts (e.g., topbar +
+  // browse mounting in the same render tree) only trigger one fetch.
+  // Re-runs only when ``domainsLoaded`` flips false → true (first
+  // hydration) or back to false (after ``_resetForTesting``).
   React.useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetchDomains()
-      .then((payload) => {
-        if (cancelled) return;
-        setDomains(payload.entries);
-        setActiveDomain(payload.activeDomain);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err : new Error(String(err)));
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tick]);
+    if (!domainsLoaded) {
+      void useDomainsStore.getState().refresh();
+    }
+  }, [domainsLoaded]);
 
+  // ``loading`` is derived: still loading whenever the store hasn't
+  // hydrated yet AND there's no error. Once hydrated, subsequent
+  // refreshes don't flip back to ``loading`` — the existing data
+  // stays visible while the new fetch lands (matches the old hook's
+  // behaviour after first mount).
+  const loading = !domainsLoaded && error === null;
+
+  // ``refresh`` is stable per render — store actions are stable, and
+  // we just project the store's action through. Wrapping in
+  // ``React.useCallback`` keeps the returned reference stable across
+  // re-renders so callers can put it in dep lists without causing
+  // effect-loop churn.
   const refresh = React.useCallback(() => {
-    invalidateDomainsCache();
-    setTick((t) => t + 1);
+    void useDomainsStore.getState().refresh();
   }, []);
 
   return { domains, activeDomain, loading, error, refresh };
