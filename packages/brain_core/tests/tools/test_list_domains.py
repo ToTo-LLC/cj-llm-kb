@@ -39,6 +39,10 @@ async def test_lists_non_empty_domains(tmp_path: Path) -> None:
     assert result.data is not None
     assert "research" in result.data["domains"]
     assert "personal" in result.data["domains"]
+    # Plan 11 Task 6: response carries ``active_domain`` so the frontend
+    # can hydrate scope on first mount. With ctx.config=None this falls
+    # back to DEFAULT_DOMAINS[0] (== "research").
+    assert result.data["active_domain"] == "research"
 
 
 async def test_returns_union_with_configured_and_on_disk_flags(tmp_path: Path) -> None:
@@ -80,3 +84,6 @@ async def test_returns_union_with_configured_and_on_disk_flags(tmp_path: Path) -
     assert by_slug["work"] == {"slug": "work", "configured": True, "on_disk": False}
     assert by_slug["personal"] == {"slug": "personal", "configured": True, "on_disk": False}
     assert by_slug["imported"] == {"slug": "imported", "configured": False, "on_disk": True}
+    # Plan 11 Task 6: with a real Config wired in, active_domain is read
+    # live. Default Config(domains=[...]) keeps active_domain="research".
+    assert result.data["active_domain"] == "research"

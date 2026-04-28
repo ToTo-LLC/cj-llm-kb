@@ -8,6 +8,14 @@ defaults. This tool surfaces both sides so the frontend can render the
 divergence (e.g. an "orphan" badge for on-disk-but-not-configured, or
 a "missing folder" warning for configured-but-not-on-disk).
 
+Plan 11 Task 6: response gained ``active_domain`` so the frontend
+``useDomains()`` hook can hydrate scope state on first mount without a
+second round trip (D8 in plan 11). The field is read live from
+``ctx.config.active_domain`` (Plan 11 Task 4 guarantees that any mutation
+to ``Config.active_domain`` is durable + in-process visible — rename
+follows, delete refuses if the slug is active — so the field is always
+a member of the response's ``domains`` list).
+
 Response shape (additive vs. v0.1.0 — ``data.domains`` stays
 ``list[str]`` for backward compat with existing frontend callers):
 
@@ -18,7 +26,8 @@ Response shape (additive vs. v0.1.0 — ``data.domains`` stays
         {"slug": "research",  "configured": True,  "on_disk": True},
         {"slug": "work",      "configured": True,  "on_disk": False},
         {"slug": "imported",  "configured": False, "on_disk": True}
-      ]
+      ],
+      "active_domain": "research"                     # NEW in plan 11 — live from Config
     }
 """
 
@@ -34,7 +43,8 @@ NAME = "brain_list_domains"
 DESCRIPTION = (
     "List the top-level domain directories in the vault as the union of "
     "Config.domains (configured) and on-disk folders (discovered). Returns "
-    "{domains: [slug], entries: [{slug, configured, on_disk}]} sorted by slug."
+    "{domains: [slug], entries: [{slug, configured, on_disk}], active_domain: slug} "
+    "sorted by slug."
 )
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -79,6 +89,24 @@ def _configured_slugs(ctx: ToolContext) -> list[str]:
     return list(DEFAULT_DOMAINS)
 
 
+def _active_domain(ctx: ToolContext) -> str:
+    """Return ``ctx.config.active_domain`` live, or the v0.1 default fallback.
+
+    Plan 11 Task 6 / D8: the response carries ``active_domain`` so the frontend
+    ``useDomains()`` hook hydrates scope on first mount. Mirrors the
+    ``_configured_slugs`` fallback pattern: when ``ctx.config is None``
+    (low-level tests / harness contexts that haven't plumbed config yet),
+    fall back to ``DEFAULT_DOMAINS[0]`` (``"research"`` in v0.1) so the field
+    is always a non-empty slug. When ``ctx.config`` IS wired in, the
+    Config validator guarantees ``active_domain in domains`` so the field
+    will always reference a slug present in the response's ``domains`` list.
+    """
+    cfg = ctx.config
+    if cfg is not None and getattr(cfg, "active_domain", None):
+        return str(cfg.active_domain)
+    return DEFAULT_DOMAINS[0]
+
+
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     _ = arguments  # no inputs
 
@@ -101,6 +129,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         data={
             "domains": union,
             "entries": entries,
+            "active_domain": _active_domain(ctx),
         },
     )
 
