@@ -413,8 +413,20 @@ function OtherClientsCard(): React.ReactElement {
       </p>
 
       <div className="relative rounded-md border border-[var(--hairline)] bg-[var(--surface-2)]">
+        {/*
+         * Plan 14 Task 4 a11y populated-state fix: the ``overflow-x-auto``
+         * makes this <pre> a horizontally-scrollable region; without
+         * ``tabIndex={0}`` keyboard users can't reach the scroll
+         * affordance and axe-core's ``scrollable-region-focusable`` rule
+         * (WCAG 2.1.1) flags it as a serious violation. ``role="region"``
+         * + an ``aria-label`` give screen-reader users a stable name for
+         * the scroll target. Visual presentation unchanged.
+         */}
         <pre
           data-testid="mcp-snippet"
+          tabIndex={0}
+          role="region"
+          aria-label="MCP client config snippet"
           className="overflow-x-auto p-3 pr-12 font-mono text-[11px] text-[var(--text)]"
         >
           {snippet}

@@ -1,13 +1,15 @@
 /**
- * Plan 14 Task 3 — populated-state a11y dialog sweep (C2.a).
+ * Plan 14 Task 3 + Task 4 — populated-state a11y sweep
+ * (C2.a dialogs + C2.b menus + overlays).
  *
  * The empty-state ``a11y.spec.ts`` only loads top-level routes against a
  * vault seeded with BRAIN.md and a welcome note; axe-core only flags
  * what's actually rendered, so dialogs (which mount conditionally) never
  * came under scan. Plan 13 Task 6 review #2 + #7 surfaced the gap —
  * Plan 14 D5 + D6 + D9 (locked 2026-04-29) close it by adding a
- * dedicated populated-state spec that opens each dialog in turn and runs
- * the same hard-fail axe sweep the empty-state spec runs.
+ * dedicated populated-state spec that opens each dialog / menu / overlay
+ * in turn and runs the same hard-fail axe sweep the empty-state spec
+ * runs.
  *
  * Dialog inventory (Task 3 dispatch text, 8 nominal cases):
  *
@@ -25,10 +27,34 @@
  *                                    Switch toggles (inbox + pending screens),
  *                                    no modal exists today. Deferred to Plan 15.
  *
- * Six implementable cases land here. The two deferrals are filed as
- * Plan 15 candidates per the per-task review escalation policy: "if a
- * dialog doesn't have a UI surface, file as Plan 15 candidate; reduce
+ * Six implementable dialog cases land here. The two deferrals are filed
+ * as Plan 15 candidates per the per-task review escalation policy: "if
+ * a dialog doesn't have a UI surface, file as Plan 15 candidate; reduce
  * to 7 or fewer cases."
+ *
+ * Menu + overlay inventory (Task 4 dispatch text, 5 nominal cases):
+ *
+ *   ✅ topbar scope picker dropdown  (Topbar → click scope chip → Radix Popover)
+ *   ✅ Settings tabs walk            (visit all 8 panels in one populated test)
+ *   ✅ search overlay                (⌘K — closest "file-preview overlay"
+ *                                     analogue; the app does not have a
+ *                                     dedicated Browse → file → preview
+ *                                     surface today, the closest live
+ *                                     overlay reachable from Browse is
+ *                                     ``<SearchOverlay />`` per
+ *                                     ``system-overlays.tsx``. Documented
+ *                                     deviation; Browse-side WikilinkHover
+ *                                     is a tooltip, not a modal-shape
+ *                                     overlay.)
+ *   ✅ drop-zone overlay             (synthetic dragenter with Files-typed
+ *                                     DataTransfer flips
+ *                                     ``draggingFile`` → DropOverlay
+ *                                     reveals)
+ *   ✅ toast notifications           (Settings → Backups → "Back up now"
+ *                                     fires a real success toast via
+ *                                     ``pushToast``)
+ *
+ * Five Task 4 cases land here. No deferrals.
  *
  * **Hard-fail discipline.** ``DISABLED_RULES = []`` (mirrored from
  * fixtures.ts); ``checkA11y()`` asserts ``violations.toEqual([])`` with
@@ -46,6 +72,9 @@
  *   ``activeThreadId`` being set, which the URL effect handles).
  * - The cross-domain case mirrors ``cross-domain-modal.spec.ts``'s
  *   localStorage-seeded scope pattern.
+ * - The drop-overlay case dispatches a real ``dragenter`` with
+ *   ``dataTransfer.types`` containing ``"Files"`` — production-shape
+ *   per ``app-shell.tsx``'s ``onDragEnter`` handler.
  */
 import { type Page } from "@playwright/test";
 
@@ -355,5 +384,230 @@ test.describe("a11y — populated-state dialog sweep", () => {
       patch_id: patchId,
       reason: "a11y populated-state spec cleanup",
     });
+  });
+
+  // ================================================================
+  // Plan 14 Task 4 — menus + overlays (C2.b)
+  // ================================================================
+
+  // ----------------------------------------------------------------
+  // Case 7: topbar scope picker dropdown
+  //
+  // Topbar's scope chip is a Radix Popover (``<Popover />`` from
+  // ui/popover.tsx, mounted in ``shell/topbar.tsx``). Click the
+  // chip → PopoverContent renders the per-domain Checkbox list.
+  // The ``aria-label="Scope: <label>"`` on the trigger keeps it
+  // discoverable; the panel itself has no role on the wrapper but
+  // exposes labelled checkboxes per domain.
+  // ----------------------------------------------------------------
+  test("topbar scope picker dropdown has 0 violations", async ({
+    page,
+    checkA11y,
+  }) => {
+    await page.goto("/chat");
+    await page.waitForLoadState("networkidle");
+
+    // The scope trigger's accessible name varies with how many domains
+    // are selected — match any "Scope:" prefix to stay robust to the
+    // first-mount hydration (Plan 11 Task 8) which seeds scope from
+    // ``active_domain``.
+    const scopeTrigger = page.getByRole("button", { name: /^Scope: / });
+    await expect(scopeTrigger).toBeVisible();
+    await scopeTrigger.click();
+
+    // PopoverContent renders the literal string "Visible domains" as a
+    // section header — wait on that as the stable mount marker. Radix
+    // Popover portals into a sibling DOM node so we can't anchor on a
+    // child of the trigger.
+    await expect(page.getByText("Visible domains")).toBeVisible();
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "menu:topbar-scope-picker");
+  });
+
+  // ----------------------------------------------------------------
+  // Case 8: Settings tabs walk
+  //
+  // Per Plan 14 Task 4 dispatch text: "Settings tab navigation (each
+  // tab in Settings — likely ~5 sub-cases or single multi-tab walk)".
+  // Walk all 8 tabs in one test to keep run time bounded; axe-scan
+  // each. The empty-state ``a11y.spec.ts`` covers ``general``,
+  // ``providers``, and ``domains`` — this case extends to the
+  // remaining 5 (``budget``, ``autonomous``, ``integrations``,
+  // ``brain-md``, ``backups``) AND re-scans the Plan 13 trio under
+  // the populated-state lifecycle (post-rename / post-create state
+  // from Cases 1+2 mutates ``Config.domains``, which in turn changes
+  // ``/settings/domains`` rendering).
+  //
+  // We run all 8 in sequence per single test rather than 8 separate
+  // tests because each tab loads a fresh fetch + fixture cycle and
+  // 8 separate ``test()`` calls would each pay the navigation cost.
+  // axe-core itself runs against the live document each time so the
+  // gate is identical.
+  // ----------------------------------------------------------------
+  test("Settings tabs (all 8) have 0 violations under populated state", async ({
+    page,
+    checkA11y,
+  }) => {
+    const tabs = [
+      "general",
+      "providers",
+      "budget",
+      "autonomous",
+      "integrations",
+      "domains",
+      "brain-md",
+      "backups",
+    ] as const;
+
+    for (const tab of tabs) {
+      await page.goto(`/settings/${tab}/`);
+      await page.waitForLoadState("networkidle");
+      // Each panel renders an h2 within the content area; wait one
+      // extra beat so any lazy fetch (configGet, brainBackupList,
+      // etc.) settles before axe scans.
+      await page.waitForTimeout(200);
+      await checkA11y(page, `menu:settings-tab:${tab}`);
+    }
+  });
+
+  // ----------------------------------------------------------------
+  // Case 9: search overlay (⌘K)
+  //
+  // The plan dispatch text calls out a "file-preview overlay (Browse →
+  // file → preview)". The app does not have a dedicated file-preview
+  // overlay today — Browse uses an inline split-pane (Reader vs
+  // VaultEditor) and the only true "overlay" reachable from the Browse
+  // route is ``<SearchOverlay />`` (cmd-K). It IS modal-shape (role=
+  // dialog + aria-modal=true) and renders results from ``recent``;
+  // covering it here is the closest match to the dispatch intent. The
+  // WikilinkHover surface is a tooltip (role=tooltip), not a
+  // modal-shape overlay, so it's not in scope for this case.
+  //
+  // Trigger via ⌘K — the global keydown lives in ``app-shell.tsx``.
+  // ----------------------------------------------------------------
+  test("search overlay has 0 violations", async ({ page, checkA11y }) => {
+    await page.goto("/browse");
+    await page.waitForLoadState("networkidle");
+
+    // ⌘K on Mac, Ctrl+K elsewhere — Playwright's "Meta" maps to
+    // either depending on platform. The handler in app-shell.tsx
+    // accepts both.
+    await page.keyboard.press("Meta+K");
+
+    // Overlay's ``role="dialog"`` + ``aria-label="Search the vault"``
+    // is the stable mount marker.
+    const dialog = page.getByRole("dialog", { name: "Search the vault" });
+    await expect(dialog).toBeVisible();
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "overlay:search");
+
+    // Cleanup: dismiss so the overlay doesn't bleed into Case 10's
+    // route navigation.
+    await page.keyboard.press("Escape");
+  });
+
+  // ----------------------------------------------------------------
+  // Case 10: drop-zone overlay (drag hover state)
+  //
+  // ``<DropOverlay />`` reveals when ``system-store.draggingFile`` is
+  // true. ``app-shell.tsx``'s ``onDragEnter`` flips the flag to true
+  // when ``e.dataTransfer.types`` contains ``"Files"``. Playwright's
+  // ``page.dispatchEvent`` doesn't natively support setting
+  // ``DataTransfer.types``, so we drop into the page context with
+  // ``page.evaluate`` and dispatch a real DragEvent constructed via
+  // the DataTransfer API. This is production-shape — same code path
+  // a real OS drag fires.
+  // ----------------------------------------------------------------
+  test("drop-zone overlay has 0 violations", async ({ page, checkA11y }) => {
+    await page.goto("/chat");
+    await page.waitForLoadState("networkidle");
+
+    // Dispatch a real dragenter with a Files-typed DataTransfer on the
+    // outermost ``.app-grid`` (where AppShell hangs the drag handlers).
+    // Constructing DataTransfer + dispatching DragEvent is the only
+    // production-shape way to trip the ``"Files"``-types check; setting
+    // ``draggingFile`` directly on the store would be a different code
+    // path and miss any regression in the dragenter handler itself.
+    await page.evaluate(() => {
+      const grid = document.querySelector(".app-grid");
+      if (!grid) throw new Error("app-grid not mounted");
+      const dt = new DataTransfer();
+      // ``items.add`` populates ``types`` so the production guard
+      // ``e.dataTransfer.types.includes("Files")`` passes.
+      const blob = new Blob(["dummy"], { type: "text/plain" });
+      const file = new File([blob], "dummy.txt", { type: "text/plain" });
+      dt.items.add(file);
+      const ev = new DragEvent("dragenter", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt,
+      });
+      grid.dispatchEvent(ev);
+    });
+
+    // ``<DropOverlay />`` flips ``aria-hidden`` from "true" → "false"
+    // when visible. Pin against that attribute rather than the testid
+    // visibility because the overlay stays in the DOM in both states
+    // (see drop-overlay.tsx docstring).
+    const overlay = page.getByTestId("drop-overlay");
+    await expect(overlay).toHaveAttribute("aria-hidden", "false");
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "overlay:drop-zone");
+
+    // Cleanup: fire dragleave with relatedTarget=null so the handler
+    // flips ``draggingFile`` back to false. Otherwise subsequent
+    // navigations would carry the overlay's pointer-events-none
+    // styling forward and could trip later interaction tests.
+    await page.evaluate(() => {
+      const grid = document.querySelector(".app-grid");
+      if (!grid) return;
+      const ev = new DragEvent("dragleave", {
+        bubbles: true,
+        cancelable: true,
+      });
+      // ``relatedTarget`` defaults to null — that's exactly what the
+      // production handler treats as "cursor left the window".
+      grid.dispatchEvent(ev);
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // Case 11: toast notifications
+  //
+  // Toasts mount under ``<Toasts />`` (system-overlays.tsx). The
+  // bottom-right stack uses ``role="status"`` per ``ToastItem``. To
+  // trigger a real toast we click "Back up now" on Settings →
+  // Backups, which fires ``brain_backup_create`` and renders a
+  // success toast via ``pushToast()``. Production-shape: same code
+  // path any toast in the app goes through.
+  // ----------------------------------------------------------------
+  test("toast notifications have 0 violations", async ({ page, checkA11y }) => {
+    await page.goto("/settings/backups/");
+    await page.waitForLoadState("networkidle");
+
+    const backupNow = page.getByRole("button", { name: /Back up now/i });
+    await expect(backupNow).toBeVisible();
+    await backupNow.click();
+
+    // Toast message is "Backup created." with a success variant; wait
+    // for it to be visible (the ``role="status"`` region is live, axe
+    // will scan it during the assertion below).
+    await expect(page.getByText("Backup created.")).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "overlay:toast-notifications");
+
+    // Cleanup: dismiss so the toast doesn't linger into the next test
+    // and trip a stale-content scan. The X button has aria-label
+    // "Dismiss toast".
+    const dismiss = page.getByRole("button", { name: "Dismiss toast" }).first();
+    if (await dismiss.isVisible().catch(() => false)) {
+      await dismiss.click();
+    }
   });
 });
