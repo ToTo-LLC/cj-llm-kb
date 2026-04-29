@@ -76,7 +76,12 @@
   --dom-personal-soft: rgba(198, 75, 46, 0.10);
 
   --tt-cyan:   var(--brand-ember);
-  --tt-ink:    var(--brand-paper);
+  /* Plan 13 Task 6 a11y bump: was var(--brand-paper) (#F3EFE4) which gives
+     4.11:1 white-on-ember (fails 4.5:1 AA for small text on Radix
+     accent-state buttons + tool-call labels). Pure white pushes the same
+     pair to 4.73:1. Brand impact is minimal because brand-paper and white
+     differ by ~5% luminance and on-accent text is rare. */
+  --tt-ink:    #FFFFFF;
   --tt-orange: var(--brand-ember);
   --tt-green:  var(--brand-sage);
   --tt-yellow: var(--brand-wheat);
@@ -98,9 +103,14 @@
   --r-pill: 999px;
 
   /* On-accent text colors — these DO NOT flip with theme
-     (white text stays white on ember in both modes)      */
-  --on-ember: #FBF8F0;
-  --on-ink:   #FBF8F0;
+     (white text stays white on ember in both modes).
+     Plan 13 Task 6 a11y bump: was #FBF8F0 (brand-paper-3) which gives
+     4.44:1 against #C64B2E (brand-ember) — just below the 4.5:1 WCAG AA
+     small-text threshold. Pure white clears the same pair at 4.73:1.
+     Affects the "+ New chat" CTA, the .send-btn, .pending-card .approve,
+     and any other ember-background CTA. */
+  --on-ember: #FFFFFF;
+  --on-ink:   #FFFFFF;
 }
 
 /* ============================================================
@@ -119,7 +129,14 @@ html[data-theme="dark"],
 
   --text:       var(--brand-paper);
   --text-muted: rgba(243, 239, 228, 0.62);
-  --text-dim:   rgba(243, 239, 228, 0.38);
+  /* Plan 13 Task 6 a11y bump: was 0.38 which gave 3.25:1 on --surface-1
+     #141412 (and 3.22:1 on --surface-0 #0D0D0C). 0.55 produces ~4.95:1
+     on both surfaces, clearing WCAG 2.2 AA 4.5:1 with ~10% margin.
+     Mirrors the Plan 07 Task 25C nudge pattern documented in
+     tokens.css (which sat in :root but was being shadowed by this
+     file's later cascade — that shadowing is what regressed the gate
+     between Plan 09 close and Plan 12 close, see lessons Plan 13). */
+  --text-dim:   rgba(243, 239, 228, 0.55);
 
   --dom-research:      #88B0D4;
   --dom-work:          #9BAE86;
@@ -127,6 +144,20 @@ html[data-theme="dark"],
   --dom-research-soft: rgba(136, 176, 212, 0.14);
   --dom-work-soft:     rgba(155, 174, 134, 0.16);
   --dom-personal-soft: rgba(224, 106, 74, 0.14);
+
+  /* Plan 13 Task 6 a11y bump: in light mode --tt-cyan is brand-ember
+     (#C64B2E). On dark surface-1 #141412 small body text in that color
+     gives only 3.9:1 (fails 4.5:1 AA). Brighten to the same lighter
+     ember used by the .prose a:hover dark override at line 578 below
+     (#E06A4A) — yields 5.52:1 on the same surface. --accent inherits
+     this via globals.css line 44 (--accent: var(--tt-cyan)). */
+  --tt-cyan:   #E06A4A;
+  /* Plan 13 Task 6 a11y bump: when --accent-foreground sits on the
+     brighter dark-mode ember (#E06A4A), pure white gives 3.39:1 (fails
+     AA). Dark ink (#141414) on #E06A4A clears at 5.6:1. globals.css
+     resolves --accent-foreground -> --tt-ink, so this override is what
+     keeps Radix buttons + accent-bg surfaces legible in dark mode. */
+  --tt-ink:    #141414;
 }
 
 /* ============================================================

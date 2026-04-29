@@ -83,7 +83,17 @@
      (~3.3:1 vs surface-0/1, fails WCAG 2.2 AA body-text 4.5:1) to 0.58
      (~4.6:1 vs surface-0, ~4.5:1 vs surface-1). ``--text-muted`` bumped
      from 0.60 to 0.70 for the same reason on smaller widgets. Both
-     ratios measured with axe-core 4.11. */
+     ratios measured with axe-core 4.11.
+
+     Plan 13 Task 6 reminder: the v4 brand-skin.css drop redefines these
+     same tokens AFTER this file in the cascade (see brand-skin.css
+     ":root,[data-theme='light']" + "[data-theme='dark']" blocks), which
+     means the values here are the ``defaults / fallbacks'' and the
+     authoritative dark/light values for these tokens live in
+     brand-skin.css. Plan 13 Task 6's a11y nudges therefore landed in
+     brand-skin.css, not here. If you ever re-merge or simplify, keep
+     a single source of truth — two files defining the same alpha is
+     how the gate regressed between Plan 09 close and Plan 12 close. */
   --text-dim:         rgba(241,242,242,0.58);
 
   /* ---------- Status ---------- */

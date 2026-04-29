@@ -3,6 +3,18 @@
  * a beat to settle, and run through axe with WCAG 2.2 AA filters. Any
  * violation fails the suite; this is the hard a11y gate for Plan 07.
  *
+ * Plan 13 Task 6 hard-fail re-affirmation: the gate has always been a hard
+ * fail (``expect(...).toEqual([])`` in fixtures.ts, no ``expect.soft`` and
+ * no ``DISABLED_RULES`` entries since Plan 07 Task 25C re-enabled
+ * color-contrast). The 9 color-contrast violations that landed between
+ * Plan 09 close and Plan 12 close were not the result of the gate
+ * weakening — they were the result of the v4 brand-skin.css drop
+ * (2026-04-24) redefining ``--text-dim`` / ``--tt-cyan`` / ``--tt-ink``
+ * AFTER tokens.css in the cascade, shadowing Plan 07 Task 25C's nudges.
+ * Plan 13 Task 6 re-applied those nudges in the new authoritative file.
+ * If a future regression lands, suspect the cascade order or a new
+ * theme file — NOT a relaxed gate here.
+ *
  * We run this AFTER a BRAIN.md seed so the setup-wizard redirect does not
  * hijack the navigation. Seeding is direct on-disk — BRAIN.md lives at
  * the vault root (no domain), so the ``proposeNote`` path rejects it
