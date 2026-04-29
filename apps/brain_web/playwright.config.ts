@@ -73,7 +73,19 @@ export default defineConfig({
   webServer: [
     {
       // Backend: brain_api on 4317 serves both /api/* and / (static UI).
-      command: "./scripts/start-backend-for-e2e.sh",
+      //
+      // Plan 14 Task 8: branch on platform. Windows can't run a bash script
+      // directly (Git Bash is installed on windows-2022 runners but invoking
+      // `./scripts/start-backend-for-e2e.sh` relies on shebang interpretation
+      // which doesn't work uniformly under PowerShell). The .ps1 sibling
+      // mirrors the .sh seeding + uvicorn launch verbatim. ``pwsh`` is on
+      // PATH on both windows-2022 and macOS-14 (Microsoft ships PowerShell 7
+      // on macOS runners) so we use it explicitly to avoid Windows-PowerShell
+      // 5.1 quirks (encoding, $ErrorActionPreference defaults).
+      command:
+        process.platform === "win32"
+          ? "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/start-backend-for-e2e.ps1"
+          : "./scripts/start-backend-for-e2e.sh",
       url: "http://127.0.0.1:4317/healthz",
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

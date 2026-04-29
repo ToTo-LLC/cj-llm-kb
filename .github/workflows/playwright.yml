@@ -1,4 +1,4 @@
-# Plan 14 Task 7 (and Task 8 will extend) — Playwright e2e on CI.
+# Plan 14 Tasks 7+8 — Playwright e2e on CI (macOS-14 + windows-2022).
 #
 # WHY THIS EXISTS
 # ---------------
@@ -7,8 +7,7 @@
 # class of regression that was ONLY catchable via the e2e a11y suite — without
 # Playwright in CI, future v5/v6 theme drops repeat the same silent regression.
 # Plan 14 D1+D2 (locked 2026-04-29): all Playwright specs run on macOS-14
-# + windows-2022. This file lands the macOS-14 leg (Plan 14 Task 7); Task 8
-# will add the windows-2022 entry to the matrix below.
+# + windows-2022. Task 7 landed the macOS-14 leg; Task 8 added windows-2022.
 #
 # CANONICAL LOCAL RECIPE (lesson 341 + Plan 12+13 refinements)
 # -----------------------------------------------------------
@@ -47,8 +46,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Plan 14 Task 7 lands macos-14. Task 8 will add windows-2022 here.
-        os: [macos-14]
+        # Plan 14 Task 7 lands macos-14. Task 8 added windows-2022.
+        os: [macos-14, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -90,14 +89,25 @@ jobs:
       - name: Install Playwright browsers (chromium + system deps)
         run: pnpm --filter brain_web exec playwright install --with-deps chromium
 
-      # --- Run e2e suite --------------------------------------------------
+      # --- Run e2e suite (macOS) -----------------------------------------
       # Lesson 341 canonical recipe: chflags clamp on BOTH .pth files
       # in the SAME command line as `npx playwright test`. The PYTHONPATH
       # escape hatch makes the test runner immune to .pth shadowing even
       # if uv re-hides mid-run (the webServer's `uv run uvicorn` triggers
       # auto-sync). Glob covers `_editable_impl_brain_core.pth` plus any
       # numbered duplicates uv accumulated across syncs.
-      - name: Playwright e2e (full suite)
+      #
+      # I1 TRAP CLOSURE (Plan 14 Task 8 review note from Task 7):
+      # this step is intentionally Mac-only because chflags is a BSD/macOS
+      # syscall — running it on Windows errors out. The Windows leg gets a
+      # sibling `if: runner.os == 'Windows'` step below. Without this split
+      # the windows-2022 matrix entry would silently skip the only step
+      # that runs Playwright (every preceding step would pass; CI would go
+      # green with zero Windows e2e coverage). Option B from the Task 8
+      # review (sibling-step model) over Option C (one bash step with
+      # conditional chflags) because PowerShell is the natural shell on
+      # windows-2022 and matches `start-backend-for-e2e.ps1`.
+      - name: Playwright e2e (full suite, macOS)
         if: runner.os == 'macOS'
         working-directory: apps/brain_web
         env:
@@ -108,9 +118,43 @@ jobs:
           # propagates it through to uvicorn's child process; the `run:`
           # block alone wouldn't be enough because start-backend-for-e2e.sh
           # changes working directory before `exec uv run uvicorn`.
+          # Path-separator: `:` on POSIX (Python parses PYTHONPATH per platform).
           PYTHONPATH: "${{ github.workspace }}/packages/brain_core/src:${{ github.workspace }}/packages/brain_api/src:${{ github.workspace }}/packages/brain_mcp/src:${{ github.workspace }}/packages/brain_cli/src"
         run: |
           chflags 0 "${{ github.workspace }}"/.venv/lib/python3.12/site-packages/_editable_impl_*.pth 2>/dev/null || true
+          npx playwright test
+
+      # --- Run e2e suite (Windows) ---------------------------------------
+      # Windows-specific notes:
+      # - No chflags equivalent. uv on Windows writes plain .pth files (no
+      #   UF_HIDDEN flag, no Spotlight re-hide loop), so the editable
+      #   installs are visible to CPython's site.addpackage out of the box.
+      # - PYTHONPATH separator on Windows is `;` (not `:`). Python's
+      #   `os.pathsep` switches on platform; CI must respect it.
+      # - Shell is `pwsh` (PowerShell 7) — preinstalled on windows-2022 and
+      #   what playwright.config.ts's webServer command uses to invoke
+      #   start-backend-for-e2e.ps1.
+      # - `npx playwright test` works the same on Windows; npx is provided
+      #   by the actions/setup-node@v4 step above.
+      # - `--with-deps` for `playwright install` is a no-op on Windows
+      #   (only Linux apt deps are involved); harmless to keep above.
+      # - Defender SmartScreen historically does not interfere with the
+      #   Playwright browser binaries on hosted windows-2022 runners; if it
+      #   ever does, the workaround is `Set-MpPreference -DisableRealtime
+      #   Monitoring $true` in a PowerShell pre-step (Plan 14 chflags
+      #   equivalent). Not added preemptively — keep CI logs clean.
+      - name: Playwright e2e (full suite, Windows)
+        if: runner.os == 'Windows'
+        working-directory: apps/brain_web
+        shell: pwsh
+        env:
+          CI: "true"
+          # Path-separator: `;` on Windows. Mirrors the macOS step's
+          # absolute paths so the webServer subprocess (which Push-Locations
+          # to repo root before invoking uvicorn) still resolves the
+          # editable installs even if .pth shadowing somehow surfaces.
+          PYTHONPATH: "${{ github.workspace }}\\packages\\brain_core\\src;${{ github.workspace }}\\packages\\brain_api\\src;${{ github.workspace }}\\packages\\brain_mcp\\src;${{ github.workspace }}\\packages\\brain_cli\\src"
+        run: |
           npx playwright test
 
       # --- Diagnostics on failure ----------------------------------------
