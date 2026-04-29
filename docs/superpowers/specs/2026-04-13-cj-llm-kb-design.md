@@ -391,6 +391,8 @@ Lands on the Chat screen with an inline tip card pointing to the Inbox.
 - Keyboard shortcuts exist but are never required
 - Dark mode default, follows OS preference
 
+> **CI gate (Plan 14):** the full Playwright e2e suite runs on macOS-14 + windows-2022 GitHub Actions runners on every push to `main` and every pull request. The axe-core hard-fail a11y assertion (`DISABLED_RULES = []`, `expect(violations).toEqual([])`) covers empty-state routes (`a11y.spec.ts`) AND populated states — dialogs, menus, overlays, prose-rendering chat surfaces (`a11y-populated.spec.ts`). Theme/skin changes that regress AA contrast cannot ship silently.
+
 ## 9. Config, setup, cross-platform install, migration
 
 ### Distribution (day one)
