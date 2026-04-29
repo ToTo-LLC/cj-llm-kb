@@ -70,8 +70,19 @@ export function TypedConfirmDialog({
     >
       <p className="mb-3 text-muted-foreground">{body}</p>
       <label className="mb-1.5 block text-xs uppercase tracking-wider text-muted-foreground">
-        Type <code className="text-destructive">{word}</code> to confirm
+        Type{" "}
+        <code className="text-[var(--tt-cyan)]">{word}</code>
+        {" "}to confirm
       </label>
+      {/*
+        Plan 14 Task 3 a11y populated-state fix: was ``text-destructive``
+        (= ``--brand-ember`` = ``#C64B2E``). On ``--surface-1`` (#0d0d0c
+        dark mode) the contrast is 4.11:1, failing WCAG 2.2 AA 4.5:1 for
+        small (12px) text. ``--tt-cyan`` is theme-aware (dark = #E06A4A
+        bright, light = #C64B2E ember) and was nudged in Plan 13 Task 6
+        to clear AA on both surfaces. Same single-source-of-truth pattern
+        Plan 14 Task 5 (#C3) applies to ``.prose a``.
+      */}
       <Input
         value={text}
         onChange={(e) => setText(e.target.value)}

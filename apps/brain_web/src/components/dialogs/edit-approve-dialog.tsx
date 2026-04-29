@@ -110,10 +110,21 @@ export function EditApproveDialog({
           </pre>
         </div>
         <div className="flex flex-col">
-          <div className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">
+          {/*
+            Plan 14 Task 3 a11y populated-state fix: associate the
+            "Your edit" caption with the Textarea via ``htmlFor`` /
+            ``id`` so axe-core's ``label`` rule passes (was failing
+            because the caption was a sibling ``<div>`` with no
+            association). Visual presentation unchanged.
+          */}
+          <label
+            htmlFor="edit-approve-draft"
+            className="mb-1 text-xs uppercase tracking-wider text-muted-foreground"
+          >
             Your edit
-          </div>
+          </label>
           <Textarea
+            id="edit-approve-draft"
             className="h-72 resize-none font-mono text-xs leading-relaxed"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
