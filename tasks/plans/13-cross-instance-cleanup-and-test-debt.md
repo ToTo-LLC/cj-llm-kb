@@ -384,4 +384,84 @@ To be filled in on closure following the Plan 10 + 11 + 12 format:
 
 ---
 
+## Task 4 findings (diagnose-only, locked 2026-04-28)
+
+**Confirmed root cause:** Plan 08 Task 1's `SPAStaticFiles` mount at `/` shadows synthetic test routes that are registered on the shared `app` fixture AFTER `create_app()` returns. Plan 12 closure's hypothesis (OriginHostMiddleware/TestClient drift since Plan 11 era) was **wrong** — the regression dates to Plan 08, not Plan 11/12.
+
+**Hypothesis-test results:**
+- **H1 (OriginHostMiddleware as `BaseHTTPMiddleware`):** REFUTED. `auth.py:139` defines `OriginHostMiddleware` as a pure ASGI middleware; the docstring explicitly references the Plan 05 lesson and notes it must NOT be `BaseHTTPMiddleware`. `app.py:132` adds it via `app.add_middleware()`. The middleware is correctly installed.
+- **H2 (TestClient `Host`/`Origin` header drift):** REFUTED. `conftest.py:48-58`'s `client` fixture uses `TestClient(app, base_url="http://localhost")` with the explicit Plan 05 docstring pinning the `Host: localhost` requirement. Failing tests use the same `base_url`.
+- **H3 (response envelope shape drift):** REFUTED. The 13 failures aren't envelope-shape mismatches — they're status-code mismatches with `body.text` containing the SPA's `index.html` HTML.
+- **H4 (`dependency_overrides` drift):** REFUTED. None of the failing tests use `dependency_overrides`; they wire synthetic routes via `@app.get(...)` / `@app.post(...)` decoration on the live `app` fixture.
+- **H5 (Plan 08 SPA mount drift):** **CONFIRMED.** Trigger condition: when `apps/brain_web/out/index.html` exists (Plan 08's `resolve_out_dir()` dev-fallback returns the repo path), `create_app()` mounts `SPAStaticFiles` at `/`. Synthetic routes registered AFTER `create_app()` are walked AFTER the static mount in Starlette's route-resolution table; the static mount catches `/_boom`, `/_protected`, `/_authed`, `/_synthetic_write`, `/_ctx_echo`, etc. with the SPA's `index.html` (HTTP 200).
+
+**Trigger condition is environmental, not source-code:** when the `out/` directory is empty/missing, the `try/except RuntimeError` at `app.py:166-171` swallows the resolver error and the mount is skipped — exactly what happened during Plan 08 close, Plan 09 close, Plan 10 close, and pre-static-export-build CI runs. The mount fires when ANY of: (a) `pnpm --dir apps/brain_web build` was run locally, (b) `BRAIN_WEB_OUT_DIR` is set, (c) `BRAIN_INSTALL_DIR` points at a real install. Plan 13 Task 3's `npm run build` (run during the implementer's browser verification) populated `out/` on the dev box, which made the failures visible.
+
+**The 13th test (`test_handshake_rejects_bad_thread_id`) shares the same root cause:** `/ws/chat/bad/slash` doesn't match the WS router's `^[a-z0-9][a-z0-9-]{0,63}$` regex on `thread_id`, so Starlette walks past the WS route to the static mount; `SPAStaticFiles` tries to handle the WebSocket scope and fails on `assert scope["type"] == "http"`. The `_RESERVED_PREFIXES = ("api", "ws", "_next", "healthz")` check happens INSIDE the `SPAStaticFiles.get_response()` override but only AFTER `StaticFiles.__call__` has already accepted the scope.
+
+**Affected synthetic-route prefixes (12 of 13 failures):**
+- `/_boom` — 8 tests in `test_errors.py`
+- `/_protected`, `/_authed` — 4 tests in `test_auth_dependency.py` (variants register under `/_synthetic_write`)
+- `/_ctx_echo` — 1 test in `test_context.py::test_get_ctx_dependency_resolves`
+
+**Proposed Task 5 fix shape (single-task, plan-author can sign off):**
+
+**Option A (RECOMMENDED, minimal-impact, surgical):** Add a `mount_static_ui: bool = True` keyword-only parameter to `brain_api.create_app`. Conftest's `app` fixture passes `mount_static_ui=False`. The static mount block becomes `if mount_static_ui: try: ... except RuntimeError: pass`. Production behavior unchanged (default `True`). This is the cleanest split between "mount the SPA" and "be a bare API for tests."
+
+```python
+# packages/brain_api/src/brain_api/app.py
+def create_app(
+    *,
+    vault_root: Path,
+    allowed_domains: Sequence[str],
+    # ... existing kwargs ...
+    mount_static_ui: bool = True,  # NEW
+) -> FastAPI:
+    ...
+    if mount_static_ui:
+        try:
+            out_dir = resolve_out_dir()
+            app.mount("/", SPAStaticFiles(directory=str(out_dir), html=True), name="ui")
+        except RuntimeError:
+            pass
+```
+
+```python
+# packages/brain_api/tests/conftest.py
+@pytest.fixture
+def app(seeded_vault: Path) -> FastAPI:
+    return create_app(
+        vault_root=seeded_vault,
+        allowed_domains=("research",),
+        mount_static_ui=False,  # NEW: prevent SPA mount from shadowing /_boom
+    )
+```
+
+**Option B (rejected — fragile):** Reserve `_*` prefixes in `_RESERVED_PREFIXES`. Brittle (any future production path starting with `_` would lose SPA fallback) and doesn't fix the WS handshake test (`/ws/chat/bad/slash` is already under `ws` reserved prefix; the bug is in StaticFiles ABC accepting the WS scope before the prefix check).
+
+**Option C (rejected — invasive):** Insert synthetic test routes via `app.routes.insert(0, route)` instead of `@app.get()`. Requires changing every failing test file (4 files, 13 tests). Doesn't address the WS scope-type issue.
+
+**Regression-pin test design (`packages/brain_api/tests/test_envelope_shape_parity.py` per the plan's deliverable):** Asserts production-shape `{"error", "message", "detail"}` envelope at three layers — middleware-level rejection (bad Origin → 403), route-level rejection (invalid input → 400), 500 path (route-internal exception). Mirror Plan 05 Batch A's parity pin test pattern. Each assertion: `assert set(body.keys()) == {"error", "message", "detail"}`. Use `mount_static_ui=False` in the test's app fixture so the assertions reflect the real middleware layer, not the SPA fallback.
+
+Add a separate gate-test that asserts the mount-skip flag works: `test_mount_static_ui_false_skips_spa` — calls `create_app(..., mount_static_ui=False)`, asserts `len([m for m in app.routes if isinstance(m, Mount) and m.name == "ui"]) == 0`.
+
+**Open questions for plan-author sign-off:**
+1. Does the `mount_static_ui=False` flag belong on `create_app` directly, or should it be a separate "test-mode" combinator (`create_test_app(...)`)? Recommendation: keep it on `create_app` — symmetric with existing kwargs (`vault_root`, `allowed_domains`); test-mode combinator would be more invasive and require updating every test using `create_app` directly (currently the conftest is the only call site).
+2. Should production callers (`brain_cli.runtime.backend_factory`) be audited to confirm they don't accidentally pass `mount_static_ui=False`? Recommendation: brief audit in Task 5 — `grep -rn "create_app(" packages/brain_cli/`. If they pass it positionally, the new kwarg-only parameter would TypeError at the seam — surface in Task 5 if so. (FastAPI lifespan tests in `test_context.py` may also need the flag; audit at task time.)
+3. Should the regression-pin test live in `test_envelope_shape_parity.py` (per plan) or `test_app_static_mount.py` (the architectural concern)? Recommendation: split — envelope shape parity per plan deliverable; `test_app_static_mount_can_be_disabled.py` as a second small file pinning the new flag's behavior. Two files, ~5 + ~5 tests.
+
+**Surfaces inspected (read-only audit):**
+- `packages/brain_api/src/brain_api/app.py` (mount registration, lines 156-171)
+- `packages/brain_api/src/brain_api/auth.py` (OriginHostMiddleware definition, line 139)
+- `packages/brain_api/src/brain_api/static_ui.py` (SPAStaticFiles + resolve_out_dir + reserved prefixes)
+- `packages/brain_api/tests/conftest.py` (app fixture)
+- `packages/brain_api/tests/test_errors.py` (8 failing tests, `_attach_failing_route` pattern)
+- `packages/brain_api/tests/test_auth_dependency.py` (4 failing tests, `@app.post("/_synthetic_write")` pattern)
+- `packages/brain_api/tests/test_context.py::test_get_ctx_dependency_resolves` (1 failing test, `@app.get("/_ctx_echo")` pattern)
+- `packages/brain_api/tests/test_ws_chat_handshake.py::test_handshake_rejects_bad_thread_id` (1 failing test; WS scope hits StaticFiles assertion)
+- Reproduced all 13 failures via the canonical chflags+PYTHONPATH recipe.
+- Confirmed trigger: `apps/brain_web/out/` exists from Task 3's `npm run build`.
+
+---
+
 **End of Plan 13.**
