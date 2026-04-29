@@ -101,6 +101,7 @@ def create_app(
     allowed_domains: tuple[str, ...] = ("research",),
     *,
     token_override: str | None = None,
+    mount_static_ui: bool = True,
 ) -> FastAPI:
     """Build a fresh FastAPI app bound to the given vault.
 
@@ -111,6 +112,16 @@ def create_app(
         allowed_domains: Tuple of domain names this app instance may access.
         token_override: Task 7 uses this to inject a fixed token for tests.
             None (the default) means generate a fresh token at startup.
+        mount_static_ui: When True (production default), mount the Next.js
+            static export at ``/`` so the app serves both the SPA and the
+            API. When False, skip the SPA mount entirely — used by the
+            brain_api test suite so synthetic test routes (e.g. ``/_boom``,
+            ``/_protected``, ``/_ctx_echo``) registered AFTER ``create_app``
+            returns aren't shadowed by the catch-all static mount. Plan 13
+            Task 4 diagnosed this shadowing as the root cause of the 13
+            previously-failing brain_api unit tests; Task 5 added this flag.
+            Production callers (brain_cli.runtime.backend_factory and
+            apps/brain_web/scripts/e2e_backend) keep the default ``True``.
     """
     app = FastAPI(
         title="brain API",
@@ -163,11 +174,18 @@ def create_app(
     # that never touch the UI should stay bootable, so we catch the error
     # and leave the mount off. A deploy with missing UI content surfaces as
     # ``GET /`` 404 at first browser load — visibly broken, not silently.
-    try:
-        out_dir = resolve_out_dir()
-        app.mount("/", SPAStaticFiles(directory=str(out_dir), html=True), name="ui")
-    except RuntimeError:
-        # API-only mode (CI, contract tests, headless). Intentional no-op.
-        pass
+    #
+    # Plan 13 Task 5: when ``mount_static_ui=False`` (test fixture), skip the
+    # mount entirely. Synthetic test routes registered AFTER ``create_app``
+    # returns get shadowed by the catch-all SPA mount when ``apps/brain_web/
+    # out/`` exists from a prior ``pnpm build`` — the test suite explicitly
+    # wants a bare API surface.
+    if mount_static_ui:
+        try:
+            out_dir = resolve_out_dir()
+            app.mount("/", SPAStaticFiles(directory=str(out_dir), html=True), name="ui")
+        except RuntimeError:
+            # API-only mode (CI, contract tests, headless). Intentional no-op.
+            pass
 
     return app
