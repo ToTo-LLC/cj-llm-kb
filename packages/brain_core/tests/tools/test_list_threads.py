@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from brain_core.state.db import StateDB
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.list_threads import NAME, handle

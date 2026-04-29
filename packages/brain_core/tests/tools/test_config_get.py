@@ -77,5 +77,5 @@ async def test_raises_runtime_error_when_ctx_config_is_none(tmp_path: Path) -> N
     (Plan 11 lesson 343 anti-pattern).
     """
     ctx = _mk_ctx(tmp_path, config=None)
-    with pytest.raises(RuntimeError, match="ctx.config"):
+    with pytest.raises(RuntimeError, match=r"ctx\.config"):
         await handle({"key": "active_domain"}, ctx)

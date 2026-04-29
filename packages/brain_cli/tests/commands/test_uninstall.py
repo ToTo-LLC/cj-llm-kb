@@ -44,9 +44,7 @@ class _FakeVerify:
     entry_present: bool
 
 
-def _point_at_scratch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> tuple[Path, Path, Path]:
+def _point_at_scratch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path, Path]:
     """Build a scratch install dir + vault + shim path. Returns all three."""
     install = tmp_path / "brain"
     install.mkdir()
@@ -77,9 +75,7 @@ def _point_at_scratch(
     return install, vault, shim
 
 
-def _stub_claude_desktop(
-    monkeypatch: pytest.MonkeyPatch, *, installed: bool
-) -> dict[str, int]:
+def _stub_claude_desktop(monkeypatch: pytest.MonkeyPatch, *, installed: bool) -> dict[str, int]:
     """Stub ``claude_desktop.verify`` / ``uninstall``.
 
     Returns a ``calls`` dict mutated as the command invokes the module,
@@ -123,9 +119,7 @@ def _stub_no_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_uninstall_happy_path_interactive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_uninstall_happy_path_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """UNINSTALL + remove MCP + keep vault + remove backups → all expected effects."""
     install, vault, shim = _point_at_scratch(monkeypatch, tmp_path)
     calls = _stub_claude_desktop(monkeypatch, installed=True)
@@ -209,9 +203,7 @@ def test_uninstall_wrong_word_cancels_everything(
     assert calls["uninstall"] == 0, "Claude Desktop must be untouched on cancel"
 
 
-def test_uninstall_non_interactive_yes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_uninstall_non_interactive_yes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--yes`` removes code + MCP + backups; preserves vault by default."""
     install, vault, shim = _point_at_scratch(monkeypatch, tmp_path)
     calls = _stub_claude_desktop(monkeypatch, installed=True)

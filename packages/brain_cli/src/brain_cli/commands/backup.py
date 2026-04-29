@@ -71,8 +71,7 @@ def backup(
     as_json: bool = typer.Option(
         False,
         "--json",
-        help="Emit a JSON object with the BackupMeta fields instead of the "
-        "pretty summary.",
+        help="Emit a JSON object with the BackupMeta fields instead of the pretty summary.",
     ),
 ) -> None:
     """Create a tarball snapshot of the vault under ``<vault>/.brain/backups/``.

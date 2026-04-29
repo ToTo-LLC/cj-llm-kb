@@ -423,9 +423,7 @@ def _run_gate_4_setup_status_first_run(port: int, vault_root: Path) -> None:
     """Gate 4 — fresh vault → ``/api/setup-status`` reports is_first_run=True."""
     print("[gate 4] /api/setup-status reports first-run on fresh vault")
     origin = f"http://localhost:{port}"
-    status, body = _http_json(
-        f"http://127.0.0.1:{port}/api/setup-status", origin=origin
-    )
+    status, body = _http_json(f"http://127.0.0.1:{port}/api/setup-status", origin=origin)
     _check(status == 200, f"/api/setup-status -> 200 (got {status})")
     # Fresh vault: has_token is True (brain start writes it on boot), but
     # vault_exists is also True (brain start mkdir'd it via the supervisor).
@@ -462,13 +460,9 @@ def _run_gate_5_setup_status_no_brain_md(port: int, vault_root: Path) -> None:
     _check(not brain_md.exists(), f"BRAIN.md NOT present at {brain_md}")
 
     origin = f"http://localhost:{port}"
-    status, body = _http_json(
-        f"http://127.0.0.1:{port}/api/setup-status", origin=origin
-    )
+    status, body = _http_json(f"http://127.0.0.1:{port}/api/setup-status", origin=origin)
     _check(status == 200, f"/api/setup-status -> 200 (got {status})")
-    _check(
-        body.get("has_token") is True, f"has_token=True (got {body.get('has_token')!r})"
-    )
+    _check(body.get("has_token") is True, f"has_token=True (got {body.get('has_token')!r})")
     _check(
         body.get("vault_exists") is True,
         f"vault_exists=True (got {body.get('vault_exists')!r})",
@@ -512,9 +506,7 @@ def _run_gate_6_update_check(vault_root: Path) -> None:
 
     with _update_check_stub(bumped_version="0.2.0") as stub_url:
         # (a) Happy path: newer version reported.
-        info = release_mod.check_latest_release(
-            "0.1.0", timeout_s=5, url=stub_url
-        )
+        info = release_mod.check_latest_release("0.1.0", timeout_s=5, url=stub_url)
         _check(info is not None, "check_latest_release returned ReleaseInfo (not None)")
         assert info is not None
         _check(info.version == "0.2.0", f"info.version == '0.2.0' (got {info.version!r})")
@@ -532,9 +524,7 @@ def _run_gate_6_update_check(vault_root: Path) -> None:
         )
 
         # (b) Same-version → None.
-        info_same = release_mod.check_latest_release(
-            "0.2.0", timeout_s=5, url=stub_url
-        )
+        info_same = release_mod.check_latest_release("0.2.0", timeout_s=5, url=stub_url)
         _check(info_same is None, f"same-version returns None (got {info_same!r})")
 
         # (c) Opt-out: BRAIN_NO_UPDATE_CHECK=1 short-circuits without
@@ -544,9 +534,7 @@ def _run_gate_6_update_check(vault_root: Path) -> None:
         prior_env = os.environ.get("BRAIN_NO_UPDATE_CHECK")
         os.environ["BRAIN_NO_UPDATE_CHECK"] = "1"
         try:
-            info_opt = release_mod.check_latest_release(
-                "0.1.0", timeout_s=5, url=stub_url
-            )
+            info_opt = release_mod.check_latest_release("0.1.0", timeout_s=5, url=stub_url)
             _check(
                 info_opt is None,
                 f"BRAIN_NO_UPDATE_CHECK=1 returns None (got {info_opt!r})",

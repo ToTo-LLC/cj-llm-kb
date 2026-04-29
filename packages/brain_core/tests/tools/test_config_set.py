@@ -118,7 +118,7 @@ def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
     # Keys that legitimately don't resolve against Config — see test
     # docstring. Adding to this set requires a comment justifying why the
     # key is allowlisted but not on Config.
-    _KNOWN_NOT_ON_CONFIG = {
+    known_not_on_config = {
         # Per-session chat-mode model overrides — live on
         # ``ChatSessionConfig.{ask,brainstorm,draft}_model``, not on the
         # global Config. brain_config_set surfaces them so the Settings
@@ -165,7 +165,7 @@ def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
 
     unresolved: list[str] = []
     for key in sorted(_SETTABLE_KEYS):
-        if key in _KNOWN_NOT_ON_CONFIG:
+        if key in known_not_on_config:
             continue
         try:
             _resolve(Config, key)
@@ -175,12 +175,12 @@ def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
     assert not unresolved, (
         "Some keys in _SETTABLE_KEYS no longer resolve to real schema "
         "fields. Add the field to Config (or document the exception in "
-        f"_KNOWN_NOT_ON_CONFIG with a justification):\n  " + "\n  ".join(unresolved)
+        "known_not_on_config with a justification):\n  " + "\n  ".join(unresolved)
     )
 
     # Sanity-check the exceptions still resolve where they're documented
     # to live (so the exception itself doesn't rot).
-    for key, (where, _explanation) in _KNOWN_NOT_ON_CONFIG.items():
+    for key, (where, _explanation) in known_not_on_config.items():
         if where == "ChatSessionConfig":
             assert key in ChatSessionConfig.model_fields, (
                 f"exception for {key!r} claims it lives on ChatSessionConfig "
@@ -334,7 +334,7 @@ async def test_raises_when_ctx_config_none(tmp_path: Path) -> None:
 
 def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:
     """The production ``_NON_PERSISTED_KEYS`` set must match the test's
-    ``_KNOWN_NOT_ON_CONFIG`` drift watchdog set, otherwise the two will
+    ``known_not_on_config`` drift watchdog set, otherwise the two will
     diverge silently as Plan 11+ adds new keys.
 
     Without this assertion, a future addition to the production allowlist
@@ -346,7 +346,7 @@ def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:
     """
     from brain_core.tools.config_set import _NON_PERSISTED_KEYS
 
-    # Re-derive the test-side keys by running the same _KNOWN_NOT_ON_CONFIG
+    # Re-derive the test-side keys by running the same known_not_on_config
     # logic but stripping the per-key explanation tuples. The test-side
     # set is defined inline inside ``test_settable_keys_all_resolve_to_a_real_schema_field``
     # — keeping the watchdog source-of-truth here means the two stay
@@ -358,7 +358,7 @@ def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:
         "domain_order",
     }
     assert known_not_on_config == _NON_PERSISTED_KEYS, (
-        "_NON_PERSISTED_KEYS (production) and _KNOWN_NOT_ON_CONFIG (test) drifted: "
+        "_NON_PERSISTED_KEYS (production) and known_not_on_config (test) drifted: "
         f"in production not test: {_NON_PERSISTED_KEYS - known_not_on_config}; "
         f"in test not production: {known_not_on_config - _NON_PERSISTED_KEYS}"
     )

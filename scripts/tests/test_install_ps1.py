@@ -148,11 +148,7 @@ def ps_install_env(
     abs_str = str(tarball.resolve()).replace("\\", "/")
     # Windows-style path like ``C:/foo``: produce ``file:///C:/foo``.
     # Unix-style path like ``/tmp/foo``: produce ``file:///tmp/foo``.
-    url = (
-        "file:///" + abs_str
-        if not abs_str.startswith("/")
-        else "file://" + abs_str
-    )
+    url = "file:///" + abs_str if not abs_str.startswith("/") else "file://" + abs_str
 
     return {
         **os.environ,
@@ -242,17 +238,14 @@ def test_install_ps_happy_path(
     # ``"C:\\...\\uv" run`` which legitimately contains the substring
     # ``uv" run``.
     assert "\nuv run --project" not in body, (
-        f"shim must NOT call bare ``uv run`` — it breaks under minimal "
-        f"cmd.exe PATH:\n{body}"
+        f"shim must NOT call bare ``uv run`` — it breaks under minimal cmd.exe PATH:\n{body}"
     )
     assert str(ps_install_dir) in body
     # Shim must set BRAIN_INSTALL_DIR so ``brain start`` picks up the
     # versioned install path rather than the platform default (which
     # won't exist on disk). Regression guard for Plan 09 Task 11's
     # supervisor-cwd-not-found bug surfaced on 2026-04-24.
-    assert "BRAIN_INSTALL_DIR" in body, (
-        f"shim must set BRAIN_INSTALL_DIR; got:\n{body}"
-    )
+    assert "BRAIN_INSTALL_DIR" in body, f"shim must set BRAIN_INSTALL_DIR; got:\n{body}"
 
     start_menu_lnk = (
         ps_fake_home
@@ -343,9 +336,7 @@ def test_install_ps_corrupt_tarball_aborts(
 
     assert result.returncode != 0, "expected non-zero exit on SHA mismatch"
     combined = result.stdout + result.stderr
-    assert "SHA256 mismatch" in combined, (
-        f"expected 'SHA256 mismatch' in output:\n{combined}"
-    )
+    assert "SHA256 mismatch" in combined, f"expected 'SHA256 mismatch' in output:\n{combined}"
     assert not (ps_install_dir / "pyproject.toml").exists(), (
         "expected no extracted files after SHA mismatch"
     )
@@ -521,18 +512,12 @@ def test_install_ps_shim_has_absolute_uv_path(
         f"stderr:\n{result.stderr}"
     )
 
-    shim = (
-        ps_fake_home / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "brain.cmd"
-    )
+    shim = ps_fake_home / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "brain.cmd"
     assert shim.is_file()
     body = shim.read_text()
 
     uv_abs = shutil.which("uv") or shutil.which("uv.exe")
     assert uv_abs, "uv must be on PATH for this test to run"
-    assert f'"{uv_abs}" run --project' in body, (
-        f"expected absolute uv path in shim; got:\n{body}"
-    )
+    assert f'"{uv_abs}" run --project' in body, f"expected absolute uv path in shim; got:\n{body}"
     # A leading bare ``uv run`` on a line indicates the fix didn't land.
-    assert "\nuv run --project" not in body, (
-        f"shim still calls bare ``uv run``:\n{body}"
-    )
+    assert "\nuv run --project" not in body, f"shim still calls bare ``uv run``:\n{body}"

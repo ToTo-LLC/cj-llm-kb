@@ -18,7 +18,7 @@ Walks the seven gates locked in the Plan 13 demo-gate header (D10):
        assert exit code 0 — two consumers of ``useCrossDomainGate()``
        reflect store mutations within 100ms (no ``page.reload()``).
     4. brain_api re-pass gate: run the 13 previously-failing tests
-       (``test_errors.py`` × 8, ``test_auth_dependency.py`` × 3,
+       (``test_errors.py`` x 8, ``test_auth_dependency.py`` x 3,
        ``test_context.py::test_get_ctx_dependency_resolves``,
        ``test_ws_chat_handshake.py::test_handshake_rejects_bad_thread_id``);
        assert exit code 0 (Task 5's ``mount_static_ui=False`` flag
@@ -233,7 +233,7 @@ async def _gate_1_none_policy(root: Path) -> int:
 def _run_subprocess(label: str, cmd: list[str], *, cwd: Path | None = None) -> int:
     """Run ``cmd``; return 0 on success, 1 on failure (printing tail of output)."""
     try:
-        result = subprocess.run(  # noqa: S603 — cmd is a fixed list, no shell
+        result = subprocess.run(
             cmd,
             cwd=str(cwd) if cwd else None,
             env=_subprocess_env(),
@@ -246,8 +246,7 @@ def _run_subprocess(label: str, cmd: list[str], *, cwd: Path | None = None) -> i
     if result.returncode != 0:
         # Print the tail of stdout + stderr so failures are diagnosable.
         tail = "\n".join(
-            (result.stdout or "").splitlines()[-25:]
-            + (result.stderr or "").splitlines()[-15:]
+            (result.stdout or "").splitlines()[-25:] + (result.stderr or "").splitlines()[-15:]
         )
         return _fail(
             label,
@@ -333,8 +332,8 @@ def _gate_4_brain_api_repass() -> int:
     if rc != 0:
         return rc
     _gate(
-        "4 — brain_api 13-failure re-pass: test_errors × 8 + "
-        "test_auth_dependency × 3 + test_context × 1 + test_ws_chat_handshake × 1 "
+        "4 — brain_api 13-failure re-pass: test_errors x 8 + "
+        "test_auth_dependency x 3 + test_context x 1 + test_ws_chat_handshake x 1 "
         "all green (Task 5 mount_static_ui=False landed)"
     )
     return 0

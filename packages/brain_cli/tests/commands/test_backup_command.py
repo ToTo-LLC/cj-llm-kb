@@ -78,9 +78,7 @@ def test_backup_no_vault_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "brain doctor" in result.output
 
 
-def test_backup_core_failure_surfaces(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_backup_core_failure_surfaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``create_snapshot`` raising is not swallowed — user sees the error + exit 1."""
     vault = tmp_path / "vault"
     vault.mkdir()

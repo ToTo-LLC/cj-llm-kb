@@ -42,11 +42,8 @@ import tempfile
 from pathlib import Path
 
 import structlog
-from structlog.testing import capture_logs
-
 from brain_core.config.loader import load_config
 from brain_core.config.schema import Config, DomainOverride
-from brain_core.config.writer import save_config
 from brain_core.llm import resolve_llm_config
 from brain_core.tools.base import ToolContext
 from brain_core.tools.config_set import handle as config_set_handle
@@ -54,6 +51,7 @@ from brain_core.tools.create_domain import handle as create_domain_handle
 from brain_core.tools.search import handle as search_handle
 from brain_core.vault.undo import UndoLog
 from brain_core.vault.writer import VaultWriter
+from structlog.testing import capture_logs
 
 
 def _gate(label: str) -> None:
@@ -123,7 +121,10 @@ async def _run() -> int:
             return _fail("1", f"unexpected pre-existing config.json at {cfg_path}")
         cfg = load_config(config_file=cfg_path, env={}, cli_overrides={"vault_path": root})
         if cfg.autonomous_mode is not False:
-            return _fail("1", f"fresh Config() should default autonomous_mode=False, got {cfg.autonomous_mode}")
+            return _fail(
+                "1",
+                f"fresh Config() should default autonomous_mode=False, got {cfg.autonomous_mode}",
+            )
         ctx = _ctx(root, allowed=("research", "work", "personal"), cfg=cfg)
         # ``brain_config_set`` adds ``autonomous_mode`` to the settable allowlist
         # via the wildcard handling — but autonomous_mode is NOT in
@@ -136,7 +137,8 @@ async def _run() -> int:
         # (a real settable bool key on Config). Use that as a stand-in for the
         # "set bool, persist, reload" round-trip the gate is asserting.
         result = await config_set_handle(
-            {"key": "log_llm_payloads", "value": True}, ctx,
+            {"key": "log_llm_payloads", "value": True},
+            ctx,
         )
         if result.data is None or not result.data.get("persisted"):
             return _fail("1", f"config_set persisted=False; data={result.data}")
@@ -144,7 +146,9 @@ async def _run() -> int:
             return _fail("1", f"config.json was not written to {cfg_path}")
         # Reload + assert round-trip.
         rehydrated = load_config(
-            config_file=cfg_path, env={}, cli_overrides={"vault_path": root},
+            config_file=cfg_path,
+            env={},
+            cli_overrides={"vault_path": root},
         )
         if rehydrated.log_llm_payloads is not True:
             return _fail(
@@ -161,7 +165,9 @@ async def _run() -> int:
         if "hobby" not in cfg.domains:
             return _fail("2", f"hobby missing from in-memory Config.domains: {cfg.domains}")
         rehydrated = load_config(
-            config_file=cfg_path, env={}, cli_overrides={"vault_path": root},
+            config_file=cfg_path,
+            env={},
+            cli_overrides={"vault_path": root},
         )
         if "hobby" not in rehydrated.domains:
             return _fail(
@@ -220,7 +226,9 @@ async def _run() -> int:
         # ensures domain_overrides survives the round trip the cost
         # ledger would observe at next startup).
         rehydrated = load_config(
-            config_file=cfg_path, env={}, cli_overrides={"vault_path": root},
+            config_file=cfg_path,
+            env={},
+            cli_overrides={"vault_path": root},
         )
         rehydrated_resolved = resolve_llm_config(rehydrated, domain="hobby")
         if rehydrated_resolved.classify_model != override_model:
@@ -275,7 +283,8 @@ async def _run() -> int:
         # retrieval lookup.
         try:
             await search_handle(
-                {"query": "anything", "domains": ["journal"]}, search_ctx,
+                {"query": "anything", "domains": ["journal"]},
+                search_ctx,
             )
         except Exception as exc:
             # ScopeError lives under brain_core.vault.paths; assert by
@@ -357,7 +366,9 @@ async def _run() -> int:
         )
         with capture_logs() as cap_logs:
             recovered = load_config(
-                config_file=cfg_path, env={}, cli_overrides={"vault_path": root},
+                config_file=cfg_path,
+                env={},
+                cli_overrides={"vault_path": root},
             )
         # Recovered Config should reflect bak's persisted state — pin one
         # field that's specific to this run (we set log_llm_payloads=True
@@ -372,8 +383,7 @@ async def _run() -> int:
         # primary read. Loader emits one per file-read attempt; the
         # primary's parse_error is the load-bearing one for this gate.
         fallback_logs = [
-            entry for entry in cap_logs
-            if entry.get("event") == "config_load_fallback"
+            entry for entry in cap_logs if entry.get("event") == "config_load_fallback"
         ]
         if not fallback_logs:
             return _fail(
@@ -409,7 +419,9 @@ async def _run() -> int:
         # ``apps/brain_web/tests/e2e/persistence.spec.ts`` — the
         # plan-11 closure receipt requires running it green before
         # tagging.
-        print("  ✓ Gate 8 — see apps/brain_web/tests/e2e/persistence.spec.ts (run via npx playwright test)")
+        print(
+            "  ✓ Gate 8 — see apps/brain_web/tests/e2e/persistence.spec.ts (run via npx playwright test)"
+        )
 
         print()
         print("PLAN 11 DEMO OK")

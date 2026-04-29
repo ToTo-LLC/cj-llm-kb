@@ -88,9 +88,7 @@ def _render_human(results: list[checks.CheckResult], console: Console) -> None:
         verdict_style = "green"
 
     console.print("")
-    console.print(
-        f"{passed}/{total} checks passed · [{verdict_style}]{verdict}[/{verdict_style}]"
-    )
+    console.print(f"{passed}/{total} checks passed · [{verdict_style}]{verdict}[/{verdict_style}]")
 
 
 def _resolve_install_dir() -> Path:

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from brain_core.ingest.failures import record_failure
 
-
 _FILENAME_RE = re.compile(r"^(?P<slug>.+)\.(?P<ts>\d{8}T\d{6}\d{6})\.error\.json$")
 
 

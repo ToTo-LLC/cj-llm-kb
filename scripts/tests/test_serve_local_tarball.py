@@ -27,9 +27,7 @@ def _load_serve_module() -> object:
     to load it by path — same trick Python's own test runner uses for
     script-style entry points.
     """
-    spec = importlib.util.spec_from_file_location(
-        "serve_local_tarball", str(SERVE_SCRIPT)
-    )
+    spec = importlib.util.spec_from_file_location("serve_local_tarball", str(SERVE_SCRIPT))
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -77,9 +75,7 @@ def test_parser_reject_out_of_range_port(serve_mod: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dry_run_stages_and_writes_manifest(
-    serve_mod: object, tmp_path: Path
-) -> None:
+def test_dry_run_stages_and_writes_manifest(serve_mod: object, tmp_path: Path) -> None:
     """--dry-run: full staging path (real git archive), no HTTP bind.
 
     We point --staging-dir at a tmp_path so we can inspect the output.
@@ -124,9 +120,7 @@ def test_dry_run_stages_and_writes_manifest(
     assert sidecar == manifest["tarball_sha256"]
 
 
-def test_dry_run_with_prebuilt_tarball(
-    serve_mod: object, tmp_path: Path
-) -> None:
+def test_dry_run_with_prebuilt_tarball(serve_mod: object, tmp_path: Path) -> None:
     """--tarball <path>: skip the cut step + reuse a prebuilt archive."""
     # Fake tarball — contents don't matter for staging, only the path.
     fake_tarball = tmp_path / "prebuilt.tar.gz"

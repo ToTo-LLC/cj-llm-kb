@@ -105,9 +105,7 @@ def test_check_venv_fail_import_error(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "uv sync" in result.fix_hint
 
 
-def test_check_venv_fail_uv_not_on_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_check_venv_fail_uv_not_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``shutil.which("uv")`` returns ``None`` → FAIL with install hint.
 
     Regression: before the Plan 09 Task 11 fix, this relied on the bare
@@ -240,9 +238,7 @@ def test_check_config_pass(tmp_path: Path) -> None:
     cfg_dir.mkdir(parents=True)
     cfg_path = cfg_dir / "config.json"
     cfg_path.write_text(
-        '{"vault_path": "'
-        + str(vault).replace("\\", "\\\\")
-        + '", "active_domain": "research"}',
+        '{"vault_path": "' + str(vault).replace("\\", "\\\\") + '", "active_domain": "research"}',
         encoding="utf-8",
     )
     result = checks.check_config(vault_root=vault)

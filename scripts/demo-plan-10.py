@@ -23,10 +23,8 @@ label on any failure.
 from __future__ import annotations
 
 import asyncio
-import shutil
 import sys
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 
 from brain_core.config.schema import Config
@@ -40,7 +38,7 @@ from brain_core.tools.create_domain import handle as create_domain_handle
 from brain_core.tools.delete_domain import handle as delete_domain_handle
 from brain_core.tools.list_domains import handle as list_domains_handle
 from brain_core.tools.rename_domain import handle as rename_domain_handle
-from brain_core.vault.types import IndexEntryPatch, NewFile, PatchSet
+from brain_core.vault.types import IndexEntryPatch, PatchSet
 from brain_core.vault.undo import UndoLog
 from brain_core.vault.writer import VaultWriter
 
@@ -203,18 +201,14 @@ async def _run() -> int:
             "---\ntitle: Helios call\ndomain: work\n---\n\n# Helios call\n\nNotes.\n",
             encoding="utf-8",
         )
-        rename_res = await rename_domain_handle(
-            {"from": "work", "to": "consulting"}, ctx
-        )
+        rename_res = await rename_domain_handle({"from": "work", "to": "consulting"}, ctx)
         if rename_res.data is None or rename_res.data.get("status") != "renamed":
             return _fail("4", f"rename failed: {rename_res.data}")
         if (root / "work").exists():
             return _fail("4", "old work/ folder still exists after rename")
         if not (root / "consulting").exists():
             return _fail("4", "new consulting/ folder missing after rename")
-        alpha = (root / "research" / "concepts" / "alpha.md").read_text(
-            encoding="utf-8"
-        )
+        alpha = (root / "research" / "concepts" / "alpha.md").read_text(encoding="utf-8")
         if "[[consulting/sources/helios-call]]" not in alpha:
             return _fail("4", "wikilink not rewritten in research/concepts/alpha.md")
         if "consulting" not in cfg.domains or "work" in cfg.domains:
@@ -236,9 +230,7 @@ async def _run() -> int:
         # leave only ``personal``. After the rename, the live set is
         # {research, consulting, personal, hobby}. Deleting consulting
         # leaves {research, hobby, personal} — non-personal count = 2.
-        delete_res = await delete_domain_handle(
-            {"slug": "consulting", "typed_confirm": True}, ctx
-        )
+        delete_res = await delete_domain_handle({"slug": "consulting", "typed_confirm": True}, ctx)
         if delete_res.data is None or delete_res.data.get("status") != "deleted":
             return _fail("6", f"delete failed: {delete_res.data}")
         trash_path = Path(delete_res.data["trash_path"])

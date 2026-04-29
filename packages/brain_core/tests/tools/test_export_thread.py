@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.export_thread import NAME, handle
 

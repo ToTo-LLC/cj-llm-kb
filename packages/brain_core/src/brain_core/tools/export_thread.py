@@ -56,9 +56,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # caller can't traverse out of the chats directory. Slugs from
     # ChatSession are URL-safe; this just pins the contract.
     if "/" in thread_id_arg or "\\" in thread_id_arg or thread_id_arg.startswith("."):
-        raise ValueError(
-            f"thread_id must be a plain slug, got {thread_id_arg!r}"
-        )
+        raise ValueError(f"thread_id must be a plain slug, got {thread_id_arg!r}")
 
     for domain in ctx.allowed_domains:
         candidate = ctx.vault_root / domain / "chats" / f"{thread_id_arg}.md"

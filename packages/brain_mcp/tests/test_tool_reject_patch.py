@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 from brain_core.chat.types import ChatMode
-from brain_core.vault.types import NewFile, PatchSet
 from brain_core.tools.base import ToolContext
+from brain_core.vault.types import NewFile, PatchSet
 from brain_mcp.tools.reject_patch import NAME, handle
 
 

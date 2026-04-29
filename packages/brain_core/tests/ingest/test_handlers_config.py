@@ -29,7 +29,6 @@ from brain_core.ingest.handlers.pdf import PDFHandler
 from brain_core.ingest.handlers.tweet import TweetHandler
 from brain_core.ingest.handlers.url import URLHandler
 
-
 # ---------------------------------------------------------------------------
 # Schema defaults — must match the previously-hardcoded handler constants
 # ---------------------------------------------------------------------------

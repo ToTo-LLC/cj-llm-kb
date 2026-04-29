@@ -13,9 +13,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from brain_core.vault.paths import ScopeError
 from brain_core.rate_limit import RateLimitConfig, RateLimiter
 from brain_core.tools.base import ToolContext
+from brain_core.vault.paths import ScopeError
 from brain_mcp.tools.propose_note import NAME, handle
 
 
@@ -45,6 +45,7 @@ async def test_stages_a_pending_patch(
     # Issue #30: MCP-staged patches carry ChatMode.MCP so the patch-queue UI
     # can distinguish them from chat-origin (BRAINSTORM/DRAFT) patches.
     from brain_core.chat.types import ChatMode
+
     assert pending[0].mode is ChatMode.MCP
 
 

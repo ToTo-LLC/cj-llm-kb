@@ -121,9 +121,7 @@ def test_install_happy_path(
     # versioned install path rather than the platform default (which
     # won't exist on disk). Regression guard for Plan 09 Task 11's
     # supervisor-cwd-not-found bug surfaced on 2026-04-24.
-    assert "BRAIN_INSTALL_DIR" in body, (
-        f"shim must export BRAIN_INSTALL_DIR; got:\n{body}"
-    )
+    assert "BRAIN_INSTALL_DIR" in body, f"shim must export BRAIN_INSTALL_DIR; got:\n{body}"
     assert f'BRAIN_INSTALL_DIR="${{BRAIN_INSTALL_DIR:-{install_dir}}}"' in body, (
         f"shim must export BRAIN_INSTALL_DIR={install_dir} (with env override); got:\n{body}"
     )
@@ -456,9 +454,7 @@ def test_install_shim_runs_with_stripped_path(
     body = shim.read_text()
     uv_abs = shutil.which("uv")
     assert uv_abs, "uv must be on PATH for this test to run"
-    assert f'"{uv_abs}"' in body, (
-        f"expected absolute uv path {uv_abs!r} in shim body; got:\n{body}"
-    )
+    assert f'"{uv_abs}"' in body, f"expected absolute uv path {uv_abs!r} in shim body; got:\n{body}"
 
     # Invoke the shim under a minimal PATH — no ~/.local/bin. The shim
     # itself is called by absolute path. If the fix works, bash will be
@@ -483,9 +479,7 @@ def test_install_shim_runs_with_stripped_path(
         text=True,
         check=False,
     )
-    assert syntax_check.returncode == 0, (
-        f"shim has bad bash syntax:\n{syntax_check.stderr}"
-    )
+    assert syntax_check.returncode == 0, f"shim has bad bash syntax:\n{syntax_check.stderr}"
 
     # Run the shim directly (via its absolute path) under stripped PATH.
     # With BRAIN_SKIP_UV_SYNC=1 in place the project isn't fully built,

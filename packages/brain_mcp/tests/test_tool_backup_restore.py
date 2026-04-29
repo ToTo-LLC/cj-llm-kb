@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 from brain_core.backup import create_snapshot
-from brain_mcp.tools.backup_restore import NAME, handle
 from brain_core.tools.base import ToolContext
+from brain_mcp.tools.backup_restore import NAME, handle
 
 
 def test_name() -> None:

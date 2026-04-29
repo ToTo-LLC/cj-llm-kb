@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.prompts.schemas import SummarizeOutput
-from brain_core.vault.types import IndexEntryPatch, PatchSet
 from brain_core.rate_limit import RateLimitConfig, RateLimiter
 from brain_core.tools.base import ToolContext
+from brain_core.vault.types import IndexEntryPatch, PatchSet
 from brain_mcp.tools.ingest import INPUT_SCHEMA, NAME, handle
 
 
@@ -119,6 +119,7 @@ async def test_ingest_default_stages_patch(
     # Issue #30: brain_ingest-staged patches carry ChatMode.MCP so the patch-
     # queue UI can distinguish them from chat-origin patches.
     from brain_core.chat.types import ChatMode
+
     ingest_envs = [env for env in pending if env.tool == "brain_ingest"]
     assert all(env.mode is ChatMode.MCP for env in ingest_envs), (
         f"expected ChatMode.MCP, got {[env.mode for env in ingest_envs]}"

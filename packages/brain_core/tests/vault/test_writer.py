@@ -355,8 +355,7 @@ def test_rollback_continues_when_one_step_errors(ephemeral_vault: Path) -> None:
     assert "edit old-text not found" in str(excinfo.value)
     # The rollback failure was attached as a note, not swallowed.
     assert any(
-        "rollback hit" in note and "n2" in note
-        for note in getattr(excinfo.value, "__notes__", [])
+        "rollback hit" in note and "n2" in note for note in getattr(excinfo.value, "__notes__", [])
     ), f"expected rollback note on exception; got notes={getattr(excinfo.value, '__notes__', [])}"
     # Despite the rollback failure on n2, n1 was still rolled back.
     assert not n1.exists(), "n1 rollback should have proceeded after n2 rollback failure"

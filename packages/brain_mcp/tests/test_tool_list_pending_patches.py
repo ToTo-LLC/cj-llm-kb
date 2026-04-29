@@ -13,8 +13,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from brain_core.chat.types import ChatMode
-from brain_core.vault.types import NewFile, PatchSet
 from brain_core.tools.base import ToolContext
+from brain_core.vault.types import NewFile, PatchSet
 from brain_mcp.tools.list_pending_patches import NAME, handle
 
 

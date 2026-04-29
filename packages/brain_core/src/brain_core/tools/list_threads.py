@@ -51,8 +51,7 @@ INPUT_SCHEMA: dict[str, Any] = {
         "query": {
             "type": "string",
             "description": (
-                "Optional substring to match against the thread file path "
-                "(SQL LIKE wildcard)."
+                "Optional substring to match against the thread file path (SQL LIKE wildcard)."
             ),
         },
         "limit": {
@@ -80,9 +79,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if domain_arg not in ctx.allowed_domains:
             from brain_core.vault.paths import ScopeError
 
-            raise ScopeError(
-                f"domain {domain_arg!r} not in allowed {ctx.allowed_domains}"
-            )
+            raise ScopeError(f"domain {domain_arg!r} not in allowed {ctx.allowed_domains}")
         domains: tuple[str, ...] = (domain_arg,)
     else:
         domains = ctx.allowed_domains
@@ -134,9 +131,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         for r in rows
     ]
     text = (
-        "\n".join(
-            f"- {t['path']} ({t['turns']} turns, {t['mode']})" for t in threads
-        )
+        "\n".join(f"- {t['path']} ({t['turns']} turns, {t['mode']})" for t in threads)
         if threads
         else "(no chats yet)"
     )

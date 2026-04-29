@@ -6,8 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from brain_core.vault.paths import ScopeError
 from brain_core.tools.base import ToolContext
+from brain_core.vault.paths import ScopeError
 from brain_mcp.tools.get_index import NAME, handle
 
 

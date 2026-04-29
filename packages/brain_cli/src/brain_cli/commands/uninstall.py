@@ -380,9 +380,7 @@ def uninstall(
             )
             vault_preserved = typed != _CONFIRM_VAULT
             if vault_preserved:
-                typer.echo(
-                    "Typed confirmation did not match; vault will be preserved."
-                )
+                typer.echo("Typed confirmation did not match; vault will be preserved.")
 
         # --- Step 4: backups prompt (only if vault preserved) ---------------
         if vault_preserved:

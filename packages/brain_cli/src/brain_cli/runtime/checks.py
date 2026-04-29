@@ -112,9 +112,7 @@ def check_uv() -> CheckResult:
             name="uv",
             status="fail",
             message="uv not found on PATH",
-            fix_hint=(
-                "Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
-            ),
+            fix_hint=("Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"),
         )
     except subprocess.TimeoutExpired:
         return CheckResult(
@@ -595,7 +593,6 @@ def check_ui_bundle(install_dir: Path | None = None) -> CheckResult:
         status="fail",
         message=f"no UI bundle under {install}",
         fix_hint=(
-            "Rebuild UI: `pnpm -F brain_web build` in the install dir, or run "
-            "`brain upgrade`."
+            "Rebuild UI: `pnpm -F brain_web build` in the install dir, or run `brain upgrade`."
         ),
     )

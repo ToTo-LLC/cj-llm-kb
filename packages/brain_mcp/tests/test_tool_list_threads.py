@@ -10,8 +10,6 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-import pytest
-
 from brain_core.state.db import StateDB
 from brain_core.tools.base import ToolContext
 from brain_mcp.tools.list_threads import NAME, handle

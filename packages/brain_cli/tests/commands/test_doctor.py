@@ -84,9 +84,7 @@ def test_doctor_with_failure_exits_one(tmp_path: Path, monkeypatch: pytest.Monke
     assert "9/10" in result.output
 
 
-def test_doctor_json_mode_emits_valid_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_json_mode_emits_valid_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``brain doctor --json`` must emit a JSON array of 10 check dicts."""
     monkeypatch.setenv("BRAIN_VAULT_ROOT", str(tmp_path / "vault"))
     monkeypatch.setenv("BRAIN_INSTALL_DIR", str(tmp_path / "install"))

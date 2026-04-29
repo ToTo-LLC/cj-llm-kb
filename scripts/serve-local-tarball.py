@@ -190,9 +190,7 @@ def _cut_tarball(staging_dir: Path) -> Path:
 
     tarballs = sorted(dist_dir.glob("brain-dev-*.tar.gz"))
     if not tarballs:
-        raise RuntimeError(
-            f"cut_local_tarball.py produced no brain-dev-*.tar.gz in {dist_dir}"
-        )
+        raise RuntimeError(f"cut_local_tarball.py produced no brain-dev-*.tar.gz in {dist_dir}")
     # If the cut script emitted more than one (shouldn't), take the newest.
     return tarballs[-1]
 
@@ -295,8 +293,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         # Match access-log style used by most dev servers: just the
         # status + path. Keeps the terminal readable during a live run.
         sys.stderr.write(
-            f"[{self.log_date_time_string()}] {self.address_string()} "
-            f"{format % args}\n"
+            f"[{self.log_date_time_string()}] {self.address_string()} {format % args}\n"
         )
 
 
@@ -407,28 +404,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--tarball",
         type=Path,
         default=None,
-        help=(
-            "Path to a prebuilt brain-*.tar.gz. "
-            "If omitted, cut a fresh tarball from git HEAD."
-        ),
+        help=("Path to a prebuilt brain-*.tar.gz. If omitted, cut a fresh tarball from git HEAD."),
     )
     p.add_argument(
         "--sha256",
         type=str,
         default=None,
         help=(
-            "SHA256 of --tarball (hex). "
-            "If omitted, we either read a sibling .sha256 or compute it."
+            "SHA256 of --tarball (hex). If omitted, we either read a sibling .sha256 or compute it."
         ),
     )
     p.add_argument(
         "--staging-dir",
         type=Path,
         default=None,
-        help=(
-            "Where to stage served files. "
-            "Default: a fresh tempdir, cleaned up on exit."
-        ),
+        help=("Where to stage served files. Default: a fresh tempdir, cleaned up on exit."),
     )
     p.add_argument(
         "--keep-staging",
@@ -454,9 +444,7 @@ def _stage_and_summarize(args: argparse.Namespace) -> tuple[Path, dict[str, Any]
         staging_dir.mkdir(parents=True, exist_ok=True)
         we_own_cleanup = False
     else:
-        staging_dir = Path(
-            tempfile.mkdtemp(prefix="brain-serve-")
-        )
+        staging_dir = Path(tempfile.mkdtemp(prefix="brain-serve-"))
         we_own_cleanup = True
 
     if args.tarball is not None:
