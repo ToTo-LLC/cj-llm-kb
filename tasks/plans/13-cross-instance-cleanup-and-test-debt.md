@@ -10,7 +10,7 @@
 
 3. **#A3 (correctness) — Promote `useCrossDomainGate` to `lib/state/cross-domain-gate-store.ts`.** Same shape as Plan 12 Task 5 fixed for `useDomains`: the gate hook holds local React state for `privacyRailed` + `acknowledged`; mutation via the Settings toggle's `setCrossDomainWarningAcknowledged` only updates the in-toggle state, not the gate hook in chat-screen. Same-tab re-mount works but cross-instance / cross-tab does not. Plan 13 promotes the gate to a dedicated zustand store mirroring Plan 12 D4's `domains-store.ts` split.
 
-4. **#B1 (test debt) — brain_api 13-failure triage.** 13 unit-test failures pre-existed Plan 12 (verified by `git log d7dbf66..HEAD -- packages/brain_api/` returning zero commits): `test_errors.py` × 8, `test_auth_dependency.py` × 4, `test_context.py::test_get_ctx_dependency_resolves`, `test_ws_chat_handshake.py::test_handshake_rejects_bad_thread_id`. All assert response status codes that come back unexpectedly as 200 (vs expected 4xx/5xx). Playwright e2e (real subprocess) does NOT reproduce — likely TestClient/middleware-config drift since Plan 11 era, not production regression. Plan 13 Task 4 confirms (or refutes) the OriginHostMiddleware/TestClient drift hypothesis; Task 5 fixes + adds a regression-pin test.
+4. **#B1 (test debt) — brain_api 13-failure triage.** 13 unit-test failures pre-existed Plan 12 (verified by `git log d7dbf66..HEAD -- packages/brain_api/` returning zero commits): `test_errors.py` × 8, `test_auth_dependency.py` × 3, `test_context.py::test_get_ctx_dependency_resolves`, `test_ws_chat_handshake.py::test_handshake_rejects_bad_thread_id` (Task 7 closure correction: was "× 4" pre-Task-7; actual file has 3 tests — see plan-text drift lesson in `lessons.md` Plan 13). All assert response status codes that come back unexpectedly as 200 (vs expected 4xx/5xx). Playwright e2e (real subprocess) does NOT reproduce — likely TestClient/middleware-config drift since Plan 11 era, not production regression. Plan 13 Task 4 confirms (or refutes) the OriginHostMiddleware/TestClient drift hypothesis; Task 5 fixes + adds a regression-pin test.
 
 5. **#B2 (test debt) — a11y color-contrast token sweep.** 8 axe-core color-contrast violations across `/chat`, `/inbox`, `/browse`, `/pending`, `/bulk`, `/settings/general`, `/settings/providers`, `/settings/domains` plus 1 setup-wizard welcome-step violation. Plan 07 Task 25C re-enabled the axe-core a11y gate with token nudges (`--text-muted` 0.60 → 0.70, `--text-dim` 0.38 → 0.58 dark / 0.40 → 0.56 light, `--accent: var(--surface-3)` → `var(--tt-cyan)`); somewhere between Plan 07 close and Plan 12 close those nudges regressed. Plan 13 re-applies the precedent: token sweep first, per-route follow-up only if any violation survives.
 
@@ -130,7 +130,7 @@ packages/brain_api/
 ├── src/brain_api/                      # MODIFY: TBD per Task 4 hypothesis-confirm findings (likely middleware or TestClient setup; expected: OriginHostMiddleware drift since Plan 11 era)
 └── tests/
     ├── test_errors.py                  # MODIFY: 8 failures should pass after fix
-    ├── test_auth_dependency.py         # MODIFY: 4 failures should pass after fix
+    ├── test_auth_dependency.py         # MODIFY: 3 failures should pass after fix (Task 7 correction: was "4")
     ├── test_context.py                 # MODIFY: 1 failure should pass after fix (test_get_ctx_dependency_resolves)
     ├── test_ws_chat_handshake.py       # MODIFY: 1 failure should pass after fix (test_handshake_rejects_bad_thread_id)
     └── test_envelope_shape_parity.py   # NEW: regression-pin asserting 4xx/5xx envelope shape parity at the drift point (D4)
@@ -456,7 +456,7 @@ Add a separate gate-test that asserts the mount-skip flag works: `test_mount_sta
 - `packages/brain_api/src/brain_api/static_ui.py` (SPAStaticFiles + resolve_out_dir + reserved prefixes)
 - `packages/brain_api/tests/conftest.py` (app fixture)
 - `packages/brain_api/tests/test_errors.py` (8 failing tests, `_attach_failing_route` pattern)
-- `packages/brain_api/tests/test_auth_dependency.py` (4 failing tests, `@app.post("/_synthetic_write")` pattern)
+- `packages/brain_api/tests/test_auth_dependency.py` (3 failing tests, `@app.post("/_synthetic_write")` pattern; Task 7 correction: was "4")
 - `packages/brain_api/tests/test_context.py::test_get_ctx_dependency_resolves` (1 failing test, `@app.get("/_ctx_echo")` pattern)
 - `packages/brain_api/tests/test_ws_chat_handshake.py::test_handshake_rejects_bad_thread_id` (1 failing test; WS scope hits StaticFiles assertion)
 - Reproduced all 13 failures via the canonical chflags+PYTHONPATH recipe.
