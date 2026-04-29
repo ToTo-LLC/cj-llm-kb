@@ -123,6 +123,35 @@ def test_route_500_envelope_shape(app: FastAPI) -> None:
     assert "internal wiring" not in rendered
 
 
+def test_route_500_envelope_shape_includes_request_id(app: FastAPI) -> None:
+    """The 500 envelope's ``detail`` slot pins the ``request_id`` field.
+
+    Plan 14 Task 2 / D4. Plan 13 Task 5 review M3 surfaced that
+    :func:`test_route_500_envelope_shape` only asserts the top-level
+    envelope keys, leaving ``body["detail"]["request_id"]`` unpinned —
+    so a silent regression in :class:`RequestIDMiddleware` (e.g., the
+    middleware stops attaching the id) wouldn't be caught at unit-test
+    time.
+
+    This pin asserts the slot exists, is a non-empty string, but
+    intentionally does NOT lock the format (UUID4 hex today, but could
+    swap to ULID/KSUID without behavior impact). Production-shape
+    integration test per lesson 343: real :func:`create_app` + real
+    :class:`TestClient`, no mocking of the middleware layer.
+    """
+    _attach_failing_route(app, lambda: RuntimeError("internal wiring blew up"))
+    with TestClient(app, base_url="http://localhost", raise_server_exceptions=False) as c:
+        response = c.get("/_boom")
+    assert response.status_code == 500
+    body = response.json()
+    detail = body["detail"]
+    assert isinstance(detail, dict), f"detail should be a dict; got {type(detail).__name__}"
+    assert "request_id" in detail, f"detail missing 'request_id' key; got keys {list(detail)}"
+    request_id = detail["request_id"]
+    assert isinstance(request_id, str), f"request_id should be str; got {type(request_id).__name__}"
+    assert len(request_id) > 0, "request_id should be a non-empty string"
+
+
 def test_ws_handshake_close_code_parity(app: FastAPI) -> None:
     """Bad ``thread_id`` (slash in path) → WS close, ``WebSocketDisconnect`` raised.
 
