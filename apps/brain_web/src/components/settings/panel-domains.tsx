@@ -19,6 +19,7 @@ import {
 } from "@/components/settings/domain-override-form";
 import { useDomains } from "@/lib/hooks/use-domains";
 import { useDomainsStore } from "@/lib/state/domains-store";
+import { useCrossDomainGateStore } from "@/lib/state/cross-domain-gate-store";
 import {
   brainDeleteDomain,
   configGet,
@@ -116,18 +117,8 @@ async function readPrivacyRailed(): Promise<string[]> {
   }
 }
 
-async function readCrossDomainAcknowledged(): Promise<boolean> {
-  try {
-    const r = await configGet({ key: "cross_domain_warning_acknowledged" });
-    const v = r.data?.value;
-    return typeof v === "boolean" ? v : false;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * CrossDomainWarningToggle (Plan 12 D8 / Task 9).
+ * CrossDomainWarningToggle (Plan 12 D8 / Task 9 → Plan 13 Task 3 / D3).
  *
  * Surfaces ``Config.cross_domain_warning_acknowledged`` as a toggle
  * inside Settings → Domains. The UI sense is INVERTED relative to the
@@ -140,33 +131,40 @@ async function readCrossDomainAcknowledged(): Promise<boolean> {
  * swaps between two strings depending on the current toggle state so
  * the user always sees the right framing for what's about to happen.
  *
- * Pattern matches ``ActiveDomainSelector``: optimistic local-state
- * update for snappy UI, API helper call (Plan 12 Task 9
- * ``setCrossDomainWarningAcknowledged``), revert on failure with a
- * danger-variant toast surfacing the structured error.
+ * Plan 13 Task 3 (D3): the toggle now reads + writes through the
+ * ``useCrossDomainGateStore`` zustand store rather than holding its
+ * own local React state. This is the load-bearing change that closes
+ * the cross-instance divergence Plan 12 Task 9 review flagged: a
+ * chat-screen consumer of ``useCrossDomainGate()`` and this toggle
+ * now share one canonical view, so a Continue-with-acknowledge from
+ * the modal updates the toggle, and a toggle flip updates the gate
+ * the chat-screen reads from — both directions, no remount needed.
+ *
+ * Pattern matches ``ActiveDomainSelector``: optimistic store update
+ * for snappy UI + cross-instance pubsub, API helper call (Plan 12
+ * Task 9 ``setCrossDomainWarningAcknowledged``), revert via
+ * ``setAcknowledgedOptimistic`` on failure with a danger-variant
+ * toast surfacing the structured error.
  */
 function CrossDomainWarningToggle(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
-  // ``acknowledged`` mirrors ``Config.cross_domain_warning_acknowledged``;
-  // ``showWarning`` is its inverse — what the toggle visually represents.
-  const [acknowledged, setAcknowledged] = React.useState<boolean>(false);
-  const [loading, setLoading] = React.useState(true);
+  // Read directly off the gate store so peer consumers (chat-screen's
+  // ``useCrossDomainGate()`` instance) re-render in lock-step with this
+  // toggle. ``loaded`` gates the disabled state during initial fetch.
+  const acknowledged = useCrossDomainGateStore((s) => s.acknowledged);
+  const loaded = useCrossDomainGateStore((s) => s.loaded);
 
+  // First-mount fetch: kick the store's refresh if the gate hasn't
+  // hydrated yet. The store's in-flight Promise cache means a
+  // concurrent chat-screen mount won't trigger a duplicate fetch.
   React.useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const v = await readCrossDomainAcknowledged();
-      if (!cancelled) {
-        setAcknowledged(v);
-        setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!loaded) {
+      void useCrossDomainGateStore.getState().refresh();
+    }
+  }, [loaded]);
 
   const showWarning = !acknowledged;
+  const loading = !loaded;
 
   const onCheckedChange = async (next: boolean) => {
     // ``next`` is the new toggle state (UI sense). Translate to the
@@ -176,7 +174,10 @@ function CrossDomainWarningToggle(): React.ReactElement {
     const newAck = !next;
     if (newAck === previousAck) return;
 
-    setAcknowledged(newAck);
+    // 1. Optimistic store update — peer consumers (chat-screen gate)
+    //    re-render now. This is the cross-instance pubsub Plan 13
+    //    Task 3 / D3 closes.
+    useCrossDomainGateStore.getState().setAcknowledgedOptimistic(newAck);
     try {
       await setCrossDomainWarningAcknowledged(newAck);
       pushToast({
@@ -187,7 +188,11 @@ function CrossDomainWarningToggle(): React.ReactElement {
         variant: "success",
       });
     } catch (err) {
-      setAcknowledged(previousAck);
+      // 2. Revert via the same optimistic action — pushes the previous
+      //    value back through the store so peer consumers also revert.
+      useCrossDomainGateStore
+        .getState()
+        .setAcknowledgedOptimistic(previousAck);
       pushToast({
         lead: "Couldn't update cross-domain warning.",
         msg: err instanceof Error ? err.message : "Unknown error.",

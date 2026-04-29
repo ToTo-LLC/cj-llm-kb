@@ -177,9 +177,13 @@ export function ChatScreen({
       if (alsoAcknowledge) {
         try {
           await setCrossDomainWarningAcknowledged(true);
-          // Re-fetch so the gate hook's local state reflects the new
-          // value immediately (in case the user starts another new
-          // thread in the same session).
+          // Plan 13 Task 3: ``refreshGate()`` now delegates to the
+          // ``useCrossDomainGateStore`` zustand store so every peer
+          // consumer (the Settings toggle in panel-domains.tsx, any
+          // future cross-instance subscriber) re-renders with the
+          // new value automatically. Without the store promotion the
+          // toggle would have stayed stale until the user reloaded
+          // the Settings panel.
           await refreshGate();
         } catch {
           // Match the toast-on-failure pattern from Task 7's

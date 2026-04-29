@@ -344,6 +344,7 @@ vi.mock("@/lib/state/system-store", () => ({
 
 import { PanelDomains } from "@/components/settings/panel-domains";
 import { _setDomainsCacheForTesting } from "@/lib/hooks/use-domains";
+import { useCrossDomainGateStore } from "@/lib/state/cross-domain-gate-store";
 
 describe("PanelDomains → CrossDomainWarningToggle (Plan 12 D8 / Task 9)", () => {
   beforeEach(() => {
@@ -355,6 +356,13 @@ describe("PanelDomains → CrossDomainWarningToggle (Plan 12 D8 / Task 9)", () =
     brainDeleteDomainMock.mockReset();
     openDialogMock.mockReset();
     pushToastStub.mockReset();
+
+    // Plan 13 Task 3: the cross-domain warning toggle now reads from
+    // ``useCrossDomainGateStore`` (zustand singleton). Reset between
+    // tests so a prior case's hydration doesn't bleed into the next
+    // case (otherwise the store reports ``loaded=true`` and the
+    // first-mount auto-refresh skips, leaving stale values visible).
+    useCrossDomainGateStore.getState()._resetForTesting();
 
     _setDomainsCacheForTesting(
       [

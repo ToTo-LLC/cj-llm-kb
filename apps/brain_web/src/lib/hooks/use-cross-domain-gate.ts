@@ -2,36 +2,39 @@
 
 import * as React from "react";
 
-import { configGet } from "@/lib/api/tools";
+import { useCrossDomainGateStore } from "@/lib/state/cross-domain-gate-store";
 
 /**
- * useCrossDomainGate (Plan 12 Task 9).
+ * useCrossDomainGate (Plan 12 Task 9 → Plan 13 Task 3 / D3).
  *
- * Lightweight hook that reads the two ``Config`` fields the cross-domain
- * confirmation modal's trigger gate needs: ``privacy_railed`` (the slug
- * list the trigger compares scope against) and
+ * Selector over ``useCrossDomainGateStore`` (see
+ * ``lib/state/cross-domain-gate-store.ts``) around the two ``Config``
+ * fields the cross-domain modal's trigger gate needs:
+ * ``privacy_railed`` (the slug list compared against scope) and
  * ``cross_domain_warning_acknowledged`` (the per-vault opt-out flag).
  *
- * Kept as its own hook (rather than extending ``useDomainsStore``)
- * because:
- *   - Both fields are tiny — one bool + one short slug list. Promoting
- *     to the shared zustand store would require a wider config-slice
- *     contract that's Plan 13+ territory (D14 candidate-cut for this
- *     plan was "no broader Config-slice promotion").
- *   - The modal trigger needs them at scope-finalization time, not on
- *     every render. A first-mount fetch + a reload-on-Settings-toggle
- *     pubsub is cheaper than a store-state + cross-component sub.
- *   - Settings-side mutation (the toggle in ``panel-domains.tsx``)
- *     re-fetches via ``refresh()`` after the API resolves so the
- *     modal sees the new value on the next trigger fire without a
- *     reload.
+ * Pre-Plan-13 the gate hook held local React state for both fields;
+ * mutations from the Settings toggle (``panel-domains.tsx``) only
+ * updated the toggle's own local state, leaving the chat-screen's
+ * ``useCrossDomainGate()`` instance stale until remount or page
+ * reload (cross-instance / cross-tab divergence — same shape Plan
+ * 11 closure addendum named on ``useDomains`` and Plan 12 Task 5
+ * fixed via ``domains-store.ts``). The Plan 13 zustand promotion
+ * fixes the divergence by routing every read through one store.
  *
- * The hook fires one ``brain_config_get`` per field on mount and
- * returns ``{privacyRailed, acknowledged, loading, refresh}``. Errors
- * are swallowed into safe defaults (``["personal"]`` + ``false``) to
- * fail open — if the backend can't tell us whether the user has
- * acknowledged, default to "show the modal" (safer than silently
- * skipping it).
+ * Public API preserved for back-compat with the Plan 12 Task 9
+ * call site in ``chat-screen.tsx``:
+ *
+ *   - ``useCrossDomainGate()`` returns ``{privacyRailed, acknowledged,
+ *     loading, refresh}``. Same shape as Plan 12.
+ *   - ``loading`` is derived: ``true`` until the first ``refresh()``
+ *     resolves (or fails). The trigger gate skips firing while
+ *     loading so we never show the modal with stale defaults that
+ *     disagree with disk.
+ *   - ``refresh`` is a stable per-render callback that delegates to
+ *     ``useCrossDomainGateStore.getState().refresh()``. Caller-side
+ *     ``await refreshGate()`` semantics are preserved by the store's
+ *     in-flight Promise cache.
  */
 
 export interface CrossDomainGateState {
@@ -43,46 +46,48 @@ export interface CrossDomainGateState {
    *  modal is suppressed regardless of scope. Defaults to ``false`` on
    *  fetch failure (fail open — show the modal). */
   acknowledged: boolean;
-  /** ``true`` until the first fetch resolves (or fails). The trigger
-   *  gate skips firing while loading so we never show the modal with
-   *  stale defaults that disagree with disk. */
+  /** ``true`` until the first ``refresh()`` resolves (or fails). The
+   *  trigger gate skips firing while loading so we never show the
+   *  modal with stale defaults that disagree with disk. */
   loading: boolean;
-  /** Re-fetch both fields. Call after a Settings toggle change so the
-   *  next trigger fire sees the new value. */
+  /** Re-fetch both fields. Plan 13 Task 3: now equivalent to
+   *  ``useCrossDomainGateStore.getState().refresh()`` — every peer
+   *  consumer re-renders with the new data automatically. */
   refresh: () => Promise<void>;
 }
 
 export function useCrossDomainGate(): CrossDomainGateState {
-  const [privacyRailed, setPrivacyRailed] = React.useState<string[]>([
-    "personal",
-  ]);
-  const [acknowledged, setAcknowledged] = React.useState(false);
-  const [loading, setLoading] = React.useState(true);
+  const privacyRailed = useCrossDomainGateStore((s) => s.privacyRailed);
+  const acknowledged = useCrossDomainGateStore((s) => s.acknowledged);
+  const loaded = useCrossDomainGateStore((s) => s.loaded);
+  const error = useCrossDomainGateStore((s) => s.error);
 
-  const refresh = React.useCallback(async () => {
-    try {
-      const [railRes, ackRes] = await Promise.all([
-        configGet({ key: "privacy_railed" }),
-        configGet({ key: "cross_domain_warning_acknowledged" }),
-      ]);
-      const rail = railRes.data?.value;
-      const ack = ackRes.data?.value;
-      setPrivacyRailed(Array.isArray(rail) ? (rail as string[]) : ["personal"]);
-      setAcknowledged(typeof ack === "boolean" ? ack : false);
-    } catch {
-      // Fail open — default to show-the-modal so the user is never
-      // silently skipped past the confirmation due to a transient
-      // backend hiccup.
-      setPrivacyRailed(["personal"]);
-      setAcknowledged(false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // First-mount auto-refresh for cold caches. The store's in-flight
+  // Promise cache means concurrent first-mounts (e.g., chat-screen
+  // mounting while another consumer is also subscribing) only trigger
+  // one fetch. Re-runs only when ``loaded`` flips false → true (first
+  // hydration) or back to false (after ``_resetForTesting``).
   React.useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!loaded) {
+      void useCrossDomainGateStore.getState().refresh();
+    }
+  }, [loaded]);
+
+  // ``loading`` is derived: still loading whenever the store hasn't
+  // resolved its first refresh yet AND there's no error. Once loaded,
+  // subsequent refreshes don't flip back to ``loading`` — the existing
+  // values stay visible while the new fetch lands (matches the old
+  // hook's behaviour after first mount).
+  const loading = !loaded && error === null;
+
+  // ``refresh`` is stable per render — store actions are stable, and
+  // we just project the store's action through. Wrapping in
+  // ``React.useCallback`` keeps the returned reference stable across
+  // re-renders so callers can put it in dep lists without causing
+  // effect-loop churn.
+  const refresh = React.useCallback(async () => {
+    await useCrossDomainGateStore.getState().refresh();
+  }, []);
 
   return { privacyRailed, acknowledged, loading, refresh };
 }
