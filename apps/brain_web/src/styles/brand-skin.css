@@ -147,10 +147,18 @@ html[data-theme="dark"],
 
   /* Plan 13 Task 6 a11y bump: in light mode --tt-cyan is brand-ember
      (#C64B2E). On dark surface-1 #141412 small body text in that color
-     gives only 3.9:1 (fails 4.5:1 AA). Brighten to the same lighter
-     ember used by the .prose a:hover dark override at line 578 below
-     (#E06A4A) — yields 5.52:1 on the same surface. --accent inherits
-     this via globals.css line 44 (--accent: var(--tt-cyan)). */
+     gives only 3.9:1 (fails 4.5:1 AA). Brighten to #E06A4A — yields
+     5.52:1 on the same surface. --accent inherits this via globals.css
+     line 44 (--accent: var(--tt-cyan)).
+
+     Plan 14 Task 5 (D7) extends the single-source-of-truth pattern:
+     ``.prose a`` + ``.msg-body a`` (line ~601 below) now read this
+     same --tt-cyan token instead of --brand-ember, so a single nudge
+     to the dark-mode value flows to Radix accent surfaces AND prose
+     anchors AND chat-body anchors. The hardcoded
+     ``[data-theme="dark"] .prose a:hover { #E06A4A }`` override that
+     previously sat next to that rule was dropped at the same time —
+     it was forcing the same color the new token already produces. */
   --tt-cyan:   #E06A4A;
   /* Plan 13 Task 6 a11y bump: when --accent-foreground sits on the
      brighter dark-mode ember (#E06A4A), pure white gives 3.39:1 (fails
@@ -598,15 +606,27 @@ h1, h2, h3, h4 {
   line-height: 1.6;
   color: var(--text);
 }
+/* Plan 14 Task 5 a11y fix (D7): route .prose a through var(--tt-cyan)
+   instead of var(--brand-ember). The light-mode value of --tt-cyan IS
+   --brand-ember (#C64B2E) so light mode is unchanged; the dark-mode
+   value of --tt-cyan is the brighter #E06A4A which clears WCAG 2.2 AA
+   4.5:1 on --surface-1 #141412 (5.52:1 measured) — base color was
+   formerly #C64B2E giving only ~3.9:1 in dark mode. Single source of
+   truth: when --tt-cyan is nudged in future the link color follows.
+
+   The hardcoded ``[data-theme="dark"] .prose a:hover { #E06A4A }``
+   override that previously sat below this rule is now redundant: the
+   base color and dark-mode --tt-cyan are the same value, so the dark
+   hover override that forced the same color was a no-op masquerading
+   as a fix. Dropped along with the cleanup. */
 .prose a,
 .msg-body a {
-  color: var(--brand-ember);
+  color: var(--tt-cyan);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
 .prose a:hover { color: var(--brand-ember-2); }
-[data-theme="dark"] .prose a:hover { color: #E06A4A; }
 
 .tool-call,
 .tool-invoke {
