@@ -40,9 +40,9 @@ import os
 from pathlib import Path
 
 from starlette.exceptions import HTTPException
-from starlette.responses import FileResponse, Response
+from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.staticfiles import StaticFiles
-from starlette.types import Scope
+from starlette.types import Receive, Scope, Send
 
 # Prefixes that MUST NOT receive the SPA fallback. A request to any of these
 # that doesn't match a real file stays a 404, so a typo or a stale proxy
@@ -136,7 +136,35 @@ class SPAStaticFiles(StaticFiles):
     exception is raised. We detect both cases: the 404 HTTPException (when
     there's no ``404.html``) AND the 404-status FileResponse, and funnel
     both through the same SPA-fallback decision tree.
+
+    ## Non-http scope guard (Plan 14 Task 1, D3)
+
+    The parent ``StaticFiles.__call__`` opens with ``assert scope["type"]
+    == "http"``. Production today never exercises that assertion because
+    every API + WebSocket router is registered before this catch-all mount
+    in :func:`brain_api.app.create_app` and Starlette walks routes in
+    insertion order. The latent risk: a malformed WebSocket path that
+    fails the WS regex (e.g. ``/ws/chat/bad/slash``) or a future
+    route-ordering change could fall through to this mount, hand a
+    ``"websocket"`` scope to the base class, and bubble an
+    ``AssertionError`` instead of a clean 404. Defense-in-depth: short-
+    circuit any non-http scope here with a 404-shaped ASGI response so the
+    surface stays HTTP-only no matter how the routing table evolves.
     """
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """ASGI entry point with a non-http scope guard.
+
+        For ``"http"`` scopes we delegate to the parent class unchanged.
+        For anything else (``"websocket"``, ``"lifespan"``, or any future
+        ASGI scope type) we send a 404 response and return — never letting
+        the parent's ``assert scope["type"] == "http"`` fire.
+        """
+        if scope["type"] != "http":
+            response: Response = PlainTextResponse("Not Found", status_code=404)
+            await response(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
 
     async def get_response(self, path: str, scope: Scope) -> Response:
         try:
