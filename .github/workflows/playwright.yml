@@ -1,0 +1,125 @@
+# Plan 14 Task 7 (and Task 8 will extend) — Playwright e2e on CI.
+#
+# WHY THIS EXISTS
+# ---------------
+# The existing `ci.yml` runs pytest + ruff + mypy on macOS-14 + windows-2022,
+# but does NOT run Playwright. Plan 13 Task 6 surfaced the cascade-shadowing
+# class of regression that was ONLY catchable via the e2e a11y suite — without
+# Playwright in CI, future v5/v6 theme drops repeat the same silent regression.
+# Plan 14 D1+D2 (locked 2026-04-29): all Playwright specs run on macOS-14
+# + windows-2022. This file lands the macOS-14 leg (Plan 14 Task 7); Task 8
+# will add the windows-2022 entry to the matrix below.
+#
+# CANONICAL LOCAL RECIPE (lesson 341 + Plan 12+13 refinements)
+# -----------------------------------------------------------
+# uv writes editable `.pth` shims with the macOS UF_HIDDEN flag; CPython's
+# `site.addpackage` silently skips hidden .pth files. The reliable pattern is:
+#
+#   chflags 0 .venv/lib/python3.12/site-packages/_editable_impl_*.pth \
+#     && PYTHONPATH=packages/.../src npx playwright test
+#
+# Two load-bearing rules from lesson 341:
+#   (1) chflags MUST be the immediate prefix of the same command line that
+#       runs python (a separate `run:` block re-hides via Spotlight before
+#       the next step starts).
+#   (2) Do NOT use `uv run` for the test step (it re-syncs and re-hides).
+#       The webServer in playwright.config.ts uses `uv run uvicorn` which
+#       can't be cleanly dropped without changing shipped infra; the
+#       PYTHONPATH escape hatch makes the test runner immune to .pth
+#       shadowing regardless.
+#
+# brain_api BOOTSTRAP
+# -------------------
+# Playwright's `webServer` block in apps/brain_web/playwright.config.ts
+# already starts brain_api against a fresh temp vault per run
+# (./scripts/start-backend-for-e2e.sh seeds the vault + execs uvicorn).
+# This workflow does NOT start brain_api manually — Playwright owns that
+# lifecycle.
+name: Playwright
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Plan 14 Task 7 lands macos-14. Task 8 will add windows-2022 here.
+        os: [macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Python / uv ----------------------------------------------------
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.*"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: uv sync (workspace + extras)
+        run: uv sync --all-extras
+
+      # --- Node / pnpm / Playwright deps ---------------------------------
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.0"
+
+      - name: pnpm install (workspace)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static UI bundle (apps/brain_web/out/)
+        # The brain_api single-port mount serves apps/brain_web/out/ at /;
+        # Playwright drives http://localhost:4317. Bundle must exist before
+        # webServer boots. globalSetup will rebuild if missing, but doing it
+        # explicitly here keeps the failure mode obvious in CI logs.
+        run: pnpm --filter brain_web build
+
+      - name: Install Playwright browsers (chromium + system deps)
+        run: pnpm --filter brain_web exec playwright install --with-deps chromium
+
+      # --- Run e2e suite --------------------------------------------------
+      # Lesson 341 canonical recipe: chflags clamp on BOTH .pth files
+      # in the SAME command line as `npx playwright test`. The PYTHONPATH
+      # escape hatch makes the test runner immune to .pth shadowing even
+      # if uv re-hides mid-run (the webServer's `uv run uvicorn` triggers
+      # auto-sync). Glob covers `_editable_impl_brain_core.pth` plus any
+      # numbered duplicates uv accumulated across syncs.
+      - name: Playwright e2e (full suite)
+        if: runner.os == 'macOS'
+        working-directory: apps/brain_web
+        env:
+          CI: "true"
+          # Absolute PYTHONPATH so the webServer subprocess (which `cd`s
+          # into the repo root before exec'ing uvicorn) still resolves it.
+          # Set as `env:` on the step so Playwright's webServer env-merge
+          # propagates it through to uvicorn's child process; the `run:`
+          # block alone wouldn't be enough because start-backend-for-e2e.sh
+          # changes working directory before `exec uv run uvicorn`.
+          PYTHONPATH: "${{ github.workspace }}/packages/brain_core/src:${{ github.workspace }}/packages/brain_api/src:${{ github.workspace }}/packages/brain_mcp/src:${{ github.workspace }}/packages/brain_cli/src"
+        run: |
+          chflags 0 "${{ github.workspace }}"/.venv/lib/python3.12/site-packages/_editable_impl_*.pth 2>/dev/null || true
+          npx playwright test
+
+      # --- Diagnostics on failure ----------------------------------------
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: |
+            apps/brain_web/playwright-report
+            apps/brain_web/test-results
+          retention-days: 7
