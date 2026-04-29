@@ -193,6 +193,10 @@ class SPAStaticFiles(StaticFiles):
                 fallback applies. When False, return ``None`` so the caller
                 can return the original 404 response unchanged.
         """
+        # Plan 15 Task 3: Starlette's StaticFiles.get_path() runs the URL
+        # through os.path.normpath (= ntpath.normpath on Windows), which
+        # converts forward slashes to backslashes. Restore URL-shape.
+        path = path.replace("\\", "/")
         first_segment = path.split("/", 1)[0] if path else ""
         if first_segment in _RESERVED_PREFIXES:
             if raise_on_miss:
