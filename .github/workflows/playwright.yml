@@ -41,6 +41,16 @@ on:
     branches: [main]
   pull_request:
 
+# Plan 16 D17 / Task 17: Defender SmartScreen pre-step is gated on this var.
+# Off by default — `vars.DEFENDER_DISABLE` is unset on the repo, so the `||`
+# falls back to `'false'` and the step's `if:` evaluates false. To enable on
+# a Defender-flake-affected run, set the `DEFENDER_DISABLE` repository variable
+# to `'true'` via Settings → Actions → Variables. Macs have no Defender; the
+# step's `runner.os == 'Windows'` clause keeps the matrix's macOS leg untouched
+# regardless of the var. No cleanup step — runners are ephemeral.
+env:
+  DEFENDER_DISABLE: ${{ vars.DEFENDER_DISABLE || 'false' }}
+
 jobs:
   e2e:
     strategy:
@@ -139,6 +149,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      # Plan 16 D17 / Task 17: opt-in Defender real-time-monitoring disable
+      # for Windows Playwright runs that hit SmartScreen flakes on the
+      # browser binary download / launch path. Off by default (the workflow
+      # `env: DEFENDER_DISABLE` falls back to `'false'` when the repo var is
+      # unset; the if-gate then evaluates false and this step is a no-op).
+      # Mac runners don't have Defender, so the `runner.os == 'Windows'`
+      # clause keeps the matrix's macOS leg untouched even if the var is set.
+      # Runners are ephemeral; no cleanup step needed.
+      - name: Disable Defender real-time monitoring (Windows only, feature-flagged)
+        if: env.DEFENDER_DISABLE == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Write-Host "Defender real-time monitoring disabled per DEFENDER_DISABLE workflow var."
+
       # On a cache hit we still need the Linux apt deps that --with-deps
       # supplies — but hosted macos-14 + windows-2022 runners have nothing
       # to install on the system side, so the gate is straightforward:
@@ -204,10 +229,11 @@ jobs:
       # - `--with-deps` for `playwright install` is a no-op on Windows
       #   (only Linux apt deps are involved); harmless to keep above.
       # - Defender SmartScreen historically does not interfere with the
-      #   Playwright browser binaries on hosted windows-2022 runners; if it
-      #   ever does, the workaround is `Set-MpPreference -DisableRealtime
-      #   Monitoring $true` in a PowerShell pre-step (Plan 14 chflags
-      #   equivalent). Not added preemptively — keep CI logs clean.
+      #   Playwright browser binaries on hosted windows-2022 runners. If it
+      #   ever does, Plan 16 Task 17 / D17 added an opt-in pre-step above
+      #   (gated on the `DEFENDER_DISABLE` repo var) that runs
+      #   `Set-MpPreference -DisableRealtimeMonitoring $true`. Off by
+      #   default to keep CI logs clean; flip the var when needed.
       - name: Playwright e2e (full suite, Windows)
         if: runner.os == 'Windows'
         working-directory: apps/brain_web
