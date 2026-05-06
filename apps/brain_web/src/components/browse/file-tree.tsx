@@ -216,9 +216,14 @@ export function FileTree({
                                 }}
                                 aria-label={`Quick preview ${note.title}`}
                                 title="Quick preview"
-                                // Plan 16 Task 11 a11y: 24x24 (h-6 w-6) for
-                                // WCAG 2.2 AA 2.5.8 touch-target compliance.
-                                className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]"
+                                // Plan 16 Task 11 a11y: 24x24 for WCAG 2.2 AA
+                                // 2.5.8 touch-target compliance. Plan 16 Task
+                                // 12 review fix: ``shrink-0`` + ``min-w-6``
+                                // floor prevents the flex parent from
+                                // squeezing the button below 24x24 when an
+                                // adjacent ``flex-1`` Link with a long
+                                // filename pulls width.
+                                className="mr-1 inline-flex h-6 min-h-6 w-6 min-w-6 shrink-0 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]"
                               >
                                 <Eye size={11} aria-hidden="true" />
                               </button>
