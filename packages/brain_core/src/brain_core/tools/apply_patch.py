@@ -81,9 +81,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # still follows the same approval-gated flow (Plan 04 semantics). The
     # session has no in-flight Config object; ``_resolve_config`` snapshots
     # defaults and overlays the session vault_root (mirrors
-    # ``brain_config_get``). Plan 07 Task 5 wires persisted config here;
-    # until then, ``_resolve_config`` is the extension point for tests to
-    # monkeypatch a specific ``AutonomousConfig``.
+    # ``brain_config_get``). ``_resolve_config`` is also the extension point
+    # for tests to monkeypatch a specific ``AutonomousConfig``.
     config = _resolve_config(ctx)
     auto_applied = should_auto_apply(envelope.patchset, config)
 
@@ -115,14 +114,20 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 def _resolve_config(ctx: ToolContext) -> Config:
     """Snapshot a defaults-backed Config with the session vault_root overlaid.
 
-    Returns a fresh ``Config(vault_path=ctx.vault_root)`` — no env or
-    config-file read — so the autonomy gate runs deterministically under
-    test. Plan 07 Task 1 tests monkeypatch this function to supply a
-    custom :class:`AutonomousConfig`; Plan 07 Task 5 will replace the body
-    with a real loader call. This is intentionally NOT a read of
+    Called once per ``brain_apply_patch`` invocation to feed the autonomy
+    gate a Config to evaluate against. Returns a fresh
+    ``Config(vault_path=ctx.vault_root)`` — schema defaults for every field
+    other than ``vault_path``, with no env or config-file read — so the gate
+    runs deterministically under test. This is intentionally NOT a read of
     ``ctx.config``: ``brain_apply_patch`` runs even in low-level harness
     contexts that don't supply a Config, and the autonomy gate's defaults
     (every category opt-in is False) are the safe fallback.
+
+    Tests (originally added in Plan 07 Task 1) monkeypatch this function to
+    supply a custom :class:`AutonomousConfig`. Wiring a real config loader
+    that reads ``~/.config/brain/config.json`` and merges env overrides is
+    separate Plan 16+ work — that is a deliberate config-precedence design
+    decision, not a TODO on this function.
     """
     return Config(vault_path=ctx.vault_root)
 
