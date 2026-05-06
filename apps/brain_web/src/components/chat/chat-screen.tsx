@@ -111,30 +111,6 @@ export function ChatScreen({
     ? { title: "untitled thread", turns: 0, cost: 0 }
     : null;
 
-  const dispatchSend = React.useCallback(
-    (text: string, attachedSources: string[] | undefined) => {
-      // Plan 15 D6 — honor the click-time captured intent.
-      //
-      // ``handleSend`` parks ``mode`` into ``pendingSendRef.current.mode``
-      // at the moment the user pressed Send. If the user changes mode
-      // (Ask / Brainstorm / Draft) while the cross-domain modal is open
-      // and THEN acknowledges, the live closure ``mode`` would be the
-      // post-modal value — not the one the user originally chose. Read
-      // from the ref so the dispatched turn matches the click-time
-      // intent. The ref is non-null whenever ``dispatchSend`` is called
-      // because both call sites (``handleSend`` direct path and
-      // ``handleCrossDomainContinue``) write the ref before invoking;
-      // the fallback to live ``mode`` is purely defensive — see the
-      // invariant note above ``pendingSendRef``.
-      const sendMode = pendingSendRef.current?.mode ?? mode;
-      sendTurnStart(text, {
-        mode: sendMode,
-        attachedSources,
-      });
-    },
-    [sendTurnStart, mode],
-  );
-
   const handleSend = React.useCallback(
     (text: string) => {
       const attachedSources =
@@ -163,7 +139,14 @@ export function ChatScreen({
         return;
       }
 
-      dispatchSend(text, attachedSources);
+      // Direct path (no modal): the user's click-time intent and the
+      // live closure ``mode`` are the same value at this instant — no
+      // await boundary intervenes — so dispatching with live ``mode``
+      // is correct.
+      sendTurnStart(text, {
+        mode,
+        attachedSources,
+      });
     },
     [
       threadId,
@@ -173,20 +156,27 @@ export function ChatScreen({
       acknowledged,
       mode,
       pendingAttachedSources,
-      dispatchSend,
+      sendTurnStart,
     ],
   );
 
   const handleCrossDomainContinue = React.useCallback(
     async (alsoAcknowledge: boolean) => {
+      // Plan 15 D6 — capture the pending intent into a LOCAL and clear
+      // the ref BEFORE any await. Two failure modes are eliminated by
+      // construction:
+      //   1. Throw-leak — if the dispatch below throws (e.g., a WS
+      //      ``send()`` failure), the ref is already null so a stale
+      //      capture can't leak into a subsequent send.
+      //   2. Stale-mode race — if the user toggles mode and presses
+      //      Send again during the ``setCrossDomainWarningAcknowledged``
+      //      await window, the second click writes a fresh ``pending``
+      //      payload to the ref; this turn's ``pending`` local stays
+      //      pinned to its own click-time mode.
+      // The local capture is the click-time intent; nothing reads ``mode``
+      // from the live closure between here and dispatch.
       const pending = pendingSendRef.current;
-      // Plan 15 D6 — keep the ref populated until ``dispatchSend`` has
-      // consumed it. ``dispatchSend`` reads ``pendingSendRef.current.mode``
-      // for the click-time captured intent; clearing here would force
-      // the fallback to live closure ``mode`` and re-introduce the race
-      // we set out to fix (mode toggled while modal was open). The ref
-      // is reset after the send dispatches (or below for the no-pending
-      // / cancel branch).
+      pendingSendRef.current = null;
       setCrossDomainModalOpen(false);
 
       // Persist the acknowledgment FIRST so a slow ack-write can't
@@ -220,16 +210,13 @@ export function ChatScreen({
       }
 
       if (pending !== null) {
-        dispatchSend(pending.text, pending.attachedSources);
+        sendTurnStart(pending.text, {
+          mode: pending.mode,
+          attachedSources: pending.attachedSources,
+        });
       }
-      // Reset AFTER ``dispatchSend`` so the click-time-captured ``mode``
-      // is still readable from the ref while the send is in flight. The
-      // ref is sync-only state (not React state), so an immediate reset
-      // here doesn't trigger a re-render — it just clears the slot for
-      // the next user send.
-      pendingSendRef.current = null;
     },
-    [dispatchSend, refreshGate, pushToast],
+    [sendTurnStart, refreshGate, pushToast],
   );
 
   const handleCrossDomainCancel = React.useCallback(() => {
