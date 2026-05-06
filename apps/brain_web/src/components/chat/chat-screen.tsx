@@ -113,8 +113,22 @@ export function ChatScreen({
 
   const dispatchSend = React.useCallback(
     (text: string, attachedSources: string[] | undefined) => {
+      // Plan 15 D6 — honor the click-time captured intent.
+      //
+      // ``handleSend`` parks ``mode`` into ``pendingSendRef.current.mode``
+      // at the moment the user pressed Send. If the user changes mode
+      // (Ask / Brainstorm / Draft) while the cross-domain modal is open
+      // and THEN acknowledges, the live closure ``mode`` would be the
+      // post-modal value — not the one the user originally chose. Read
+      // from the ref so the dispatched turn matches the click-time
+      // intent. The ref is non-null whenever ``dispatchSend`` is called
+      // because both call sites (``handleSend`` direct path and
+      // ``handleCrossDomainContinue``) write the ref before invoking;
+      // the fallback to live ``mode`` is purely defensive — see the
+      // invariant note above ``pendingSendRef``.
+      const sendMode = pendingSendRef.current?.mode ?? mode;
       sendTurnStart(text, {
-        mode,
+        mode: sendMode,
         attachedSources,
       });
     },
@@ -166,7 +180,13 @@ export function ChatScreen({
   const handleCrossDomainContinue = React.useCallback(
     async (alsoAcknowledge: boolean) => {
       const pending = pendingSendRef.current;
-      pendingSendRef.current = null;
+      // Plan 15 D6 — keep the ref populated until ``dispatchSend`` has
+      // consumed it. ``dispatchSend`` reads ``pendingSendRef.current.mode``
+      // for the click-time captured intent; clearing here would force
+      // the fallback to live closure ``mode`` and re-introduce the race
+      // we set out to fix (mode toggled while modal was open). The ref
+      // is reset after the send dispatches (or below for the no-pending
+      // / cancel branch).
       setCrossDomainModalOpen(false);
 
       // Persist the acknowledgment FIRST so a slow ack-write can't
@@ -202,6 +222,12 @@ export function ChatScreen({
       if (pending !== null) {
         dispatchSend(pending.text, pending.attachedSources);
       }
+      // Reset AFTER ``dispatchSend`` so the click-time-captured ``mode``
+      // is still readable from the ref while the send is in flight. The
+      // ref is sync-only state (not React state), so an immediate reset
+      // here doesn't trigger a re-render — it just clears the slot for
+      // the next user send.
+      pendingSendRef.current = null;
     },
     [dispatchSend, refreshGate, pushToast],
   );
