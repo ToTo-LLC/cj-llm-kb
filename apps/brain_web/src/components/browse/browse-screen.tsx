@@ -29,7 +29,8 @@ import { WikilinkHover } from "./wikilink-hover";
  * BrowseScreen (Plan 07 Task 18).
  *
  * Client owner of the browse view. Pulls the tree from
- * ``recent({limit: 200})`` as a stand-in for a future
+ * ``recent({limit: 50})`` (capped to the backend's ``_MAX_LIMIT`` per
+ * Plan 16 Task 11 audit) as a stand-in for a future
  * ``brain_list_notes`` tool (Task 25 sweep), resolves the active
  * note via ``readNote``, and orchestrates:
  *
@@ -472,9 +473,12 @@ export function BrowseScreen({
         )}
       </div>
     </div>
-    {/* Plan 16 Task 11 — populated-state file-preview overlay. Mounted at
+    {/* Plan 16 Task 11 — file-preview quick-preview overlay. Mounted at
         the screen-level so Radix portals it outside the grid layout. The
-        split-pane above stays as the inline empty-state default. */}
+        split-pane above stays as the inline populated-state Reader; this
+        overlay is an additive quick-preview surface launched via the
+        per-row Eye button (Task 11 spec D11 deviation footnote — full
+        replacement would have broken the Plan 07 inline Reader flow). */}
     <FilePreviewOverlay
       isOpen={previewPath !== null}
       onClose={handleClosePreview}
