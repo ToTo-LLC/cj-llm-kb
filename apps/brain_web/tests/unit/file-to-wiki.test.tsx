@@ -40,6 +40,7 @@ vi.mock("@/lib/state/system-store", () => ({
 
 import { ApiError } from "@/lib/api/types";
 import { FileToWikiDialog } from "@/components/dialogs/file-to-wiki-dialog";
+import { useDomainsStore } from "@/lib/state/domains-store";
 
 const MSG = {
   body: "First paragraph about the silent buyer pattern.\n\nSecond paragraph goes into specifics.\n\nThird paragraph wraps up with a [[link]].\n\nFourth paragraph gets trimmed from preview.",
@@ -51,6 +52,16 @@ beforeEach(() => {
   readNoteMock.mockReset();
   listDomainsMock.mockReset();
   pushToastMock.mockReset();
+
+  // Plan 16 Task 3: the dialog reads domains via the zustand
+  // ``useDomains()`` selector. The store is a module singleton, so
+  // without an explicit reset between tests the first test hydrates
+  // ``domainsLoaded=true`` and subsequent tests skip the auto-refresh
+  // — which means ``listDomainsMock`` is never called for tests 2..N
+  // and the ``waitFor(...listDomainsMock toHaveBeenCalled)`` assertion
+  // hangs. Reset the store before each test so the auto-refresh fires
+  // exactly once per render and the mock observes that call.
+  useDomainsStore.getState()._resetForTesting();
 
   listDomainsMock.mockResolvedValue({
     text: "",

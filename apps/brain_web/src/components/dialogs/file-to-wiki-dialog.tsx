@@ -7,10 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Modal } from "./modal";
-import {
-  listDomains,
-  proposeNote,
-} from "@/lib/api/tools";
+import { proposeNote } from "@/lib/api/tools";
+import { useDomains } from "@/lib/hooks/use-domains";
 import {
   buildVaultPath,
   checkCollision,
@@ -122,33 +120,42 @@ export function FileToWikiDialog({
   const resolvedThreadId = threadId ?? msg.threadId ?? "t-new";
 
   const [type, setType] = React.useState<VaultNoteType>("synthesis");
-  const [domains, setDomains] = React.useState<string[]>([]);
   const [domain, setDomain] = React.useState<string>(defaultDomain ?? "work");
   const [slug, setSlug] = React.useState<string>(inferredSlug);
   const [collision, setCollision] = React.useState<boolean>(false);
   const [submitting, setSubmitting] = React.useState<boolean>(false);
 
-  // Load domains from the tool (scope-filtered server-side).
+  // Plan 16 Task 3 (D3): domain list reads through the zustand
+  // ``useDomains()`` selector — same migration shape as Plan 13 Task 2
+  // for panel-domains.tsx. The previous local ``domains: string[]``
+  // state hydrated from a direct API call is gone; the store's
+  // first-mount auto-refresh hits the same backend exactly once
+  // across every peer consumer (topbar, browse, settings, this
+  // dialog) and they all re-render together when it lands.
+  const { domains: domainEntries } = useDomains();
+  const domains = React.useMemo(
+    () => domainEntries.map((d) => d.slug),
+    [domainEntries],
+  );
+
+  // Snap the selected domain to the first allowed slug once the store
+  // hydrates IF the caller didn't pin a default and the current
+  // selection isn't on the allowed list. Mirrors the behaviour the
+  // pre-Plan-16 inline-fetch block had after the API resolved. We
+  // track ``snapped`` so a user who later picks a different domain
+  // doesn't get yanked back if the store refreshes again later.
+  const snappedRef = React.useRef(false);
   React.useEffect(() => {
-    let cancelled = false;
-    listDomains()
-      .then((resp) => {
-        if (cancelled) return;
-        const list = resp.data?.domains ?? [];
-        setDomains(list);
-        // If caller didn't pin a default, snap to the first allowed domain.
-        if (!defaultDomain && list.length > 0 && !list.includes(domain)) {
-          setDomain(list[0]!);
-        }
-      })
-      .catch(() => {
-        // Don't block the dialog on a failed list — user can still type.
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (snappedRef.current) return;
+    if (defaultDomain) return;
+    if (domains.length === 0) return;
+    if (domains.includes(domain)) {
+      snappedRef.current = true;
+      return;
+    }
+    setDomain(domains[0]!);
+    snappedRef.current = true;
+  }, [defaultDomain, domains, domain]);
 
   const path = React.useMemo(
     () => buildVaultPath(domain, type, slug || "untitled-note"),
