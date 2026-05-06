@@ -76,6 +76,14 @@
   --dom-personal-soft: rgba(198, 75, 46, 0.10);
 
   --tt-cyan:   var(--brand-ember);
+  /* Plan 16 D12: theme-aware hover state for ``--tt-cyan``-class
+     foregrounds. Light value reuses --brand-ember-2 (#AC3D23), the same
+     darker ember already used for ``.btn.primary:hover`` etc., yielding
+     5.99:1 vs --surface-1 #FFFDF6 (and 4.98:1 vs the deepest paper
+     surface --surface-3 #EDE8DB) — clears WCAG 2.2 AA 4.5:1 with
+     margin. Visual continuity with existing :hover states is preserved
+     because this IS the existing :hover color routed through a token. */
+  --tt-cyan-hover: var(--brand-ember-2);
   /* Plan 13 Task 6 a11y bump: was var(--brand-paper) (#F3EFE4) which gives
      4.11:1 white-on-ember (fails 4.5:1 AA for small text on Radix
      accent-state buttons + tool-call labels). Pure white pushes the same
@@ -160,6 +168,14 @@ html[data-theme="dark"],
      previously sat next to that rule was dropped at the same time —
      it was forcing the same color the new token already produces. */
   --tt-cyan:   #E06A4A;
+  /* Plan 16 D12: dark-mode hover for ``--tt-cyan``-class foregrounds.
+     The base dark-mode --tt-cyan #E06A4A measures 5.56:1 vs --surface-1
+     #141412; the hover lifts that to ~6.6:1 with a slightly brighter,
+     warmer shade (#E87C5C: 6.56:1 vs surface-1, 6.20:1 vs surface-2,
+     5.66:1 vs surface-3) so the hover reads as a clear state shift on
+     dark surfaces while still clearing WCAG 2.2 AA 4.5:1 across every
+     surface tier in the theme. */
+  --tt-cyan-hover: #E87C5C;
   /* Plan 13 Task 6 a11y bump: when --accent-foreground sits on the
      brighter dark-mode ember (#E06A4A), pure white gives 3.39:1 (fails
      AA). Dark ink (#141414) on #E06A4A clears at 5.6:1. globals.css
@@ -187,7 +203,10 @@ html, body {
   font-style: italic;
   letter-spacing: -0.01em;
 }
-.brand-wordmark .dot { color: var(--brand-ember); }
+/* Plan 16 D12 a11y: text glyph (the ``.`` after the wordmark) routed
+   through --tt-cyan for dark-mode 4.5:1 (see audit comment on the
+   .nav-thread.active .mode-chip rule). */
+.brand-wordmark .dot { color: var(--tt-cyan); }
 
 .mono, .ts, .turn-meta .ts, .tool-call .name, .cite .mono, .kbd {
   font-family: var(--font-mono);
@@ -247,7 +266,9 @@ h1, h2, h3, h4 {
   color: var(--text);
 }
 .topbar .brand .name .wm .dot {
-  color: var(--brand-ember);
+  /* Plan 16 D12 a11y: text glyph routed through --tt-cyan for dark-mode
+     4.5:1 (see audit comment on the .nav-thread.active .mode-chip rule). */
+  color: var(--tt-cyan);
   font-weight: 600;
   margin-left: 1px;
 }
@@ -319,8 +340,12 @@ h1, h2, h3, h4 {
   font-weight: 500;
 }
 .nav-thread.active .mode-chip {
+  /* Plan 16 D12 a11y: foreground routed through --tt-cyan so dark mode
+     gets the brighter #E06A4A (5.56:1 vs surface-1) instead of the raw
+     --brand-ember which sits at 3.91:1 on dark surface-1 (FAIL 4.5:1).
+     Light mode unchanged: --tt-cyan resolves to --brand-ember there. */
   background: rgba(198, 75, 46, 0.10);
-  color: var(--brand-ember);
+  color: var(--tt-cyan);
   border-color: rgba(198, 75, 46, 0.35);
 }
 
@@ -440,15 +465,19 @@ h1, h2, h3, h4 {
 }
 .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
 .btn.danger {
+  /* Plan 16 D12 a11y: foreground routed through --tt-cyan (see audit
+     comment on .nav-thread.active .mode-chip above). */
   background: transparent;
-  color: var(--brand-ember);
+  color: var(--tt-cyan);
   border-color: rgba(198, 75, 46, 0.35);
 }
 .btn.danger:hover { background: rgba(198, 75, 46, 0.08); }
 
 .iconbtn { border-radius: var(--r-md); color: var(--text-muted); }
 .iconbtn:hover { background: var(--surface-3); color: var(--text); }
-.iconbtn.active { background: var(--surface-3); color: var(--brand-ember); }
+/* Plan 16 D12 a11y: foreground routed through --tt-cyan (see audit
+   comment on .nav-thread.active .mode-chip above). */
+.iconbtn.active { background: var(--surface-3); color: var(--tt-cyan); }
 
 /* ============================================================
    Chips / pills
@@ -541,7 +570,9 @@ h1, h2, h3, h4 {
 .pending-card .act.approve:hover { background: var(--brand-ember-2); border-color: var(--brand-ember-2); }
 .pending-card .act.reject,
 .pending-card .btn.reject {
-  color: var(--brand-ember);
+  /* Plan 16 D12 a11y: foreground routed through --tt-cyan (see audit
+     comment on .nav-thread.active .mode-chip above). */
+  color: var(--tt-cyan);
   border-color: rgba(198,75,46,0.35);
   background: transparent;
 }
@@ -626,7 +657,13 @@ h1, h2, h3, h4 {
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
-.prose a:hover { color: var(--brand-ember-2); }
+/* Plan 16 D12: hover routed through --tt-cyan-hover so dark mode picks
+   up a brighter shade (#E87C5C, 6.56:1 vs --surface-1) instead of the
+   raw --brand-ember-2 #AC3D23 which fails 4.5:1 on dark (~3.0:1). Light
+   mode is unchanged because --tt-cyan-hover resolves to --brand-ember-2
+   on the paper canvas. */
+.prose a:hover,
+.msg-body a:hover { color: var(--tt-cyan-hover); }
 
 .tool-call,
 .tool-invoke {
@@ -637,10 +674,14 @@ h1, h2, h3, h4 {
   font-size: 13px;
   color: var(--text-muted);
 }
+/* Plan 16 D12 a11y: foreground routed through --tt-cyan; the
+   ``[data-theme="dark"] ... { color: #E06A4A }`` override that
+   previously sat below this rule is now redundant — the dark-mode
+   value of --tt-cyan IS #E06A4A, so the override forced the same color
+   the token already produces (mirrors the Plan 14 Task 5 cleanup of
+   the .prose a hardcoded dark override). Single source of truth. */
 .tool-call .name,
-.tool-invoke .name { color: var(--brand-ember); font-weight: 500; }
-[data-theme="dark"] .tool-call .name,
-[data-theme="dark"] .tool-invoke .name { color: #E06A4A; }
+.tool-invoke .name { color: var(--tt-cyan); font-weight: 500; }
 
 .avatar,
 .cj-avatar {
@@ -722,12 +763,21 @@ a.wikilink,
 a.wikilink:hover,
 .citation:hover,
 .cite:hover {
-  color: var(--brand-ember);
-  border-bottom-color: var(--brand-ember);
+  /* Plan 16 D12 a11y: foreground routed through --tt-cyan so dark mode
+     gets the brighter #E06A4A (5.56:1 vs surface-1) instead of the raw
+     --brand-ember which sits at 3.91:1 on dark surface-1 (FAIL 4.5:1).
+     border-bottom-color is graphical so 3:1 suffices, but routing it
+     through the same token keeps the underline tracking the text. */
+  color: var(--tt-cyan);
+  border-bottom-color: var(--tt-cyan);
   border-bottom-style: solid;
 }
-.wikilink::before { content: "[["; color: var(--brand-ember); margin-right: 1px; font-family: var(--font-mono); }
-.wikilink::after  { content: "]]"; color: var(--brand-ember); margin-left: 1px; font-family: var(--font-mono); }
+/* Plan 16 D12 a11y: bracket glyphs are text content (``::before`` /
+   ``::after``) rendering ``[[`` / ``]]`` so they need 4.5:1; route
+   through --tt-cyan for the dark-mode contrast lift (see hover comment
+   above). */
+.wikilink::before { content: "[["; color: var(--tt-cyan); margin-right: 1px; font-family: var(--font-mono); }
+.wikilink::after  { content: "]]"; color: var(--tt-cyan); margin-left: 1px; font-family: var(--font-mono); }
 .wikilink.no-brackets::before,
 .wikilink.no-brackets::after { content: none; }
 

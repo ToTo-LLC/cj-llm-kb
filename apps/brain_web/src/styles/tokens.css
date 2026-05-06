@@ -40,6 +40,19 @@
   --tt-orange:      #FF4503;
   --tt-sage:        #96B6A6;
   --tt-cyan:        #00AFF0;
+  /* Plan 16 D12: theme-aware hover-state token for ``--tt-cyan``-class
+     foregrounds (e.g. ``.prose a:hover``). The :root value here is the
+     v3 dark-canvas fallback — brighter than --tt-cyan so a hover reads
+     as a state shift on dark surfaces (#33C4F5 yields ~9.4:1 vs the v3
+     dark --surface-1 #141414, well past the 4.5:1 AA threshold). The
+     [data-theme="light"] override below carries the v3 light fallback
+     (#0090C8 → 5.1:1 vs the v3 dark --surface-1 still applies, but on
+     a light canvas a darker shade is the readable hover direction). The
+     brand-skin v4 cascade re-defines this token AGAIN below for the
+     paper/ink palette — see brand-skin.css for the authoritative
+     light-paper + dark-ink values, both of which clear 4.5:1 vs the
+     v4 --surface-1. The two-layer pattern mirrors --tt-cyan itself. */
+  --tt-cyan-hover:  #33C4F5;
   --tt-navy:        #354362;
   --tt-graphite:    #414042;
   --tt-ink:         #141414;
@@ -207,6 +220,11 @@
   --dom-research-soft: rgba(0,175,240,0.10);
   --dom-work-soft: rgba(62,125,137,0.10);
   --dom-personal-soft: rgba(255,69,3,0.10);
+
+  /* Plan 16 D12: light-mode hover for ``--tt-cyan``-class foregrounds.
+     #007BAE yields 4.7:1 vs the v3 light --surface-1 #FFFFFF; brand-skin
+     re-overrides this with paper-canvas values for the v4 cascade. */
+  --tt-cyan-hover: #007BAE;
 
   color-scheme: light;
 }
