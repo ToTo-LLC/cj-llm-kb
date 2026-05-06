@@ -111,15 +111,18 @@ describe("CrossDomainModal — interaction surface", () => {
     );
 
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveAccessibleName("Including a private domain in this chat");
+    expect(dialog).toHaveAccessibleName(
+      "Including a Privacy-railed domain in this chat",
+    );
     expect(screen.getByText("Confirm scope")).toBeInTheDocument();
     // Body prose includes "alongside" + the explanatory sentence.
     expect(
       screen.getByText(/for this chat's scope/i, { exact: false }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/kept private by default/i, { exact: false }),
-    ).toBeInTheDocument();
+    // Plan 15 D4: prose now reads "<slug> is/are Privacy-railed".
+    const dialogText = dialog.textContent ?? "";
+    expect(dialogText).toMatch(/Privacy-railed/);
+    expect(dialogText).toMatch(/notes there only show up when you explicitly include/i);
     // BRAIN.md callout in the second paragraph.
     expect(screen.getByText("BRAIN.md")).toBeInTheDocument();
   });
@@ -139,7 +142,8 @@ describe("CrossDomainModal — interaction surface", () => {
     // test container.
     const dialog = await screen.findByRole("dialog");
     const text = dialog.textContent ?? "";
-    expect(text).toMatch(/personal\s+is kept private/i);
+    // Plan 15 D4: "<slug> is Privacy-railed" replaces "kept private".
+    expect(text).toMatch(/personal\s+is Privacy-railed/);
     expect(text).toMatch(/explicitly include it/i);
   });
 
@@ -155,7 +159,8 @@ describe("CrossDomainModal — interaction surface", () => {
     );
     const dialog = await screen.findByRole("dialog");
     const text = dialog.textContent ?? "";
-    expect(text).toMatch(/personal and journal\s+are kept private/i);
+    // Plan 15 D4: plural prose now reads "<A and B> are Privacy-railed".
+    expect(text).toMatch(/personal and journal\s+are Privacy-railed/);
     expect(text).toMatch(/explicitly include them/i);
   });
 

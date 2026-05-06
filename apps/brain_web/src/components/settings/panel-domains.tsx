@@ -13,6 +13,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ACCENT_SWATCHES, DomainForm } from "@/components/settings/domain-form";
+import { PrivacyRailedGlossaryTooltip } from "@/components/dialogs/cross-domain-modal";
 import {
   DomainOverrideForm,
   type DomainOverrideValues,
@@ -183,7 +184,7 @@ function CrossDomainWarningToggle(): React.ReactElement {
       pushToast({
         lead: next ? "Cross-domain warning on." : "Cross-domain warning off.",
         msg: next
-          ? "brain will confirm before mixing private domains."
+          ? "brain will confirm before mixing Privacy-railed domains."
           : "Mixed-scope chats will start without a prompt.",
         variant: "success",
       });
@@ -228,9 +229,22 @@ function CrossDomainWarningToggle(): React.ReactElement {
         />
       </div>
       <p className="text-[11px] text-[var(--text-muted)]">
-        {showWarning
-          ? "Before starting a chat that mixes a private domain (like personal) with another domain, brain will ask you to confirm."
-          : "The confirmation is off. Mixed-scope chats including private domains will start without a prompt. Turn this back on if you want the check back."}
+        {showWarning ? (
+          <>
+            Before starting a chat that mixes a Privacy-railed
+            <PrivacyRailedGlossaryTooltip />
+            {" "}domain (like personal) with another domain, brain will
+            ask you to confirm.
+          </>
+        ) : (
+          <>
+            The confirmation is off. Mixed-scope chats including
+            Privacy-railed
+            <PrivacyRailedGlossaryTooltip />
+            {" "}domains will start without a prompt. Turn this back on
+            if you want the check back.
+          </>
+        )}
       </p>
     </div>
   );

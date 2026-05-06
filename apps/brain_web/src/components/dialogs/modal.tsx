@@ -39,6 +39,16 @@ export interface ModalProps {
   children: React.ReactNode;
   /** Optional extra class applied to DialogContent for per-dialog layout. */
   className?: string;
+  /**
+   * Forwarded to Radix `DialogContent`'s `onOpenAutoFocus`. Default
+   * Radix behavior focuses the first tabbable child on open. Per-dialog
+   * components opt out (e.g. by calling ``e.preventDefault()`` and
+   * choosing a specific element to focus) when the first tabbable would
+   * be a tooltip trigger or similar element whose focus would steal the
+   * Esc keystroke that should dismiss the dialog. See
+   * ``cross-domain-modal.tsx`` for a Plan 15 D4 example.
+   */
+  onOpenAutoFocus?: (event: Event) => void;
 }
 
 export function Modal({
@@ -51,6 +61,7 @@ export function Modal({
   footer,
   children,
   className,
+  onOpenAutoFocus,
 }: ModalProps) {
   return (
     <Dialog
@@ -62,6 +73,7 @@ export function Modal({
       <DialogContent
         style={{ maxWidth: width }}
         className={cn("gap-3", className)}
+        onOpenAutoFocus={onOpenAutoFocus}
       >
         <DialogHeader>
           {eyebrow ? (

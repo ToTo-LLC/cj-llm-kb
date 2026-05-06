@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { HelpCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -11,6 +12,41 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Modal } from "./modal";
+
+/**
+ * Plan 15 Task 5 (D4 jargon alignment): glossary tooltip rendered
+ * immediately after the first occurrence of "Privacy-railed" on the
+ * modal body and on the Settings → Domains toggle helper text. The
+ * tooltip text is the same canonical 85-char string in both surfaces
+ * so the user only learns the term once.
+ *
+ * Trigger MUST be a focusable ``<button type="button">`` (not a bare
+ * span) — keyboard users need to focus and dismiss it, and icon-only
+ * buttons without an accessible name fail axe-core. ``aria-label`` is
+ * required.
+ *
+ * Exported so ``panel-domains.tsx`` can reuse the same component
+ * verbatim — guarantees the canonical text never drifts between the
+ * two surfaces.
+ */
+export function PrivacyRailedGlossaryTooltip(): React.ReactElement {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="What does Privacy-railed mean?"
+          className="ml-0.5 inline-flex items-center align-baseline text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring,_currentColor)] rounded-sm"
+        >
+          <HelpCircle className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        Domains marked Privacy-railed never appear in chats unless you include them yourself.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 /**
  * CrossDomainModal — Plan 12 Task 9 + Task 7 microcopy.
@@ -149,6 +185,7 @@ export function CrossDomainModal({
   onCancel,
 }: CrossDomainModalProps): React.ReactElement {
   const [dontShowAgain, setDontShowAgain] = React.useState(false);
+  const continueButtonRef = React.useRef<HTMLButtonElement | null>(null);
 
   // Reset the checkbox state every time the modal re-opens so a stale
   // "checked" doesn't leak across separate trigger fires. The user has
@@ -158,6 +195,19 @@ export function CrossDomainModal({
   React.useEffect(() => {
     if (open) setDontShowAgain(false);
   }, [open]);
+
+  // Plan 15 D4: the body now contains a focusable tooltip trigger
+  // (``PrivacyRailedGlossaryTooltip``) before the footer's buttons.
+  // Radix's default ``onOpenAutoFocus`` would land the dialog's initial
+  // focus on that tooltip trigger, which (a) immediately opens the
+  // tooltip and (b) makes Escape dismiss the tooltip via Radix's
+  // ``DismissableLayer`` instead of dismissing the dialog itself.
+  // Override: prevent the default focus and route initial focus to the
+  // Continue button — also a UX win for keyboard users (Enter advances).
+  const handleOpenAutoFocus = React.useCallback((event: Event) => {
+    event.preventDefault();
+    continueButtonRef.current?.focus();
+  }, []);
 
   // Other slugs = scope − railed (computed for the body's "alongside"
   // clause). Stable order: matches scope order minus railed entries.
@@ -179,9 +229,10 @@ export function CrossDomainModal({
         open={open}
         onClose={onCancel}
         eyebrow="Confirm scope"
-        title="Including a private domain in this chat"
-        description="Confirm that this chat may include notes from a privacy-railed domain."
+        title="Including a Privacy-railed domain in this chat"
+        description="Confirm that this chat may include notes from a Privacy-railed domain."
         width={520}
+        onOpenAutoFocus={handleOpenAutoFocus}
         footer={
           <div className="flex w-full items-center justify-between gap-3">
             <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -211,6 +262,7 @@ export function CrossDomainModal({
                 Back to scope
               </Button>
               <Button
+                ref={continueButtonRef}
                 variant="default"
                 onClick={handleContinue}
                 data-testid="cross-domain-continue-button"
@@ -230,14 +282,15 @@ export function CrossDomainModal({
             </>
           ) : null}
           {" for this chat's scope. "}
-          <BoldSlugs slugs={railedSlugsInScope} /> {isOrAre} kept private
-          by default — notes there only show up when you explicitly
+          <BoldSlugs slugs={railedSlugsInScope} /> {isOrAre} Privacy-railed
+          <PrivacyRailedGlossaryTooltip />
+          {" "}— notes there only show up when you explicitly
           include {itOrThem}, like you just did.
         </p>
         <p className="text-foreground">
           If you&apos;d rather keep this chat single-domain, head back
           and adjust the scope. Otherwise continue, and brain will treat
-          the included private notes as in-scope for this chat. See{" "}
+          the included Privacy-railed notes as in-scope for this chat. See{" "}
           <strong>BRAIN.md</strong> for how scope and privacy work in
           your vault.
         </p>
