@@ -37,11 +37,18 @@ describe("RepairConfigDialog", () => {
     expect(
       screen.getByRole("heading", { name: /repair config/i }),
     ).toBeInTheDocument();
-    // Description text appears in the body — Radix mirrors it into
-    // ``aria-describedby``-targeted DialogDescription as well.
+    // Description text rendered via Modal's DialogDescription (Radix
+    // ``aria-describedby`` target). Body carries DISTINCT prose about
+    // what Run repair actually does — pinning here prevents Task 9's
+    // duplicate-description regression from re-emerging.
     expect(
       screen.getByText(
         /If your .* is corrupted, brain falls back to .* then defaults\./i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Running repair reloads .* any in-memory edits .* will be discarded\./i,
       ),
     ).toBeInTheDocument();
     expect(

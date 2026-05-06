@@ -76,9 +76,9 @@ export function RepairConfigDialog({
       }
     >
       <p className="text-muted-foreground">
-        If your <code className="font-mono text-xs">config.json</code> is
-        corrupted, brain falls back to{" "}
-        <code className="font-mono text-xs">.bak</code> then defaults.
+        Running repair reloads{" "}
+        <code className="font-mono text-xs">config.json</code> from disk;
+        any in-memory edits since the last save will be discarded.
       </p>
     </Modal>
   );
