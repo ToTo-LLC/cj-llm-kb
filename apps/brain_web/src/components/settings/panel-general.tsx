@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Folder, Moon, Sun, Wrench } from "lucide-react";
+import { Folder, Moon, Sparkles, Sun, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AutonomyModal } from "@/components/dialogs/autonomy-modal";
 import { RepairConfigDialog } from "@/components/dialogs/repair-config-dialog";
 import { configGet } from "@/lib/api/tools";
 import { useAppStore, type Density, type Theme } from "@/lib/state/app-store";
@@ -30,6 +31,11 @@ export function PanelGeneral(): React.ReactElement {
   // (not ``dialogs-store``) per the Task 9 spec's prop shape — full UI
   // lands at Task 33.
   const [repairOpen, setRepairOpen] = React.useState(false);
+  // Plan 16 Task 10: SCAFFOLD autonomy-mode dialog. Same local-state
+  // pattern as Task 9; full per-domain category UI lands at Task 40
+  // (``panel-autonomous.tsx`` redesign) after Task 38 reshapes the
+  // ``Config.autonomous`` schema.
+  const [autonomyOpen, setAutonomyOpen] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -148,9 +154,40 @@ export function PanelGeneral(): React.ReactElement {
         </p>
       </section>
 
+      {/* Plan 16 Task 10 (SCAFFOLD) — Autonomy mode entry point. Full
+          per-domain category UI lands at Task 40 (``panel-autonomous.tsx``
+          redesign) once Task 38 reshapes the ``Config.autonomous`` schema.
+          The button opens a minimal dialog that satisfies the
+          a11y-populated.spec.ts gate today and pins the microcopy + 4
+          Switch surface (global + 3 categories) for the eventual
+          implementation. */}
+      <section>
+        <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">
+          Autonomy
+        </h2>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-2"
+          onClick={() => setAutonomyOpen(true)}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Configure autonomy
+        </Button>
+        <p className="mt-2 text-[11px] text-[var(--text-muted)]">
+          Let brain make changes without asking. Toggle each category for
+          fine-grained control.
+        </p>
+      </section>
+
       <RepairConfigDialog
         isOpen={repairOpen}
         onClose={() => setRepairOpen(false)}
+      />
+      <AutonomyModal
+        isOpen={autonomyOpen}
+        onClose={() => setAutonomyOpen(false)}
       />
     </div>
   );

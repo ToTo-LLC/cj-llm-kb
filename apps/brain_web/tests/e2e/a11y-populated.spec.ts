@@ -22,10 +22,9 @@
  *   ✅ backup-restore dialog        (Settings → Backups → Restore; typed-confirm)
  *   ✅ cross-domain modal           (chat send with scope=[research, personal])
  *   ✅ patch-card edit dialog       (Pending → select patch → "Edit, then approve")
- *   ⏭ autonomy modal               NOT IMPLEMENTED — autonomy surfaces are
- *                                    Switch toggles (inbox + pending screens),
- *                                    no modal exists today. Deferred to Plan
- *                                    16+ scope.
+ *   ✅ autonomy modal               (Settings → General → Configure autonomy;
+ *                                     SCAFFOLD per Plan 16 Task 10 / D10. Full
+ *                                     per-domain UI lands at Plan 16 Task 40.)
  *
  * Seven implementable dialog cases land here (six since Plan 14 plus the
  * Plan 16 Task 9 repair-config scaffold). The remaining deferral is filed
@@ -413,6 +412,43 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await page.waitForTimeout(200);
 
     await checkA11y(page, "dialog:repair-config");
+
+    // Cleanup: dismiss with Escape so the dialog doesn't bleed into
+    // subsequent cases that share the page lifecycle.
+    await page.keyboard.press("Escape");
+  });
+
+  // ----------------------------------------------------------------
+  // Case 6c: autonomy modal (Plan 16 Task 10 SCAFFOLD)
+  //
+  // Plan 14 Task 3's deferral receipt left the autonomy modal as the
+  // single not-implemented surface. Plan 16 Task 10 lands the scaffold:
+  // Settings → General has a "Configure autonomy" button that opens a
+  // minimal ``<AutonomyModal>`` (Modal + global Switch + 3 category
+  // Switches + Done). Full per-domain category UI lands at Plan 16 Task
+  // 40 once Task 38 reshapes ``Config.autonomous`` — that re-uses the
+  // same component shape, so the a11y gate stays valid through the
+  // upgrade.
+  // ----------------------------------------------------------------
+  test("autonomy modal has 0 violations", async ({ page, checkA11y }) => {
+    await page.goto("/settings/general/");
+    await page.waitForLoadState("networkidle");
+
+    const autonomyButton = page.getByRole("button", {
+      name: /^Configure autonomy$/i,
+    });
+    await expect(autonomyButton).toBeVisible();
+    await autonomyButton.click();
+
+    // Modal heading is "Autonomy mode" per the Task 10 spec microcopy.
+    await expect(
+      page.getByRole("heading", { name: /^Autonomy mode$/i }),
+    ).toBeVisible();
+    // Mirror the other dialog cases: settle one extra beat so autofocus +
+    // Radix transition complete before axe scans.
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "dialog:autonomy-modal");
 
     // Cleanup: dismiss with Escape so the dialog doesn't bleed into
     // subsequent cases that share the page lifecycle.
