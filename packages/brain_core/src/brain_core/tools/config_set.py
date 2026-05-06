@@ -39,6 +39,7 @@ from pydantic import BaseModel
 
 from brain_core.config.schema import Config, DomainOverride
 from brain_core.config.writer import persist_config_or_revert
+from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_config_set"
@@ -360,16 +361,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # wired Config; production-shape integration tests (Plan 11 lesson 343)
     # post-Plan-12 D6 always supply Config, so the lenient branch was dead
     # code in production.
+    raise_if_no_config(ctx, "brain_config_set")
     cfg = ctx.config
-    if cfg is None:
-        raise RuntimeError(
-            "brain_config_set requires ctx.config to be a Config instance, but "
-            "got None. The brain_api lifespan (build_app_context) and brain_mcp "
-            "_build_ctx are responsible for threading the loaded Config through "
-            "ToolContext; a None config here means the wrapper hasn't wired it in. "
-            "Falling back to Config() defaults would make Settings reads lie about "
-            "the resolved configuration."
-        )
 
     # NOTE on validation: pydantic v2 only validates on assignment when
     # ``validate_assignment=True``, which Config / its sub-configs do

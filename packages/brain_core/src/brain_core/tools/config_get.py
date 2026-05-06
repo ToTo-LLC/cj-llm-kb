@@ -24,6 +24,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_config_get"
@@ -55,16 +56,8 @@ def _snapshot_config(ctx: ToolContext) -> dict[str, Any]:
     ``ctx.vault_root`` because the loader's allowlist deliberately
     excludes it from the persisted blob (chicken-and-egg field).
     """
+    raise_if_no_config(ctx, "brain_config_get")
     cfg = ctx.config
-    if cfg is None:
-        raise RuntimeError(
-            "brain_config_get requires ctx.config to be a Config instance, but "
-            "got None. The brain_api lifespan (build_app_context) and brain_mcp "
-            "_build_ctx are responsible for threading the loaded Config through "
-            "ToolContext; a None config here means the wrapper hasn't wired it in. "
-            "Falling back to Config() defaults would make Settings reads lie about "
-            "the resolved configuration."
-        )
     data: dict[str, Any] = cfg.model_dump(mode="json")
     # Reflect the session's actual vault root rather than the default.
     data["vault_path"] = str(ctx.vault_root)

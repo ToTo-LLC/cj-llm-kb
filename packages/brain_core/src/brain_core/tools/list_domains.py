@@ -36,6 +36,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
 
 NAME = "brain_list_domains"
@@ -73,16 +74,6 @@ def _on_disk_slugs(vault_root: Any) -> set[str]:
     return found
 
 
-_NO_CONFIG_MESSAGE = (
-    "brain_list_domains requires ctx.config to be a Config instance, but "
-    "got None. The brain_api lifespan (build_app_context) and brain_mcp "
-    "_build_ctx are responsible for threading the loaded Config through "
-    "ToolContext; a None config here means the wrapper hasn't wired it in. "
-    "Falling back to Config() defaults would make Settings reads lie about "
-    "the resolved configuration."
-)
-
-
 def _configured_slugs(ctx: ToolContext) -> list[str]:
     """Return ``ctx.config.domains`` live.
 
@@ -93,11 +84,12 @@ def _configured_slugs(ctx: ToolContext) -> list[str]:
     ``brain_config_get`` (Plan 12 Task 3 / D5). Silently falling back to
     ``DEFAULT_DOMAINS`` made the response lie about the resolved configuration
     in production-shape paths (Plan 11 lesson 343).
+
+    Plan 15 Task 8: shared raise pattern lives in
+    ``brain_core.tools._errors.raise_if_no_config``.
     """
-    cfg = ctx.config
-    if cfg is None:
-        raise RuntimeError(_NO_CONFIG_MESSAGE)
-    return list(cfg.domains)
+    raise_if_no_config(ctx, "brain_list_domains")
+    return list(ctx.config.domains)
 
 
 def _active_domain(ctx: ToolContext) -> str:
@@ -109,10 +101,8 @@ def _active_domain(ctx: ToolContext) -> str:
     ``active_domain in domains`` so the field always references a slug
     present in the response's ``domains`` list.
     """
-    cfg = ctx.config
-    if cfg is None:
-        raise RuntimeError(_NO_CONFIG_MESSAGE)
-    return str(cfg.active_domain)
+    raise_if_no_config(ctx, "brain_list_domains")
+    return str(ctx.config.active_domain)
 
 
 async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
