@@ -2,17 +2,32 @@
 
 Spawns ``uvicorn --factory brain_cli.runtime.backend_factory:build_app``
 with the correct env so brain_api picks up the vault, web-out dir, and
-port. We invoke uvicorn directly via ``sys.executable -m uvicorn`` —
-brain_cli is always launched from a uv-managed venv (the install shim
-runs ``uv run brain ...``), so ``sys.executable`` already points at a
-Python with uvicorn installed. Going through the venv Python instead of
-a nested ``uv run`` call drops one layer of indirection and avoids the
-PATH trap: when brain_cli is itself spawned under ``uv run``, the child
-process's PATH includes the venv's ``bin/`` but NOT ``~/.local/bin/``
-where ``uv`` lives, so a bare ``["uv", ...]`` Popen would fail with
-``FileNotFoundError``. Kill is psutil-backed so we don't have to branch
-on POSIX signals vs Windows termination semantics. Health check uses
-httpx against ``/healthz`` with a 200ms poll.
+port. We invoke uvicorn directly via ``<install>/.venv/(bin|Scripts)/
+python(.exe) -m uvicorn`` — never ``uv run uvicorn``. Two layered
+reasons:
+
+1. **No nested uv re-sync.** ``uv run`` triggers an auto-sync on each
+   invocation, which on macOS re-marks the editable .pth files with
+   ``UF_HIDDEN`` and breaks ``import brain_core`` mid-bootstrap (Plan 11
+   lesson 341 + Plan 12/13/14 refinements). Direct python invocation
+   bypasses uv entirely; whatever chflags state was set before
+   ``brain start`` stays clamped.
+2. **No PATH trap.** When brain_cli is itself spawned under ``uv run``,
+   the child PATH includes the venv's ``bin/`` but NOT ``~/.local/bin/``
+   where ``uv`` itself lives, so a bare ``["uv", ...]`` Popen would
+   fail with ``FileNotFoundError``.
+
+Cross-platform venv-python resolution (Plan 15 D3):
+``<install>/.venv/bin/python`` on Mac/Linux, ``<install>/.venv/
+Scripts/python.exe`` on Windows. Falls back to ``sys.executable`` if
+the resolved path doesn't exist (dev mode where ``BRAIN_INSTALL_DIR``
+is unset and the install dir doesn't exist on disk; the parent process
+is already running inside the repo venv so ``sys.executable`` is the
+right interpreter there).
+
+Kill is psutil-backed so we don't have to branch on POSIX signals vs
+Windows termination semantics. Health check uses httpx against
+``/healthz`` with a 200ms poll.
 """
 
 from __future__ import annotations
@@ -40,6 +55,36 @@ _TERMINATE_GRACE_S = 5.0
 _HEALTHZ_POLL_INTERVAL_S = 0.2
 
 
+def _resolve_venv_python(install_dir: Path) -> str:
+    """Resolve the venv Python interpreter path for ``install_dir``.
+
+    Returns ``<install>/.venv/bin/python`` on Mac/Linux and
+    ``<install>/.venv/Scripts/python.exe`` on Windows. Path is
+    constructed via :class:`pathlib.Path` so separators are correct on
+    each OS.
+
+    Falls back to :data:`sys.executable` when the resolved path does
+    not exist on disk. This covers dev mode (``BRAIN_INSTALL_DIR``
+    unset; ``install_dir`` defaults to ``~/Applications/brain`` which
+    isn't created on a developer's machine) — in that case the parent
+    process is already running inside the repo's venv, so
+    ``sys.executable`` is the correct interpreter.
+
+    The function never raises; callers see a string path that may or
+    may not actually be runnable. ``subprocess.Popen`` will surface
+    ``FileNotFoundError`` if the path resolves to nothing, and
+    ``brain start`` translates that into a "run brain doctor"
+    message.
+    """
+    venv_subpath = (
+        Path("Scripts") / "python.exe" if sys.platform == "win32" else Path("bin") / "python"
+    )
+    candidate = install_dir / ".venv" / venv_subpath
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
+
+
 def _rotate_log_if_oversized(log_path: Path) -> None:
     """If the log file exceeds the rotation threshold, move it to ``.1``."""
     try:
@@ -64,21 +109,21 @@ def start_brain_api(
     web_out_dir: Path,
     log_path: Path,
 ) -> subprocess.Popen[bytes]:
-    """Spawn ``python -m uvicorn --factory ...`` as a child process.
+    """Spawn ``<venv-python> -m uvicorn --factory ...`` as a child process.
 
     Returns the ``Popen`` object (caller stores ``.pid`` in the PID file).
     Never uses ``shell=True``. Passes a scrubbed env with the BRAIN_*
     vars the factory expects.
 
-    We use ``sys.executable`` (the venv's Python interpreter) rather
-    than a nested ``uv run`` call. The parent Python process is already
-    running inside the venv — either because the user ran ``uv run
-    brain ...`` directly or because the install shim did. That means
-    ``sys.executable`` resolves to the venv's Python which has
-    ``uvicorn`` installed. Going through ``uv run`` adds zero value
-    and fails when PATH doesn't include ``uv``'s install location
-    (e.g. a child of ``uv run`` has the venv's ``bin/`` on PATH but
-    NOT ``~/.local/bin/``).
+    Resolves the venv Python explicitly via :func:`_resolve_venv_python`
+    rather than relying on :data:`sys.executable` (Plan 15 D3). The
+    explicit form decouples the child interpreter from however the
+    parent was launched, never invokes ``uv run`` (which would
+    re-sync and re-hide the editable .pth files mid-bootstrap on
+    macOS — Plan 11 lesson 341), and avoids the PATH trap (a child of
+    ``uv run`` has the venv's ``bin/`` on PATH but NOT
+    ``~/.local/bin/`` where ``uv`` itself lives, so a bare
+    ``["uv", ...]`` Popen would ``FileNotFoundError``).
 
     On Windows, we add ``CREATE_NEW_PROCESS_GROUP`` so Ctrl+C in the
     parent shell doesn't cascade into the child (matches Plan 08 spec).
@@ -95,8 +140,10 @@ def start_brain_api(
     # e2e runs using FakeLLM). os.environ.copy() above already does this;
     # we're just not scrubbing it.
 
+    venv_python = _resolve_venv_python(install_dir)
+
     cmd: list[str] = [
-        sys.executable,
+        venv_python,
         "-m",
         "uvicorn",
         "--factory",

@@ -142,7 +142,7 @@ def start(
             log_path=log_file,
         )
     except FileNotFoundError as exc:
-        # sys.executable missing or uvicorn not installed in the venv —
+        # Venv Python missing or uvicorn not installed in the venv —
         # both point at a broken install. Surface a plain-English next
         # action.
         typer.echo(

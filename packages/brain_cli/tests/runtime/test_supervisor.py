@@ -124,6 +124,110 @@ def test_start_brain_api_does_not_require_uv_on_path(
     assert captured["args"][0] == sys.executable
 
 
+def test_start_brain_api_uses_venv_python_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 15 D3: when ``<install>/.venv/bin/python`` exists on disk,
+    the supervisor must spawn THAT interpreter — not ``sys.executable``
+    — so we never go through ``uv run`` (which auto-syncs and re-hides
+    the editable .pth files mid-bootstrap on macOS — Plan 11 lesson 341).
+
+    Pins the Mac/Linux arm of ``_resolve_venv_python``. The fallback
+    branch is exercised by ``test_start_brain_api_spawns_with_correct_env``
+    above (where the install dir has no ``.venv``).
+    """
+    vault = tmp_path / "vault"
+    install = tmp_path / "install"
+    log_dir = vault / ".brain" / "logs"
+    log_dir.mkdir(parents=True)
+
+    # Force the POSIX branch of _resolve_venv_python regardless of host.
+    monkeypatch.setattr(supervisor.sys, "platform", "darwin")
+
+    # Create the fake venv Python at the path the helper resolves to.
+    venv_bin = install / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    fake_python = venv_bin / "python"
+    fake_python.write_text("#!/bin/sh\nexit 0\n")
+
+    captured: dict[str, Any] = {}
+
+    def fake_popen(args: list[str], **kwargs: Any) -> _FakePopen:
+        captured["args"] = args
+        return _FakePopen(args, **kwargs)
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", fake_popen)
+
+    proc = supervisor.start_brain_api(
+        port=4317,
+        install_dir=install,
+        vault_root=vault,
+        web_out_dir=install / "web" / "out",
+        log_path=log_dir / "brain-api.log",
+    )
+
+    assert proc.pid == 98765
+    # The venv Python wins over sys.executable when it exists.
+    assert captured["args"][0] == str(fake_python)
+    assert captured["args"][0] != sys.executable
+    assert captured["args"][1:3] == ["-m", "uvicorn"]
+    assert "uv" not in captured["args"]
+
+
+def test_start_brain_api_uses_windows_venv_python_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 15 D3 cross-platform: on Windows the venv Python lives at
+    ``<install>/.venv/Scripts/python.exe``. Force ``sys.platform`` to
+    ``"win32"`` via monkeypatch so this exercises the Windows branch
+    of ``_resolve_venv_python`` even on a macOS host.
+
+    Note: ``subprocess.Popen`` still receives a string path, so the
+    monkeypatch only changes which subpath the helper resolves — the
+    Popen call itself is mocked so no ``.exe`` ever gets executed.
+    """
+    vault = tmp_path / "vault"
+    install = tmp_path / "install"
+    log_dir = vault / ".brain" / "logs"
+    log_dir.mkdir(parents=True)
+
+    # Force the Windows branch of _resolve_venv_python.
+    monkeypatch.setattr(supervisor.sys, "platform", "win32")
+    # The supervisor also reads ``subprocess.CREATE_NEW_PROCESS_GROUP``
+    # under the ``win32`` branch; that attribute doesn't exist on a
+    # POSIX host, so stub it to a sentinel for this test.
+    monkeypatch.setattr(supervisor.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+
+    # Create the fake venv Python at the Windows path the helper expects.
+    venv_scripts = install / ".venv" / "Scripts"
+    venv_scripts.mkdir(parents=True)
+    fake_python = venv_scripts / "python.exe"
+    fake_python.write_text("")
+
+    captured: dict[str, Any] = {}
+
+    def fake_popen(args: list[str], **kwargs: Any) -> _FakePopen:
+        captured["args"] = args
+        return _FakePopen(args, **kwargs)
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", fake_popen)
+
+    proc = supervisor.start_brain_api(
+        port=4317,
+        install_dir=install,
+        vault_root=vault,
+        web_out_dir=install / "web" / "out",
+        log_path=log_dir / "brain-api.log",
+    )
+
+    assert proc.pid == 98765
+    # Windows venv Python wins over sys.executable when it exists.
+    assert captured["args"][0] == str(fake_python)
+    assert captured["args"][0].endswith("python.exe")
+    assert captured["args"][1:3] == ["-m", "uvicorn"]
+    assert "uv" not in captured["args"]
+
+
 def test_stop_brain_api_terminates_then_kills(monkeypatch: pytest.MonkeyPatch) -> None:
     """Must call terminate() first and fall back to kill() if the process
     doesn't exit within the grace window."""
