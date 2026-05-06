@@ -29,11 +29,25 @@
        carry their own type styles. If you find yourself reaching for
        a font-* property on .turn-body, you probably want .msg-body.
 
+   Adoption status (Plan 16 D13 audit, 2026-05):
+     - .prose IS wired today (components/browse/reader.tsx:113 +
+       chat-context preview drawer).
+     - .msg-body and .turn-body are inherited from the v4 brand drop
+       and shipped in this file — but no JSX in apps/brain_web/src/
+       applies them yet (chat/message.tsx + chat/transcript.tsx still
+       use Tailwind utilities). They are the planned target shape
+       once a Plan 17+ pass migrates the chat surface off ad-hoc
+       Tailwind onto the named selectors. Until that pass lands,
+       editing .msg-body / .turn-body here will not affect the
+       rendered chat UI.
+
    When adding NEW content surface:
      - Reading a vault note / external markdown? Use .prose.
-     - Rendering a chat assistant or user message body? Use .msg-body.
+     - Rendering a chat assistant or user message body? Use .msg-body
+       AND wire it through the chat component (don't rely on the
+       selector to pick up styles — the migration is still in flight).
      - Wrapping an entire chat turn (header + body + actions)? Use
-       .turn-body.
+       .turn-body, with the same wiring caveat as .msg-body.
      - None of those fit? Propose a new selector at plan-author level
        (commit message must reference a plan deliverable) rather than
        overload an existing one — the three names above carry semantic
