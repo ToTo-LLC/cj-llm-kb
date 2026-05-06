@@ -118,10 +118,23 @@ runs:
       with:
         version: ${{ inputs.pnpm_version }}
 
-    - name: pnpm install (workspace)
+    # Plan 16 D16 / Task 16: narrow the install scope from the whole
+    # workspace to brain_web + its transitive workspace deps via
+    # `--filter brain_web...`. Today this is functionally equivalent
+    # (the pnpm workspace contains only `apps/brain_web` — `pnpm-workspace
+    # .yaml` also lists `packages/js/*` but that directory does not yet
+    # exist), but the explicit filter:
+    #   (a) documents intent — Playwright only needs brain_web's deps;
+    #   (b) is forward-protective — if a future `packages/js/` package
+    #       lands without Playwright relevance, this composite won't
+    #       balloon the install just because the workspace grew.
+    # The trailing `...` is pnpm's transitive-dependency selector: it
+    # includes brain_web AND every workspace package brain_web depends
+    # on. Without `...`, only brain_web's package.json deps would resolve.
+    - name: pnpm install (filter brain_web...)
       if: inputs.install_pnpm == 'true'
       shell: bash
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile --filter brain_web...
 
     # --- chflags clamp (lesson 341 canonical recipe, Mac only) ---------
     # uv writes editable `.pth` shims with macOS UF_HIDDEN; CPython's

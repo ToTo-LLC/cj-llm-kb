@@ -1,0 +1,70 @@
+# Plan 16 Task 16 / D16 — Workflow YAML structural gate.
+#
+# WHY THIS EXISTS
+# ---------------
+# Plan 14 + Plan 16 added two GitHub Actions workflows (`ci.yml` +
+# `playwright.yml`) and a composite action (`.github/actions/setup-brain-test-
+# env/action.yml`). Workflow YAML is failure-mode-laden — wrong indentation,
+# missing `runs-on:`, dangling `${{ ... }}` expressions, `${{ steps.X.outputs.Y }}`
+# referencing a step `id:` that does not exist — and the failure surfaces only
+# at push-time on a runner. Plan 16 D16 locks a structural pre-commit gate
+# that catches these locally before the bad YAML ever reaches CI.
+#
+# TOOL CHOICE: actionlint (NOT `gh workflow run --validate`)
+# ----------------------------------------------------------
+# Plan 16 Task 16's spec wording said "gh workflow run --dry-run --validate".
+# That flag does not exist on `gh` (verified 2026-05-06): `gh workflow run`
+# triggers a workflow_dispatch event, and its `--ref` / `-f` / `--raw-field`
+# flags do not include any local-syntax validator. `gh workflow view` reads
+# the API, not local files. The canonical local validator for GitHub Actions
+# YAML is `actionlint` (https://github.com/rhysd/actionlint) — it parses the
+# whole workflow, validates `uses:` references, type-checks expression syntax
+# inside `${{ ... }}`, and shells out to `shellcheck` for `run:` step bodies.
+# It is the standard tool the GitHub Actions community uses for this job.
+#
+# The Task 16 spec wording is honored in spirit: a structural gate against
+# malformed workflow YAML, run pre-commit, on any modified `.github/workflows
+# /*.yml` file. actionlint's `files:` filter pins it to that path glob.
+#
+# WHAT actionlint CATCHES
+# -----------------------
+# - YAML syntax errors (mis-indentation, unclosed strings).
+# - Missing required keys (`runs-on:`, `jobs:`, `steps:`).
+# - Unknown action references (`uses: actions/checkout@v999`).
+# - Dangling step output references (`${{ steps.foo.outputs.bar }}` where
+#   `id: foo` does not exist or `bar` is not declared).
+# - shellcheck warnings inside `run:` blocks (when `shellcheck` is on PATH).
+# - Composite-action input type drift between caller and callee.
+#
+# COVERAGE
+# --------
+# Scope: `.github/workflows/*.yml` only. Composite action manifests
+# (`.github/actions/*/action.yml`) are NOT linted directly because
+# actionlint v1.7.x does not parse composite-action manifests as standalone
+# files — it expects a workflow shape (`on:` + `jobs:`) and reports
+# spurious "missing jobs section" errors when handed an `action.yml`.
+# Composite actions ARE referenced from the workflows that `uses:` them, so
+# basic structural mistakes (`uses:` typos, missing inputs, type drift) WILL
+# be caught when the calling workflow is linted. Property access and run
+# blocks inside the composite are not linted by this gate; if that becomes
+# load-bearing, the path is to author a bespoke `local` hook that runs a
+# yamllint-equivalent over `.github/actions/*/action.yml`.
+#
+# HOW TO INSTALL pre-commit LOCALLY
+# ---------------------------------
+# `uv tool install pre-commit` (preferred — keeps it out of the workspace
+# venv) or `brew install pre-commit`. Then `pre-commit install` once per
+# clone to wire the git hook. CI does not run pre-commit (CI is a different
+# gate; pre-commit is a local fast-feedback layer).
+
+repos:
+  # actionlint — the canonical local validator for GitHub Actions YAML.
+  # Pinned to v1.7.7 (latest stable as of 2026-05-06). The hook id
+  # `actionlint` discovers `.github/workflows/*.yml` automatically; the
+  # default `files:` glob is correct (workflows only — composite action
+  # manifests are not validated standalone, see header comment).
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+        name: actionlint (workflow YAML)
