@@ -121,7 +121,7 @@ function inferTitle(source: string): string {
   return firstLine.length > 80 ? firstLine.slice(0, 77) + "…" : firstLine;
 }
 
-export const useInboxStore = create<InboxState>((set) => ({
+export const useInboxStore = create<InboxState>((set, get) => ({
   sources: [],
   activeTab: "progress",
 
@@ -155,7 +155,22 @@ export const useInboxStore = create<InboxState>((set) => ({
         cost: (it.cost as number | undefined) ?? undefined,
       }),
     );
-    set({ sources: items });
+    // Plan 16 Task 1 (D1): id-keyed merge that preserves in-flight
+    // optimistic rows whose id is not in the server response. Without
+    // this, a slow ``loadRecent`` resolution races optimistic
+    // ``addOptimistic`` calls — the unconditional ``set({ sources: items })``
+    // overwrites the just-inserted optimistic row with the (typically
+    // empty) server list. Only ``queued`` rows are preserved: they're
+    // the in-flight optimistic adds. ``complete`` / ``failed`` rows
+    // came from the server originally and re-appear in ``items`` if
+    // still recent. Optimistic-preserved rows lead the merged array
+    // since ``addOptimistic`` prepends — preserves prepend semantics.
+    const serverIds = new Set(items.map((i) => i.id));
+    const current = get().sources;
+    const optimisticPreserved = current.filter(
+      (s) => !serverIds.has(s.id) && s.status === "queued",
+    );
+    set({ sources: [...optimisticPreserved, ...items] });
   },
 
   setTab: (activeTab) => set({ activeTab }),
