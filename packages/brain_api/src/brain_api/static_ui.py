@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal, overload
 
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, PlainTextResponse, Response
@@ -184,6 +185,10 @@ class SPAStaticFiles(StaticFiles):
                 return fallback
         return response
 
+    @overload
+    def _spa_fallback(self, path: str, *, raise_on_miss: Literal[True]) -> Response: ...
+    @overload
+    def _spa_fallback(self, path: str, *, raise_on_miss: Literal[False]) -> Response | None: ...
     def _spa_fallback(self, path: str, *, raise_on_miss: bool) -> Response | None:
         """Pick the best SPA fallback HTML for a given client-route path.
 
