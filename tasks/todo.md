@@ -48,89 +48,41 @@ Legend: ⏸ not yet written · 📝 ready for execution · 🚧 in progress · �
 - **Plan-by-plan** feedback at demo gates.
 - Decisions surfaced as `AskUserQuestion` with ≤4 labeled options, recommended first, per the user's preference format (NUMBER.LETTER).
 
-## Plan 16 candidate scope (forwarded from Plan 15)
+## Plan 16 candidate scope — AUTHORED at full production (1.B)
 
-Items deferred from Plan 15 (and earlier Plans not yet picked up) that are candidate scope for Plan 16+. Plan 16 itself is not yet authored.
+Plan 16 (`tasks/plans/16-comprehensive-carry-forward.md`) was authored 2026-05-06 and revised the same day per locked decisions 1.B / 2.A / 3.A / 4.A. **All 50+ candidate items are IN Plan 16** as 47 narrowly-scoped tasks. Theme 10 (bigger architectural moves) was originally scoped as 7 SCAFFOLD tasks with full polish deferred to Plan 17+; under user-locked decision 1.B, this expanded to 21 production tasks plus a `brain config migrate` CLI lifted from NOT-DOING.
 
-### Production correctness (top priority)
+### What's IN Plan 16 (47 tasks)
 
-- **Production race fix: `inbox-store.loadRecent` overwrite race** at `apps/brain_web/src/lib/state/inbox-store.ts:158`. `set({ sources: items })` unconditionally replaces the store on `loadRecent` resolution, racing `addOptimistic` (line 163). Fix: merge that preserves optimistic rows whose `id` is not in the server response, OR sequence-id check. Closes Plan 14 Task 6 deferred work; the test-arm `waitForResponse` becomes deletable once the production race is fixed.
+**Track A — carry-forward closure (Tasks 1-25):**
+- T1: production correctness — `inbox-store.loadRecent` race fix
+- T2: brain_api hardening — `_spa_fallback @overload`
+- T3-T8: Plan 13 architectural follow-throughs
+- T9-T11: Plan 14 a11y deferrals (T9 + T10 are scaffolds for the a11y gate; full polish lands in T33 + T40)
+- T12-T13: CSS structural cleanup (`--tt-cyan-hover` token + stylelint enforcement)
+- T14-T18: CI follow-throughs (caching + composite action + workflow validation + Defender + observability)
+- T19-T20: test-quality (waitForTimeout removal + afterEach cleanup contract)
+- T21-T25: Plan 15 review residuals
 
-### brain_api hardening (Plan 14 Task 5 review)
+**Track B — bigger architectural moves at FULL PRODUCTION per 1.B (Tasks 26-46):**
+- T26-T29: per-domain budget caps full implementation (schema + cost-ledger rollups + BudgetGuard enforcement + UI)
+- T30-T32: per-domain rate limits full implementation (schema + AnthropicProvider leaky-bucket enforcement + UI)
+- T33-T35: repair-config UI full polish + cross-process hot-reload (Re-run/per-step/Re-apply + `Config.config_version` + watchdog + SIGHUP)
+- T36: `validate_assignment=True` enabled unconditionally per 1.B + perf cost documented in lessons.md regardless of measurement outcome
+- T37-T40: per-domain autonomy categories full implementation (brainstorm + lock → schema migration → AutonomyGate → UI panel)
+- T41: `brain config migrate` CLI lifted from v1 NOT-DOING per 1.B
+- T42-T44: trio of architectural moves at full implementation (Set-as-default button + zustand promotion of useBudget/useDomainOverrides + pendingSendRef audit-AND-apply)
+- T45-T46: BRN001 ruff custom rule plumbing + violation cleanup
 
-- **Pre-existing `_spa_fallback` `Response | None` mypy error** at `static_ui.py` — overload with `@overload` discriminating on `raise_on_miss`. Plan 14 Task 5 review M2 flagged the pre-existing mypy hole.
+**Closure (Task 47):** 47-gate demo + lessons + todo.md + THREE spec footnotes (§6 Cost, §3 Vault [or §5 Autonomy], §4 Privacy clause strengthening).
 
-### Architectural follow-throughs from Plan 13 reviews (still open)
+### What's truly Plan 17+ (residuals only)
 
-- **Migrate `bulk-screen.tsx` and `file-to-wiki-dialog.tsx` to `useDomains()`** (close orphan `listDomains` consumers — Plan 13 Task 2 review M3).
-- **Add `removeDomainOptimistic(slug)` action to `domains-store.ts`** and use in `panel-domains.tsx` delete handler (Plan 13 Task 2 review I1).
-- **Surface `useDomainsStore.error` in `panel-domains.tsx` as inline banner** (Plan 13 Task 2 review I1 follow-up).
-- **Align `domainsLoaded` → `loaded` naming consistency** between `domains-store.ts` and `cross-domain-gate-store.ts` (Plan 13 Task 3 review I1).
-- **Drop or wire the `error` field in `cross-domain-gate-store`** (Plan 13 Task 3 review I2).
-- **Cross-tab pubsub via `BroadcastChannel`** if optimistic-clobber race becomes user-visible (Plan 13 Task 3 review I3).
-- **Align `setAcknowledgedOptimistic` to use early-return pattern** matching `setActiveDomainOptimistic` (Plan 13 Task 3 review M1).
-- **Split `panel-domains.tsx` into 3 files** (Plan 13 Task 3 review M3 — domain row + add-domain affordance + active-domain dropdown).
+Under 1.B's full-production interpretation, the v1 "bigger architectural moves" carry-forward block is empty. Only these residuals remain:
 
-### Plan 14 a11y deferrals (still open)
+- **`seedBrainMd` / `seedScope` helper extraction** — rule-of-three threshold not yet met (current count = 3; threshold = 5). Lift when 5th caller appears.
+- **Per-thread cross-domain confirmation** — STAYS NOT-DOING with strengthened rationale per Plan 16 D36 spec footnote (architectural NO at the spec level, not a "we didn't get to it" deferral). Re-litigating requires a spec amendment first.
+- **Plan-text "topbar scope chip" inaccuracy drift watch** — lesson-only, captured in `tasks/lessons.md` Plan 12 closure section. The drift watch IS the deferral.
+- Any new candidate scope discovered during Plan 16 execution.
 
-- **Repair-config dialog UI surface** (Plan 14 Task 3 deferral — no UI surface exists today; `grep "repair_config|repairConfig"` returns empty in apps/brain_web/src/).
-- **Autonomy modal** (Plan 14 Task 3 deferral — autonomy surfaces are Switch toggles on inbox + pending screens; no modal exists today).
-- **Browse → file-preview dedicated overlay** (Plan 14 Task 4 D5 deviation — Browse uses an inline split-pane today; SearchOverlay was the closest analog covered in `a11y-populated.spec.ts`).
-- **WikilinkHover tooltip a11y** — covered as `role="tooltip"`, not a modal-shape overlay; not in Plan 14 Task 4 scope.
-- **Per-message Fork dialog smoke case** — Plan 14 Task 3 covered the chat-sub-header Fork; per-message variant (different trigger location) is a separate case.
-
-### CSS structural cleanup (from Plan 14 Task 5 + Plan 13 Task 6 reviews)
-
-- **Hover-state token unification (`--tt-cyan-hover`)** — Plan 14 Task 5 left `.prose a:hover` using `var(--brand-ember-2)` directly; the systematic fix is a `--tt-cyan-hover` token.
-- **Audit other `var(--brand-ember)` foreground sites for dark-mode contrast trap** — Plan 14 Task 5 fixed `.prose a` only; same trap may exist on other `--brand-ember`-as-foreground sites.
-- **Codify "no hardcoded hex outside :root blocks" via stylelint** — structural fix for the hardcoded-hex drift class of bug (Plan 13 Task 6 + Plan 14 Task 5 both surfaced examples).
-- **Document `.prose` / `.msg-body` / `.turn-body` selector convention** in a brand-skin.css comment block — implementers need to know which selector to use for which content type.
-
-### CI follow-throughs (from Plan 14 Task 7 + 8 reviews)
-
-- **Workflow caching (uv + pnpm + Playwright browsers cache)** — current playwright.yml runs cold installs every time; significant CI duration reduction available.
-- **Composite action / DRY for chflags + PYTHONPATH + `npx playwright test`** — the recipe is duplicated across the Mac and Windows steps; a composite action would be the right shape.
-- **`gh workflow run --validate` in pre-commit** — guard against malformed workflow syntax landing.
-- **`pnpm install --frozen-lockfile --filter brain_web...` consistency** — current workflow uses `pnpm install --frozen-lockfile` (workspace-wide); narrowing to `brain_web` would speed up.
-- **Defender SmartScreen pre-step under feature-flag** — if Windows CI flakes on browser binaries, `Set-MpPreference -DisableRealtimeMonitoring $true` in a pre-step is the documented workaround.
-- **PowerShell line-ending discipline lesson** (UTF-8-BOM-on-PS5.1 vs UTF-8-no-BOM-on-pwsh) — Windows CI step uses `pwsh` so this hasn't bit yet, but worth a lessons.md entry.
-- **CI duration observability per-job summary** — surface Mac vs Windows wall-clock + per-step breakdown to catch regression.
-
-### Test-quality follow-throughs (from Plan 14 Task 4 + Plan 15 reviews)
-
-- **`waitForToolResponse` helper for mount-time tool fetch races** in `a11y-populated.spec.ts` — Plan 14 Task 4 used `waitForTimeout(200)` as a beat for several tool-fetch races; a deterministic helper would be the lesson-343 production-shape replacement.
-- **`waitForTimeout` removal across `a11y-populated.spec.ts` (~11 sleep calls)** — deterministic waits for each beat (page mount, dialog mount, route navigation).
-- **Test cleanup contract (`test.afterEach`)** for state-mutating tests in `a11y-populated.spec.ts` — patch-card test rejects its seeded patch in the test body; codifying the pattern in afterEach is the right shape.
-- **Helper extraction for `seedBrainMd` / `seedScope`** once a 5th caller appears — currently 3 callers across spec files; threshold not met yet.
-- **Replace `text-[var(--bg)]` with `text-[var(--accent-foreground)]` in `patch-card.tsx:117`** (Plan 13 Task 6 review #3 — semantic correctness; carried from Plan 14 NOT-DOING).
-
-### Plan 15 review residuals (NEW from Plan 15 task reviews)
-
-- **Microcopy doc SVG mockups still show "private" copy** in `state-1-initial.svg` + `state-2-settings-after-toggle.svg` (Plan 15 Task 5 review — TSX surfaces aligned but mockups reference older jargon).
-- **3 pre-existing TS errors in `tests/e2e/cross-domain-modal.spec.ts`** (Plan 15 Task 7 review — pre-date Task 7; not Task 7's regression but worth a sweep).
-- **act() warnings in `chat-screen.test.tsx`** (Plan 15 Task 7 fix review — async dispatch from `handleCrossDomainContinue` triggers React act warnings; tests pass but log is noisy).
-- **`test_config_get.py` `_mk_ctx` not yet aligned to Path A** (Plan 15 Task 9 review recommendation — `test_config_get.py` has its own `_mk_ctx` shape that wasn't in Plan 15 Task 9 scope; aligning gives full consistency).
-- **Toast detail-vs-CTA period normalization** (Plan 15 Task 6 review N1 — toast lead/msg punctuation isn't consistent across error paths; cosmetic).
-- **Plan 07 Task 5 forward-looking deferrals in `config_set.py:81/90` + `schema.py:101`** (Plan 15 Task 10 review recommendations 1-3 — same pattern as `apply_patch._resolve_config`'s Plan-N reference; sweep these).
-- **Add positive unit test for `PrivacyRailedGlossaryTooltip`** (Plan 15 Task 5 review — current vitest coverage exercises modal/Settings rendering; the tooltip component itself doesn't have a focused test).
-
-### Cleanup carried forward (NOT picked up yet)
-
-- **Plan-text "topbar scope chip" inaccuracy drift watch** (lesson, not code; Plan 12 Task 8).
-
-### Bigger architectural moves (forwarded; still relevant)
-
-- **Per-domain budget caps** — separate cost-ledger schema change.
-- **Per-domain rate limits** — rate limits live in the provider client today.
-- **Repair-config UI screen** — Plan 11 D7 landed the auto-fallback chain; the UI surface is a deeper iteration.
-- **Hot-reload of config changes across processes** — cross-process invalidation (brain_api notifying brain_mcp of a domain rename).
-- **`validate_assignment=True` on `Config` and sub-configs** — KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`); performance impact needs measurement.
-- **Per-domain autonomy categories** — Plan 12 D1 chose DELETE for `resolve_autonomous_mode`; re-introducing per-domain autonomy needs `Config.autonomous` to grow per-domain-per-category structure.
-- **"Set as default" button on the topbar scope picker** — Plan 12 D3 placed the editor on `panel-domains.tsx`.
-- **Per-thread cross-domain confirmation** — Plan 12 D8 chose per-vault `Config` field; per-thread violates spec §4 "one-time".
-- **Generic "tool reads ctx.config" lint rule** — repo-wide ruff rule or AST check is Plan 16+ if the anti-pattern keeps re-appearing.
-- **Migration tool for old `config.json` files** — Pydantic defaults handle missing fields on read; `save_config` round-trips with the new shape on next mutation.
-- **Generic zustand promotion across other hooks** (`useBudget`, `useDomainOverrides`, etc.) — Plan 12 promoted `useDomains` and Plan 13 promoted `useCrossDomainGate`; generalizing the pattern across other hooks is Plan 16+ if/when the same cross-instance bug surfaces elsewhere.
-- **`pendingSendRef`-as-local refactor across other handlers** (NEW from Plan 15 Task 7 review) — the capture-into-local pattern Task 7 review locked applies to other ref-spans-await handlers; audit `chat-screen.tsx` + neighboring handlers for the same shape.
-
-These are NOT a Plan 16 commitment — Plan 16 will be authored just-in-time once Plan 15 closes. They're seed items so future-Claude doesn't re-discover them from scratch.
+These are NOT a Plan 17 commitment — Plan 17 will be authored just-in-time once Plan 16 closes.

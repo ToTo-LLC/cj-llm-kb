@@ -1,8 +1,8 @@
 # Plan 16 — Comprehensive carry-forward closure
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Plan 16 D32 locks **sequential per-task dispatch with two-stage review** (Plan 11 + 12 + 13 + 14 + 15 discipline) — do NOT parallelize even when the dependency graph allows it. Plan 16 has the largest task count of any plan in this project (30 tasks); the discipline cost is justified because (a) most tasks are < 50 LOC polish that flush quickly through combined review, and (b) the two SCAFFOLD tasks for bigger architectural moves (per-domain budget caps, per-domain rate limits) need careful spec-correctness review even when the diff is small.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Plan 16 D36 locks **sequential per-task dispatch with combined spec-and-code-quality review** (Plan 11 + 12 + 13 + 14 + 15 discipline) — do NOT parallelize even when the dependency graph allows it. Plan 16 has the largest task count of any plan in this project (47 tasks); the discipline cost is justified because (a) most tasks are < 50 LOC polish that flush quickly through combined review, and (b) per the user's locked decision **1.B (full production)**, every Theme 10 architectural move lands at production-grade — schema + enforcement + UI surface where applicable — which means each concern that previously sat as a single SCAFFOLD now expands to 2-4 narrow sequential tasks (schema → enforcement → UI surface), each ~20 LOC.
 
-**Goal:** Close the entire Plan 15 candidate-scope carry-forward in one cohesive plan. ~50 items across 10 themes accumulated from Plan 12, 13, 14, and 15 reviews — landed here as 30 narrowly-scoped tasks. Two tracks: (a) **carry-forward closure** (themes 1–9; actual deferrals + reviews from prior plans, mostly < 50 LOC each); (b) **architectural foundations** (theme 10; bigger moves landed as SCAFFOLDS — the data model / API contract / lint plumbing — with full polish deferred to Plan 17+ once the foundations have a chance to settle and reveal the real ergonomics).
+**Goal:** Close the entire Plan 15 candidate-scope carry-forward in one cohesive plan AT PRODUCTION-GRADE. ~50 items across 10 themes accumulated from Plan 12, 13, 14, and 15 reviews — landed here as 47 narrowly-scoped tasks. Two tracks: (a) **carry-forward closure** (themes 1–9; actual deferrals + reviews from prior plans, mostly < 50 LOC each); (b) **architectural completions** (theme 10; bigger moves landed at FULL PRODUCTION grade per locked decision 1.B — schema + enforcement + UI surface for each, decomposed into ~3 sequential tasks per concern). The user explicitly chose 1.B over the recommended 1.A scaffold-and-defer approach: Plan 16 ships the working features end-to-end rather than parking them as data-model scaffolds for Plan 17+. Only items genuinely blocked by external dependencies (e.g., per-thread cross-domain confirmation, which violates spec §4) remain deferred.
 
 The 10 themes (numbered to match `tasks/todo.md` Plan 16 candidate-scope):
 
@@ -12,7 +12,7 @@ The 10 themes (numbered to match `tasks/todo.md` Plan 16 candidate-scope):
 
 3. **Plan 13 architectural follow-throughs (still open)** — 8 items from Plan 13 Tasks 2 + 3 reviews. Orphan `listDomains` consumer migration (Task 3); `removeDomainOptimistic` action + `useDomainsStore.error` inline banner (Task 4); `domainsLoaded` → `loaded` naming + drop/wire cross-domain-gate-store error field (Task 5); BroadcastChannel cross-tab pubsub (Task 6); `setAcknowledgedOptimistic` early-return alignment (Task 7); `panel-domains.tsx` 3-file split (Task 8).
 
-4. **Plan 14 a11y deferrals (still open)** — 5 items. Repair-config dialog UI scaffold (Task 9); autonomy modal UI scaffold (Task 10); a11y-populated additions for Browse file-preview overlay + WikilinkHover tooltip + per-message Fork dialog (Task 11). Per D6, Tasks 9 + 10 are SCAFFOLDS sufficient to satisfy the a11y-populated.spec.ts gate; full UI/UX polish for repair-config goes through Task 28.
+4. **Plan 14 a11y deferrals (still open)** — 5 items. Repair-config dialog UI scaffold (Task 9); autonomy modal UI scaffold (Task 10); a11y-populated additions for Browse file-preview overlay + WikilinkHover tooltip + per-message Fork dialog (Task 11). Per D9 + D10, Tasks 9 + 10 are scaffolds sufficient to satisfy the a11y-populated.spec.ts gate; full UI/UX polish for repair-config lands at Task 33 (full Re-run + per-step + Re-apply flow); per-domain autonomy panel lands at Task 40 (`panel-autonomous.tsx` per-domain × per-category grid).
 
 5. **CSS structural cleanup** — 4 items. `--tt-cyan-hover` token + `--brand-ember` foreground audit (Task 12); stylelint hardcoded-hex rule + `.prose`/`.msg-body`/`.turn-body` selector convention doc (Task 13).
 
@@ -24,15 +24,15 @@ The 10 themes (numbered to match `tasks/todo.md` Plan 16 candidate-scope):
 
 9. **Cleanup carried forward** — 1 lesson-only item (plan-text "topbar scope chip" inaccuracy drift watch). Captured in NOT-DOING with rationale.
 
-10. **Bigger architectural moves** — 12 items. Per-domain budget caps SCAFFOLD (Task 26); per-domain rate limits SCAFFOLD (Task 27); repair-config UI screen + cross-process hot-reload SCAFFOLD (Task 28); `validate_assignment=True` on Config — perf-measure + locked decision (Task 29); per-domain autonomy categories brainstorm + lock (Task 30 — schema redesign needed; Plan 16 brainstorms only); "Set as default" topbar + generic zustand promotion + `pendingSendRef`-as-local audit (Task 31 — three trivially-small items grouped); generic "tool reads ctx.config" lint rule SCAFFOLD (Task 32). Two items DEFER outright: per-thread cross-domain confirmation (violates spec §4 "one-time"; captured in NOT-DOING) + migration tool for old `config.json` files (Pydantic defaults already handle missing fields; captured in NOT-DOING).
+10. **Bigger architectural moves at FULL PRODUCTION (1.B)** — 21 tasks across 6 architectural concerns. **Per-domain budget caps** (4 tasks: schema T26 → cost-ledger migration + rollups T27 → BudgetGuard enforcement T28 → UI surface T29). **Per-domain rate limits** (3 tasks: schema T30 → AnthropicProvider enforcement T31 → UI surface T32). **Repair-config UI + cross-process hot-reload** (3 tasks: full repair-config UI polish T33 → `Config.config_version` + single-process invalidation T34 → cross-process hot-reload via watchdog + SIGHUP T35). **`validate_assignment=True`** (1 task T36: measure → enable always per locked 1.B + document perf cost in lessons.md regardless of outcome). **Per-domain autonomy categories** (4 tasks: brainstorm + lock schema T37 → schema migration with read-time backwards-compat T38 → AutonomyGate per-domain enforcement T39 → UI surface `panel-autonomous.tsx` T40). **`brain config migrate` CLI** (1 task T41 — lifted from NOT-DOING per 1.B; landing as a clean rollover for users on the old flat `Config.autonomous: bool` shape). **Trio of trivially-small architectural moves at full implementation** (3 tasks: "Set as default" topbar full impl T42 → generic zustand promotion of `useBudget` + `useDomainOverrides` T43 → `pendingSendRef`-as-local audit + apply T44). **`ctx.config` lint rule** (2 tasks: ruff custom rule `BRN001` plumbing T45 → violation cleanup across the codebase T46). One item stays DEFER under 1.B for spec-architectural reasons: **per-thread cross-domain confirmation** (violates spec §4 "one-time"; captured in NOT-DOING with strengthened rationale that this is a SPEC-LEVEL no, not a "we didn't get to it" no — re-litigating requires a spec amendment first).
 
-11. **(closure)** — Task 33: 33-gate demo + lessons + todo.md update + spec footnote per D31.
+11. **(closure)** — Task 47: 47-gate demo + lessons + todo.md update + THREE spec footnotes per D36.
 
-**Architecture.** Two-track narrative as above. Plan 16 is the largest plan in this project (30 tasks vs Plan 15's 11) because the user's directive is explicit: every original Plan 16 candidate-scope item lands as a task. The discipline that makes 30 tasks tractable: D32 locks combined spec-and-code-quality review per task (Plan 15 lesson — `< 50 LOC` tasks flush through combined review), and D33 locks each task to a single ~20-line PR shape so the per-task review surface stays small.
+**Architecture.** Two-track narrative as above. Plan 16 is the largest plan in this project (47 tasks vs Plan 15's 11) because the user's directive is explicit (1.B): every original Plan 16 candidate-scope item lands as a task AT PRODUCTION-GRADE. The discipline that makes 47 tasks tractable: D36 locks combined spec-and-code-quality review per task (Plan 15 lesson — `< 50 LOC` tasks flush through combined review), and D34 locks each task to a single ~20-line PR shape so the per-task review surface stays small. Theme 10's expansion from 7 SCAFFOLD tasks (in v1) to 21 production tasks (in v2) is the bulk of the size delta: each concern decomposes into schema → enforcement → UI surface with a pin test for each layer.
 
-**Tech Stack.** Same gates as Plan 11 + 12 + 13 + 14 + 15 — Python 3.12, pydantic v2, `mypy --strict`, `ruff`, vitest + Playwright. GitHub Actions (Plan 14 Task 7+8 + Plan 15 Task 3). New tooling: `stylelint` (Task 13 — first plan to land it; npm workspace dep). No other new third-party deps.
+**Tech Stack.** Same gates as Plan 11 + 12 + 13 + 14 + 15 — Python 3.12, pydantic v2, `mypy --strict`, `ruff`, vitest + Playwright. GitHub Actions (Plan 14 Task 7+8 + Plan 15 Task 3). New tooling: `stylelint` (Task 13 — first plan to land it; npm workspace dep), `watchdog` (Task 35 — Python file-watcher for cross-process hot-reload), `freezegun` (Task 31 — already a dev-dep in some packages; needed broader for rate-limit time-window tests). Ruff custom-rule entry (Task 45) lands as a project-local plugin entry per the ruff plugin API.
 
-**Demo gate.** `scripts/demo-plan-16.py` (chflags-prefixed per lesson 341) walks 33 gates — one assertion per substantive item plus regression + sentinel:
+**Demo gate.** `scripts/demo-plan-16.py` (chflags-prefixed per lesson 341) walks 47 gates — one assertion per substantive task plus sentinel:
 
 1. **inbox-store loadRecent merge** (T1): unit test asserts loadRecent preserves optimistic rows whose id is not in server response.
 2. **_spa_fallback @overload** (T2): mypy strict on `static_ui.py` reports 0 errors; `Response | None` overloaded by `raise_on_miss`.
@@ -59,24 +59,38 @@ The 10 themes (numbered to match `tasks/todo.md` Plan 16 candidate-scope):
 23. **chat-screen.test.tsx act() clean** (T23): vitest run captures stderr; assert no `act()` warnings emitted.
 24. **test_config_get._mk_ctx required config** (T24): grep `test_config_get.py` for `_mk_ctx(`; assert all call sites pass `config=` kwarg explicitly (no `config=None` default).
 25. **Toast period + Plan 07 deferrals + tooltip unit test** (T25): grep `panel-domains.tsx` toast strings; assert period-normalized; grep `config_set.py` + `schema.py` for "Plan 07 Task 5"; expect 0 hits; vitest `PrivacyRailedGlossaryTooltip` positive unit test passes.
-26. **Per-domain budget caps SCAFFOLD** (T26): assert `Config.budget.per_domain: dict[str, BudgetOverride]` field exists in schema; assert reading + writing + serializing round-trips; full enforcement deferred to Plan 17+.
-27. **Per-domain rate limits SCAFFOLD** (T27): assert `Config.providers[provider].rate_limit_per_domain: dict[str, RateLimitOverride]` schema field; full provider-client enforcement deferred to Plan 17+.
-28. **Repair-config UI + hot-reload SCAFFOLD** (T28): assert `repair-config-dialog.tsx` exists with at least the auto-fallback-chain summary surface; assert `Config.config_version: int` field + `_resolve_config` reads version on every refresh (lays the groundwork for cross-process invalidation; full pubsub deferred).
-29. **validate_assignment=True decision** (T29): per locked decision (D29 — see below): either `Config.model_config = ConfigDict(validate_assignment=True)` is set OR `tasks/lessons.md` documents the perf-measure outcome and decision to defer. KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`) either passes (still deferred) or is updated to the new shape.
-30. **Per-domain autonomy categories brainstorm-doc** (T30): assert `tasks/plans/16-comprehensive-carry-forward.md` Task 30 contains a "Findings" subsection with the locked decision shape (no implementation expected in Plan 16).
-31. **Trio cleanup** (T31): "Set as default" topbar button scaffold present; `useBudget` / `useDomainOverrides` zustand-promotion scaffold present (or decision recorded); `pendingSendRef`-as-local audit doc filed.
-32. **Generic ctx.config lint rule SCAFFOLD** (T32): assert ruff custom rule OR per-package mypy plugin entry checks for `ctx.config` reads outside the allowed entry-point list; runs as a CI step.
-33. **`PLAN 16 DEMO OK`** sentinel.
+26. **Per-domain budget schema** (T26): assert `Config.budget.per_domain: dict[str, BudgetOverride]` Pydantic v2 field exists; round-trips through JSON serialization.
+27. **Cost-ledger per-domain rollups** (T27): `costs.sqlite` `domain` column verified present (per spec); `cost_report.py` per-domain rollup query returns expected shape on a seeded ledger fixture.
+28. **BudgetGuard per-domain enforcement** (T28): unit test seeds `Config.budget.per_domain["research"].monthly_cap_usd = 10.0`, sets `ctx.domain="research"`, simulates spend up to cap, asserts `BudgetCapExceeded` raises BEFORE the LLM call.
+29. **Per-domain budget UI surface** (T29): vitest renders `panel-domains-row.tsx` with daily-cap + monthly-cap inputs; mutation triggers `setDomainBudget` API call (mocked); assert serialization shape matches schema.
+30. **Per-domain rate-limit schema** (T30): assert `Config.providers[*].rate_limit_per_domain: dict[str, RateLimitOverride]` Pydantic field; round-trips.
+31. **AnthropicProvider per-domain rate-limit enforcement** (T31): freezegun-driven test seeds `requests_per_minute=2`; first 2 calls in window pass; 3rd call within the same minute raises `RateLimitExceeded` (or queues per leaky-bucket semantics — locked in D27).
+32. **Per-domain rate-limit UI surface** (T32): vitest renders `panel-domains-row.tsx` rate-limit input; mutation triggers `setDomainRateLimit` API call (mocked); shape matches schema.
+33. **Repair-config UI full surface** (T33): vitest renders `repair-config-dialog.tsx` with Re-run button + per-step results panel + Re-apply repaired config button; full keyboard a11y + axe-core scan; 0 violations.
+34. **`Config.config_version` + single-process invalidation** (T34): unit test asserts `save_config` increments version; `_resolve_config` re-loads on version mismatch; in-memory cache hits return the same object identity when version is unchanged.
+35. **Cross-process hot-reload** (T35): pytest-asyncio test starts a subprocess running `_resolve_config` in a loop; main process writes a new config; subprocess detects the change via `watchdog` file event + SIGHUP within 500ms; new value visible.
+36. **`validate_assignment=True` enabled + perf-documented** (T36 / locked 1.B): assert `Config.model_config = ConfigDict(validate_assignment=True)` is set unconditionally; KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`) UPDATED to assert the new validation behavior; perf-measure benchmark output captured in `tasks/lessons.md` Plan 16 section regardless of overhead.
+37. **Per-domain autonomy brainstorm + locked schema** (T37): assert this plan file's "Task 37 findings" subsection contains the locked schema shape (`Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries","concepts","draft"], bool]]`).
+38. **Per-domain autonomy schema migration** (T38): unit test seeds an old-shape `config.json` (`{"autonomous": true}`); loader reads it; in-place migration produces the nested per-domain × per-category shape; pin test asserts round-trip.
+39. **AutonomyGate per-domain enforcement** (T39): unit test seeds a domain with `edits=true` + `new_files=false`; `apply_patch` ctx threaded with `domain="research"`; an `edits`-only patch passes; a `new_files`-containing patch is gated for approval.
+40. **Per-domain autonomy UI** (T40): vitest renders `panel-autonomous.tsx` with a per-domain × per-category grid; mutation triggers `setDomainAutonomy` API call; serialization matches schema.
+41. **`brain config migrate` CLI** (T41): subprocess test runs `brain config migrate <old-config.json>`; output is a new-shape config.json; original file backed up to `config.json.pre-migrate.bak`.
+42. **"Set as default" topbar button (full)** (T42): vitest renders topbar scope picker with Set-as-default button; click triggers `setActiveDomain` API call; toast appears confirming.
+43. **Generic zustand promotion** (T43): grep `apps/brain_web/src/lib/state/` for `budget-store.ts` + `domain-overrides-store.ts`; assert both exist; assert `useBudget` / `useDomainOverrides` consumers updated to use the stores.
+44. **`pendingSendRef`-as-local audit + apply** (T44): grep `chat-screen.tsx` + neighboring handlers for the canonical capture-into-local pattern; assert no remaining "ref-spans-await" anti-pattern instances; audit findings appended to plan file.
+45. **`BRN001` ruff rule plumbing** (T45): grep `pyproject.toml` for `[tool.ruff.lint.brain]` allowed-entry-points list; assert rule fires on a known-bad pattern (`ctx.config` read in a non-allowlisted file).
+46. **`BRN001` violation cleanup** (T46): `uv run ruff check . --select BRN001` reports 0 errors across the whole repo; any `# noqa: BRN001` carries a rationale comment.
+47. **`PLAN 16 DEMO OK`** sentinel.
 
 Prints `PLAN 16 DEMO OK` on exit 0; non-zero on any gate failure.
 
-**Owning subagents** (D32 distribution).
-- `brain-frontend-engineer` — Tasks 1, 3, 4, 5, 6, 7, 8, 11 (frontend half), 23, 24 (frontend half — chat-screen test), 25 (tooltip unit test half), 27 (frontend scaffold half), 31 (frontend half)
-- `brain-mcp-engineer` (role-overloaded brain-api-engineer per Plan 05 precedent) — Task 2 (`_spa_fallback` overload)
-- `brain-ui-designer` — Tasks 9 + 10 (microcopy half — dialog copy + tooltip text), 21 (SVG mockup copy update), 28 (microcopy half for repair-config UI)
-- `brain-test-engineer` — Tasks 11 (test half — a11y-populated additions), 17 (PowerShell lesson capture half), 19, 20, 22, 23 (warning sweep half), 33 (closure demo + lessons)
-- `brain-installer-engineer` — Tasks 14, 15, 16, 17 (CI workflow half), 18
-- `brain-core-engineer` — Tasks 24 (test_config_get _mk_ctx alignment), 25 (Plan 07 deferral docstring half), 26, 27 (backend scaffold half), 28 (Config.config_version half), 29, 30, 32
+**Owning subagents** (D36 distribution).
+- `brain-frontend-engineer` — Tasks 1, 3, 4, 5, 6, 7, 8, 9, 10, 11 (frontend half), 12, 13 (frontend + stylelint), 20 (patch-card half), 21, 22, 23, 25 (tooltip unit test half), 29, 32, 33, 40, 42, 43, 44
+- `brain-mcp-engineer` (role-overloaded brain-api-engineer per Plan 05 precedent) — Task 2 (`_spa_fallback` overload), 35 (cross-process hot-reload — brain_api emits SIGHUP to brain_mcp)
+- `brain-ui-designer` — Tasks 9 + 10 (microcopy half — dialog copy + tooltip text), 21 (SVG mockup copy update), 33 (microcopy half for repair-config UI full polish), 40 (microcopy half for autonomy panel)
+- `brain-test-engineer` — Tasks 11 (test half — a11y-populated additions), 17 (PowerShell lesson capture half), 19, 20 (afterEach half), 22, 23 (warning sweep half), 47 (closure demo + lessons)
+- `brain-installer-engineer` — Tasks 14, 15, 16, 17 (CI workflow half), 18, 35 (watchdog plumbing half), 41 (`brain config migrate` CLI), 45, 46 (BRN001 lint rule + cleanup)
+- `brain-core-engineer` — Tasks 24 (test_config_get _mk_ctx alignment), 25 (Plan 07 deferral docstring half), 26 (per-domain budget schema), 27 (cost-ledger migration + rollups), 28 (BudgetGuard enforcement), 30 (rate-limit schema), 31 (AnthropicProvider rate-limit enforcement), 34 (config_version field + single-process invalidation), 36 (validate_assignment perf + enable), 37 (autonomy brainstorm + lock), 38 (autonomy schema migration), 39 (AutonomyGate enforcement)
 - `brain-frontend-engineer` + `brain-test-engineer` — Task 13 (stylelint + selector convention doc shared)
 
 **Pre-flight** (main loop, before dispatching Task 1):
@@ -85,7 +99,7 @@ Prints `PLAN 16 DEMO OK` on exit 0; non-zero on any gate failure.
 - Confirm `tasks/lessons.md` contains the Plan 15 closure section (6 lessons captured per Plan 15 Task 11 step 3).
 - Confirm `CI` workflow is now green up to mypy debt — Plan 15 Task 1 cleared the 76 ruff violations; the residual gate failures should be limited to the pre-existing mypy `Response | None` hole that Task 2 closes.
 - Confirm production `loadRecent` race is the genuine highest-priority item (ahead of architectural follow-throughs and bigger moves) — this ordering is load-bearing for plan-author intent: Plan 16 starts with the only user-visible bug.
-- **Plan 16 inverts the default plan-sizing target.** Plan 11–15 averaged 9–11 tasks; Plan 16 lands 30. The discipline that makes 30 tractable: combined spec-and-code-quality review per task (Plan 15 lesson — `< 50 LOC` flushes through combined review fast), each task locked to a ~20-line PR shape, and D33 locks the rule that any task exceeding ~20 LOC at implementation time MUST split rather than expand.
+- **Plan 16 inverts the default plan-sizing target.** Plan 11–15 averaged 9–11 tasks; Plan 16 lands 47. The discipline that makes 47 tractable: combined spec-and-code-quality review per task (Plan 15 lesson — `< 50 LOC` flushes through combined review fast), each task locked to a ~20-line PR shape, and D34 locks the rule that any task exceeding ~20 LOC at implementation time MUST split rather than expand. The user's 1.B "full production" choice forced the v1 7-task SCAFFOLD bundle (Theme 10) to expand into 21 production tasks; rather than that being a tax, it's load-bearing — each schema field, enforcement plumb, and UI surface lands as a discrete reviewable unit.
 - Note the recurring uv `UF_HIDDEN .pth` workaround (lesson 341 + Plan 12+13+14+15 refinements): chflags + PYTHONPATH same-line python invocation; do NOT use `uv run` (re-syncs and re-hides). Plan 15 Task 4 made this rule first-class in `brain start`; future supervisors / launchers / orchestration tools should follow.
 
 ---
@@ -98,13 +112,11 @@ These items appear in Plan 16 candidate scope but are deferred outright with rat
 
 - **Plan-text "topbar scope chip" inaccuracy drift watch.** Lesson-only item (no code change). Already captured in `tasks/lessons.md` Plan 12 closure section; Plan 16 adds nothing actionable here. The drift watch IS the deferral.
 
-- **Per-thread cross-domain confirmation.** Plan 12 D8 chose per-vault `Config` field; per-thread violates spec §4 "one-time". Re-litigating this requires a spec amendment first. Plan 16 D-NOT (rationale): the architectural decision was made deliberately, not by accident; re-opening it should go through a spec brainstorm not a polish plan.
+- **Per-thread cross-domain confirmation.** Plan 12 D8 chose per-vault `Config` field; per-thread violates spec §4 "one-time". This is a **SPEC-LEVEL no, not a "we didn't get to it" no.** Under the user's 1.B "full production" directive, plan-author re-evaluated whether this should land here; the answer is still no, because the alternative is to amend the spec, which is a separate concern from a polish-and-completion plan. If the user wants per-thread semantics in the future, the path is: spec brainstorm → spec amendment → implementation plan. Plan 16 honors the existing spec rule and strengthens the deferral rationale rather than weakening it.
 
-- **Migration tool for old `config.json` files.** Pydantic defaults handle missing fields on read; `save_config` round-trips with the new shape on next mutation. The migration tool is a Plan 17+ candidate IF a real schema-breaking change ships AND existing user vaults exist in the wild — neither condition holds today. Captured as deliberate deferral.
+- **Spec amendments warranted by Plan 16's schema-and-enforcement landings.** Plan 16 lands **THREE spec footnotes** per D36 (locked below): (a) §6 (Cost) — per-domain budget caps full implementation (T26-T29) + per-domain rate limits full implementation (T30-T32); (b) §3 (Vault) — per-domain autonomy categories landing as a real schema field replacing the flat `Config.autonomous: bool` (T37-T40 + the migration tool T41); (c) §4 (Privacy) — strengthen the "one-time" clause to make explicit that per-thread cross-domain confirmation is an intentional architectural NO, not an oversight. Per the user's 1.B directive, the spec text grows where the implementation grows — Plan 16 is shipping production features, so the spec must reflect them.
 
-- **Full polish of bigger architectural moves landed as SCAFFOLDS in Plan 16** — per-domain budget enforcement (Task 26 lands the schema only); per-domain rate-limit enforcement (Task 27 lands the schema only); repair-config UI full surface (Task 28 lands the dialog scaffold + Config.config_version); cross-process hot-reload pubsub (Task 28 lands version-bumped invalidation only — no pubsub yet); per-domain autonomy categories (Task 30 brainstorms + locks shape, no implementation). These are deliberately deferred to Plan 17+ because (a) the data model needs to settle on disk for at least one user-iteration before the UI surfaces; (b) plan-author bias toward "ship the data shape, defer the polish" matches Plan 11 (which landed `Config.privacy_railed: list[str]` as the first cut, deferred the modal jargon to Plan 15) and Plan 13 (which landed `cross-domain-gate-store` as the cross-instance fix, deferred the `error` field disposition to Plan 16 itself).
-
-- **Spec amendment.** Plan 16 D31 chooses to land **one spec footnote** for Task 26 + 27 (per-domain budget + rate-limit caps schema) and **no other spec text changes**. The other items in Plan 16 are internal correctness / test-debt / polish / scaffold work that doesn't change user-facing surface area. Consistent with Plan 14 D9 (one spec footnote for CI gate), inconsistent with Plan 15 D11 (no spec text). The schema field IS user-facing surface — it's a future contract — so a footnote is warranted.
+- **Items deliberately landed at full production under 1.B (NOT deferred).** The following items previously appeared in Plan 16 v1's NOT-DOING list as "scaffold-and-defer"; per locked decision 1.B they have been LIFTED into Plan 16 as full production tasks: per-domain budget enforcement (now T26-T29); per-domain rate-limit enforcement (now T30-T32); repair-config UI full surface (now T33); cross-process hot-reload pubsub (now T35 via watchdog + SIGHUP); per-domain autonomy categories (now T37-T40 with full implementation, not just a brainstorm); migration tool for old `config.json` files (now T41 — `brain config migrate` CLI; lifted from NOT-DOING because per-domain autonomy schema migration T38 needs a clean rollover for users on the old flat shape). These are no longer NOT-DOING items.
 
 If any of these come up during implementation, file a TODO in Plan 17 candidate scope and keep moving.
 
@@ -112,100 +124,101 @@ If any of these come up during implementation, file a TODO in Plan 17 candidate 
 
 ## Decisions (locked 2026-05-06)
 
-User to sign off on these recommendations on the dispatch round. Implementers MUST treat these as load-bearing once locked — any deviation requires a new round of plan-author sign-off before changing scope.
+All decisions locked at plan-author time. **Decisions 1.B / 2.A / 3.A / 4.A locked by user** on the v2 dispatch round; remaining decisions locked by recommendation. Implementers MUST treat these as load-bearing — any deviation requires a new round of plan-author sign-off before changing scope.
 
 ### Group I — Scope cut
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| Scope | Plan 16 covers all ~50 items from Plan 16 candidate scope as 30 tasks across 10 themes — production correctness (T1), brain_api hardening (T2), Plan 13 architectural follow-throughs (T3-T8), Plan 14 a11y deferrals (T9-T11), CSS structural cleanup (T12-T13), CI follow-throughs (T14-T18), test-quality (T19-T20), Plan 15 review residuals (T21-T25), bigger architectural moves as SCAFFOLDS (T26-T32), closure (T33). DEFERS: `seedBrainMd`/`seedScope` (rule-of-three not met), per-thread cross-domain (spec §4 violation), migration tool (no use case yet), full polish on bigger architectural moves (Plan 17+). | pending | "All carry-forward in one plan" cut. The user's directive: every original Plan 16 candidate-scope item is IN Plan 16. The trade-off is plan size (30 tasks); the discipline that makes it tractable is combined review per task + ~20-LOC PR shape per task. |
+| Scope (1.B) | Plan 16 covers all ~50 items from Plan 16 candidate scope as 47 tasks across 10 themes AT FULL PRODUCTION GRADE per user-locked decision 1.B — production correctness (T1), brain_api hardening (T2), Plan 13 architectural follow-throughs (T3-T8), Plan 14 a11y deferrals (T9-T11), CSS structural cleanup (T12-T13), CI follow-throughs (T14-T18), test-quality (T19-T20), Plan 15 review residuals (T21-T25), bigger architectural moves at FULL PRODUCTION (T26-T46 — see Group X for the per-task breakdown), closure (T47). DEFERS: `seedBrainMd`/`seedScope` (rule-of-three not met) + per-thread cross-domain (spec §4 architectural NO; strengthened rationale below). | locked (user, 1.B) | The user explicitly chose 1.B over the recommended 1.A scaffold-and-defer approach. Trade-off accepted: plan size (47 tasks vs the 30-task scaffold variant); discipline that makes it tractable is combined review per task + ~20-LOC PR shape per task. The schema-only SCAFFOLD pattern from Plan 11 (`Config.privacy_railed: list[str]` ship-then-layer) is intentionally NOT used here because the user wants the features working end-to-end. |
 
 ### Group II — Production correctness (T1)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D1 | `inbox-store.loadRecent` race fix shape: **id-keyed merge that preserves optimistic rows whose id is not in the server response.** Build a server-response-id Set, filter the current store's optimistic rows for ones not in the Set, prepend them to the merged result. Sequence-id check was rejected as more state without a clear win — id is already unique per source ingestion. | pending | "Sequence-id check" was rejected as adding a counter slot that has to stay synchronized across clients/tabs. "Replace store wholesale" is the current bug. The id-merge is surgical (~10 LOC) and matches React/zustand conventions for optimistic UI. Plan 14 Task 6's `waitForResponse` test arm becomes deletable once production is fixed; Task 1 deletes it as part of the same commit (production + test arm coupled). |
+| D1 | `inbox-store.loadRecent` race fix shape: **id-keyed merge that preserves optimistic rows whose id is not in the server response.** Build a server-response-id Set, filter the current store's optimistic rows for ones not in the Set, prepend them to the merged result. Sequence-id check was rejected as more state without a clear win — id is already unique per source ingestion. | locked | "Sequence-id check" was rejected as adding a counter slot that has to stay synchronized across clients/tabs. "Replace store wholesale" is the current bug. The id-merge is surgical (~10 LOC) and matches React/zustand conventions for optimistic UI. Plan 14 Task 6's `waitForResponse` test arm becomes deletable once production is fixed; Task 1 deletes it as part of the same commit (production + test arm coupled). |
 
 ### Group III — brain_api hardening (T2)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D2 | `_spa_fallback Response | None` mypy fix: `@overload` discriminating on `raise_on_miss: Literal[True]` → `Response`, `raise_on_miss: Literal[False]` → `Response | None`. Single `@overload`-decorated stub pair; runtime body unchanged. | pending | "Skip — mypy ignore" was rejected as deferring the type-safety contract. "Refactor to two functions" was rejected as duplicating the body. `@overload` is the canonical pattern for `bool` discriminator → return type. ~10 LOC; the runtime body stays identical. |
+| D2 | `_spa_fallback Response | None` mypy fix: `@overload` discriminating on `raise_on_miss: Literal[True]` → `Response`, `raise_on_miss: Literal[False]` → `Response | None`. Single `@overload`-decorated stub pair; runtime body unchanged. | locked | "Skip — mypy ignore" was rejected as deferring the type-safety contract. "Refactor to two functions" was rejected as duplicating the body. `@overload` is the canonical pattern for `bool` discriminator → return type. ~10 LOC; the runtime body stays identical. |
 
 ### Group IV — Plan 13 architectural follow-throughs (T3-T8)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D3 | Migrate `bulk-screen.tsx` + `file-to-wiki-dialog.tsx` to `useDomains()`: drop direct `listDomains` API import; replace local React state hydrated from `listDomains()` with the `useDomains()` selector. Same shape as Plan 13 Task 2 did for `panel-domains.tsx`. Single PR per file (T3 covers both). | pending | "One file per task" was rejected as task-count bloat for two ~20 LOC migrations. "Skip — Plan 17+" was rejected because Plan 13 Task 2 review M3 said the threshold was met. Mirror migration is mechanical. |
-| D4 | `removeDomainOptimistic(slug)` action lands in `domains-store.ts`; `panel-domains.tsx` delete handler calls it BEFORE awaiting the API; `useDomainsStore.error` is rendered as inline banner above the domains list. Two items, one PR (paired naturally — both are the delete-handler UX surface). | pending | "Skip optimistic action" was rejected — Plan 13 Task 2 review I1 explicitly recommended it. "Skip error banner" was rejected — same review recommended surfacing the error state that's already in the store but unrendered. Pairing them in one task is natural because both touch the same delete-handler. |
-| D5 | `domainsLoaded` → `loaded` rename (matches `cross-domain-gate-store`'s `loaded` field naming); `cross-domain-gate-store.error` field is **wired** (rendered as inline banner in `panel-domains.tsx` settings tab too). | pending | "Drop the field" was the alternative — but Plan 13 Task 3 review I2 said the field exists for parity with `domains-store.error`; dropping it would re-introduce the asymmetry. Wiring it costs ~5 LOC and gives both stores consistent surface. |
-| D6 | BroadcastChannel cross-tab pubsub: lands as a thin module-private layer in BOTH `domains-store.ts` AND `cross-domain-gate-store.ts`. On any `set()` that mutates the store, post to the channel; on inbound message, call `_internalSet()` (which doesn't echo). jsdom-mock for tests. | pending | "Skip — wait until user-visible" was rejected because Plan 13 Task 3 review I3 said the optimistic-clobber race is hypothetical-but-known; landing the pubsub now closes the class. "Single store only" was rejected as inconsistent — both stores have the same race shape. |
-| D7 | `setAcknowledgedOptimistic` aligned to early-return pattern (matches `setActiveDomainOptimistic` in `domains-store.ts`). Mechanical refactor; ~5 LOC. | pending | "Skip" was rejected — Plan 13 Task 3 review M1 said the pattern divergence is drift-prone. Trivial fix. |
-| D8 | `panel-domains.tsx` 3-file split: `panel-domains.tsx` (orchestrator + list), `panel-domains-row.tsx` (per-row editor), `panel-domains-add.tsx` (add-domain affordance), `panel-domains-active.tsx` (active-domain dropdown). The current file is ~580 LOC; the split lands ~200 LOC + 3 × ~120 LOC. Each child file owns its own props + tests. | pending | "2-file split (row + active)" was rejected as leaving the add-domain affordance under-isolated. "4-file split (orchestrator + row + add + active)" matches Plan 13 Task 3 review M3's recommendation exactly. |
+| D3 | Migrate `bulk-screen.tsx` + `file-to-wiki-dialog.tsx` to `useDomains()`: drop direct `listDomains` API import; replace local React state hydrated from `listDomains()` with the `useDomains()` selector. Same shape as Plan 13 Task 2 did for `panel-domains.tsx`. Single PR per file (T3 covers both). | locked | "One file per task" was rejected as task-count bloat for two ~20 LOC migrations. "Skip — Plan 17+" was rejected because Plan 13 Task 2 review M3 said the threshold was met. Mirror migration is mechanical. |
+| D4 | `removeDomainOptimistic(slug)` action lands in `domains-store.ts`; `panel-domains.tsx` delete handler calls it BEFORE awaiting the API; `useDomainsStore.error` is rendered as inline banner above the domains list. Two items, one PR (paired naturally — both are the delete-handler UX surface). | locked | "Skip optimistic action" was rejected — Plan 13 Task 2 review I1 explicitly recommended it. "Skip error banner" was rejected — same review recommended surfacing the error state that's already in the store but unrendered. Pairing them in one task is natural because both touch the same delete-handler. |
+| D5 | `domainsLoaded` → `loaded` rename (matches `cross-domain-gate-store`'s `loaded` field naming); `cross-domain-gate-store.error` field is **wired** (rendered as inline banner in `panel-domains.tsx` settings tab too). | locked | "Drop the field" was the alternative — but Plan 13 Task 3 review I2 said the field exists for parity with `domains-store.error`; dropping it would re-introduce the asymmetry. Wiring it costs ~5 LOC and gives both stores consistent surface. |
+| D6 | BroadcastChannel cross-tab pubsub: lands as a thin module-private layer in BOTH `domains-store.ts` AND `cross-domain-gate-store.ts`. On any `set()` that mutates the store, post to the channel; on inbound message, call `_internalSet()` (which doesn't echo). jsdom-mock for tests. | locked | "Skip — wait until user-visible" was rejected because Plan 13 Task 3 review I3 said the optimistic-clobber race is hypothetical-but-known; landing the pubsub now closes the class. "Single store only" was rejected as inconsistent — both stores have the same race shape. |
+| D7 | `setAcknowledgedOptimistic` aligned to early-return pattern (matches `setActiveDomainOptimistic` in `domains-store.ts`). Mechanical refactor; ~5 LOC. | locked | "Skip" was rejected — Plan 13 Task 3 review M1 said the pattern divergence is drift-prone. Trivial fix. |
+| D8 | `panel-domains.tsx` 3-file split: `panel-domains.tsx` (orchestrator + list), `panel-domains-row.tsx` (per-row editor), `panel-domains-add.tsx` (add-domain affordance), `panel-domains-active.tsx` (active-domain dropdown). The current file is ~580 LOC; the split lands ~200 LOC + 3 × ~120 LOC. Each child file owns its own props + tests. | locked | "2-file split (row + active)" was rejected as leaving the add-domain affordance under-isolated. "4-file split (orchestrator + row + add + active)" matches Plan 13 Task 3 review M3's recommendation exactly. |
 
 ### Group V — Plan 14 a11y deferrals (T9-T11)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D9 | Repair-config dialog UI **scaffold only** — landed as a minimal dialog with the auto-fallback-chain summary text + a "Run repair" button. Full polish (re-running the loader, surfacing per-step results, re-applying repaired config) deferred to Plan 17+ via Task 28 (which lands the underlying `Config.config_version` infrastructure). | pending | "Skip entirely" was rejected — Plan 14 Task 3 deferral receipt asked for a UI surface so a11y-populated.spec.ts can scan it. "Full polish" was rejected as out-of-scope for a polish plan. Scaffold is the minimum that satisfies the a11y gate AND lays the groundwork for full UI in Plan 17+. |
-| D10 | Autonomy modal **scaffold only** — landed as a minimal modal that wraps the existing per-screen Switch toggles into a single dialog with global on/off + per-category overrides. Same SCAFFOLD shape as D9 (a11y-coverable surface; full polish deferred). | pending | Same rationale as D9. Plan 14 Task 3 deferral asked for the surface; the modal is a wrapper around existing logic, not a redesign. |
-| D11 | a11y-populated additions (T11): 3 new cases in `a11y-populated.spec.ts` — Browse → file-preview overlay (NEW: build the dedicated overlay, not the inline split-pane); WikilinkHover tooltip (`role="tooltip"` axe scan); per-message Fork dialog (different trigger location from chat-sub-header Fork). | pending | "Skip file-preview overlay (use inline split-pane)" was rejected — the inline split-pane has different accessibility semantics; the dedicated overlay is what spec §8 implies. "Skip per-message Fork" was rejected — different trigger location IS a different a11y surface (focus restoration, escape behavior, etc.). |
+| D9 | Repair-config dialog UI scaffold lands at T9 (minimal dialog with the auto-fallback-chain summary text + a "Run repair" button) sufficient to satisfy the a11y-populated gate. Full polish (Re-run / per-step results panel / Re-apply repaired config flow) lands at T33 per 1.B — under user-locked decision 1.B, the v1 Plan 17+ deferral for full polish is LIFTED into Plan 16 itself. T9 ↔ T33 split is justified because T9 needs to land before Task 11 closes a11y coverage (so a11y-populated extends), and T33 lands after T34 (which provides the `Config.config_version` infrastructure the Re-apply button calls). | locked | "Single-task scaffold-only" was rejected by 1.B. "Single-task full polish" was rejected because the a11y gate at T11 needs the surface to exist before T33 (which depends on T34). Splitting into T9 (scaffold) + T33 (full polish) is the natural sequence. |
+| D10 | Autonomy modal scaffold lands at T10 (minimal modal wrapping the existing per-screen Switch toggles + global on/off) sufficient for the a11y-populated gate. Per-domain × per-category full surface lands at T40 (`panel-autonomous.tsx`) per 1.B — under user-locked decision 1.B, the v1 deferral is LIFTED. The T10 modal is a generic wrapper (anywhere-trigger); the T40 panel is the deep-config surface (Settings → Autonomous). They co-exist. | locked | "Single-task scaffold-only" was rejected by 1.B. "Drop the T10 modal entirely (only ship T40)" was rejected because the modal is the trigger surface from anywhere in the app; the panel is the deep-config surface. |
+| D11 | a11y-populated additions (T11): 3 new cases in `a11y-populated.spec.ts` — Browse → file-preview overlay (NEW: build the dedicated overlay, not the inline split-pane); WikilinkHover tooltip (`role="tooltip"` axe scan); per-message Fork dialog (different trigger location from chat-sub-header Fork). | locked | "Skip file-preview overlay (use inline split-pane)" was rejected — the inline split-pane has different accessibility semantics; the dedicated overlay is what spec §8 implies. "Skip per-message Fork" was rejected — different trigger location IS a different a11y surface (focus restoration, escape behavior, etc.). |
 
 ### Group VI — CSS structural cleanup (T12-T13)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D12 | `--tt-cyan-hover` token lands as a theme-aware token in `tokens.css` (light = darker shade of `--tt-cyan`, dark = brighter shade of `--tt-cyan`); `.prose a:hover` routes through it. Audit other `var(--brand-ember)` foreground sites: list at least 4 (link in non-prose contexts, button accents, icon foregrounds, badges); fix any that fail 4.5:1 in either theme by routing through the theme-aware token. | pending | "Hardcoded hex hover" was rejected — Plan 14 lesson C3 closed the parallel case for the base `.prose a` color. "Skip the audit" was rejected — Plan 14 Task 5 review explicitly asked for it. |
-| D13 | stylelint `no-hardcoded-hex-outside-root` rule lands; CI fails on hardcoded hex outside `:root` blocks. `.prose` / `.msg-body` / `.turn-body` selector convention doc lands as a comment block at the top of `brand-skin.css`: "Use `.prose` for ingested-content prose; `.msg-body` for chat message bodies; `.turn-body` for full chat-turn wrappers". | pending | "Document only, no stylelint" was rejected — the doc decays without enforcement. "stylelint only" was rejected — the rule is hard to read without the doc explaining the selector taxonomy. Together they're enforcement + onboarding. |
+| D12 | `--tt-cyan-hover` token lands as a theme-aware token in `tokens.css` (light = darker shade of `--tt-cyan`, dark = brighter shade of `--tt-cyan`); `.prose a:hover` routes through it. Audit other `var(--brand-ember)` foreground sites: list at least 4 (link in non-prose contexts, button accents, icon foregrounds, badges); fix any that fail 4.5:1 in either theme by routing through the theme-aware token. | locked | "Hardcoded hex hover" was rejected — Plan 14 lesson C3 closed the parallel case for the base `.prose a` color. "Skip the audit" was rejected — Plan 14 Task 5 review explicitly asked for it. |
+| D13 | stylelint `no-hardcoded-hex-outside-root` rule lands; CI fails on hardcoded hex outside `:root` blocks. `.prose` / `.msg-body` / `.turn-body` selector convention doc lands as a comment block at the top of `brand-skin.css`: "Use `.prose` for ingested-content prose; `.msg-body` for chat message bodies; `.turn-body` for full chat-turn wrappers". | locked | "Document only, no stylelint" was rejected — the doc decays without enforcement. "stylelint only" was rejected — the rule is hard to read without the doc explaining the selector taxonomy. Together they're enforcement + onboarding. |
 
 ### Group VII — CI follow-throughs (T14-T18)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D14 | Workflow caching: `actions/cache@v4` for (a) uv venv + cache dir; (b) pnpm store; (c) Playwright browser binaries. Cache keys keyed on lockfile hashes. Conservative scope — caching is enable/disable, not optimization rework. | pending | "Skip" was rejected — Plan 14 Task 7+8 reviews said cold installs every run is the biggest CI duration cost. "Optimize the workflow shape (parallel jobs)" was rejected as out of scope; caching alone is the load-bearing fix. |
-| D15 | Composite action DRY: new `.github/actions/setup-brain-test-env/action.yml` encapsulates uv install + pnpm install + chflags + PYTHONPATH preamble. Mac and Windows steps invoke it. Cross-platform via inputs (`shell`, `pythonpath_separator`). | pending | "Inline duplication" was rejected — Plan 14 Task 8 review explicitly noted the duplication. "Custom GitHub Action (separate repo)" was rejected as over-engineering for a project-private composite. |
-| D16 | `gh workflow run --validate` lands as a pre-commit hook (`.pre-commit-config.yaml`) that runs against any modified `.github/workflows/*.yml` file. Same shape pre-commit framework already enforces ruff + prettier on this repo. `pnpm install --frozen-lockfile --filter brain_web...` replaces the workspace-wide install in playwright.yml — Mac and Windows both gain ~30s per run from the narrowed scope. | pending | Pairing T16's two items in one PR is natural — both are workflow-shape gates. |
-| D17 | Defender SmartScreen pre-step lands under feature-flag (`env: DEFENDER_DISABLE: ${{ vars.DEFENDER_DISABLE || 'false' }}`); only fires when the workflow var is set. PowerShell line-ending discipline lesson lands in `tasks/lessons.md` Plan 16 section (UTF-8-BOM-on-PS5.1 vs UTF-8-no-BOM-on-pwsh). | pending | "Always disable Defender" was rejected as security-sensitive. "Skip the lesson" was rejected — even if the bug hasn't bit yet (current workflows use pwsh), the discipline is worth capturing for future-Claude. |
-| D18 | CI duration observability: each job writes a per-step wall-clock + per-step status table to `$GITHUB_STEP_SUMMARY`. The summary is visible in the run UI without drilling into logs. Mac vs Windows comparison is just adjacent rows in the same workflow run summary. | pending | "Custom dashboard" was rejected as over-engineering. "Log-only" was rejected as not-discoverable. The `$GITHUB_STEP_SUMMARY` writeback is a built-in GitHub Actions feature; no third-party dependency. |
+| D14 | Workflow caching: `actions/cache@v4` for (a) uv venv + cache dir; (b) pnpm store; (c) Playwright browser binaries. Cache keys keyed on lockfile hashes. Conservative scope — caching is enable/disable, not optimization rework. | locked | "Skip" was rejected — Plan 14 Task 7+8 reviews said cold installs every run is the biggest CI duration cost. "Optimize the workflow shape (parallel jobs)" was rejected as out of scope; caching alone is the load-bearing fix. |
+| D15 | Composite action DRY: new `.github/actions/setup-brain-test-env/action.yml` encapsulates uv install + pnpm install + chflags + PYTHONPATH preamble. Mac and Windows steps invoke it. Cross-platform via inputs (`shell`, `pythonpath_separator`). | locked | "Inline duplication" was rejected — Plan 14 Task 8 review explicitly noted the duplication. "Custom GitHub Action (separate repo)" was rejected as over-engineering for a project-private composite. |
+| D16 | `gh workflow run --validate` lands as a pre-commit hook (`.pre-commit-config.yaml`) that runs against any modified `.github/workflows/*.yml` file. Same shape pre-commit framework already enforces ruff + prettier on this repo. `pnpm install --frozen-lockfile --filter brain_web...` replaces the workspace-wide install in playwright.yml — Mac and Windows both gain ~30s per run from the narrowed scope. | locked | Pairing T16's two items in one PR is natural — both are workflow-shape gates. |
+| D17 | Defender SmartScreen pre-step lands under feature-flag (`env: DEFENDER_DISABLE: ${{ vars.DEFENDER_DISABLE || 'false' }}`); only fires when the workflow var is set. PowerShell line-ending discipline lesson lands in `tasks/lessons.md` Plan 16 section (UTF-8-BOM-on-PS5.1 vs UTF-8-no-BOM-on-pwsh). | locked | "Always disable Defender" was rejected as security-sensitive. "Skip the lesson" was rejected — even if the bug hasn't bit yet (current workflows use pwsh), the discipline is worth capturing for future-Claude. |
+| D18 | CI duration observability: each job writes a per-step wall-clock + per-step status table to `$GITHUB_STEP_SUMMARY`. The summary is visible in the run UI without drilling into logs. Mac vs Windows comparison is just adjacent rows in the same workflow run summary. | locked | "Custom dashboard" was rejected as over-engineering. "Log-only" was rejected as not-discoverable. The `$GITHUB_STEP_SUMMARY` writeback is a built-in GitHub Actions feature; no third-party dependency. |
 
 ### Group VIII — Test-quality follow-throughs (T19-T20)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D19 | `waitForToolResponse(page, toolName)` helper lands in `apps/brain_web/tests/e2e/_helpers.ts`; deterministic wait on the first `/tools/<toolName>` response after the call site. All `waitForTimeout(...)` calls in `a11y-populated.spec.ts` (~11) replaced with deterministic helpers — `waitForToolResponse`, `waitForResponse`, `waitForLoadState`, `expect(...).toBeVisible({ timeout })`, etc. depending on what the beat is actually waiting for. | pending | "Convert one at a time across multiple tasks" was rejected as task-count bloat. "Drop the helper, inline" was rejected as repetitive. The helper is the lesson-343 production-shape replacement. |
-| D20 | `test.afterEach` cleanup contract: every state-mutating test in `a11y-populated.spec.ts` (patch-card edit-approve at minimum; rename/delete domain if they leak) has an `afterEach` that reverts the mutation. `text-[var(--bg)]` → `text-[var(--accent-foreground)]` in `patch-card.tsx:117` lands in the same task (semantic-correctness fix; trivial). | pending | "Cleanup contract only" was rejected as task-count optimization — the patch-card token fix is a 1-line change that the cleanup-contract task touches anyway (it's in the same dialog). Pairing them is natural. |
+| D19 | `waitForToolResponse(page, toolName)` helper lands in `apps/brain_web/tests/e2e/_helpers.ts`; deterministic wait on the first `/tools/<toolName>` response after the call site. All `waitForTimeout(...)` calls in `a11y-populated.spec.ts` (~11) replaced with deterministic helpers — `waitForToolResponse`, `waitForResponse`, `waitForLoadState`, `expect(...).toBeVisible({ timeout })`, etc. depending on what the beat is actually waiting for. | locked | "Convert one at a time across multiple tasks" was rejected as task-count bloat. "Drop the helper, inline" was rejected as repetitive. The helper is the lesson-343 production-shape replacement. |
+| D20 | `test.afterEach` cleanup contract: every state-mutating test in `a11y-populated.spec.ts` (patch-card edit-approve at minimum; rename/delete domain if they leak) has an `afterEach` that reverts the mutation. `text-[var(--bg)]` → `text-[var(--accent-foreground)]` in `patch-card.tsx:117` lands in the same task (semantic-correctness fix; trivial). | locked | "Cleanup contract only" was rejected as task-count optimization — the patch-card token fix is a 1-line change that the cleanup-contract task touches anyway (it's in the same dialog). Pairing them is natural. |
 
 ### Group IX — Plan 15 review residuals (T21-T25)
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D21 | SVG mockup copy update: `state-1-initial.svg` + `state-2-settings-after-toggle.svg` updated to use "Privacy-railed" in place of "private" copy. brain-ui-designer owns the SVG edits (text node replacements; preserve layout + design tokens). | pending | "Document only, don't update SVGs" was rejected — the mockups serve as designer reference + onboarding artifact; copy drift between TSX and SVG is a known onboarding pain. |
-| D22 | 3 pre-existing TS errors in `tests/e2e/cross-domain-modal.spec.ts` fixed via `@ts-expect-error` with a comment explaining the intentional shape OR by narrowing the type at the call site (whichever fits each error individually). | pending | "Suppress all 3 with `@ts-ignore`" was rejected — `@ts-expect-error` is preferred (it errors when the suppression becomes unnecessary). "Skip — pre-existing" was rejected because Plan 15 Task 7 review explicitly asked for the sweep. |
-| D23 | act() warnings sweep in `chat-screen.test.tsx`: each test that triggers async dispatch wraps the dispatch in `await act(async () => { ... })`. Vitest stderr captured + asserted clean. | pending | "Suppress with vitest config" was rejected — suppression hides the underlying bug class (un-awaited React state updates). "Skip" was rejected — Plan 15 Task 7 review noted the noisy log. |
-| D24 | `test_config_get._mk_ctx` Path A alignment (matches Plan 15 Task 9 D8 — required `config: Config`, no `= None` default). All call sites updated. Mirrors the Plan 13 Task 1 None-policy strictness. | pending | "Skip — same shape as the others, just a fixture" was rejected because Plan 15 Task 9 review explicitly recommended the alignment for full consistency. The 4th `_mk_ctx` variant is the only outlier post-Plan 15. |
-| D25 | Three trivially-small Plan 15 review residuals grouped in one PR: (a) toast lead/msg period normalization in `panel-domains.tsx`'s active-domain toast; (b) Plan 07 Task 5 forward-looking deferrals dropped from `config_set.py:81/90` + `schema.py:101` (mirrors Plan 15 Task 10 docstring cleanup); (c) positive unit test for `PrivacyRailedGlossaryTooltip` (Plan 15 Task 5 review). Each ~5 LOC; one PR. | pending | "Three separate tasks" was rejected as task-count bloat for ~15 LOC total. "Drop one of the three" was rejected — each is named explicitly in Plan 16 candidate scope. Pairing is natural; they're all "tiny clean-up" shape. |
+| D21 | SVG mockup copy update: `state-1-initial.svg` + `state-2-settings-after-toggle.svg` updated to use "Privacy-railed" in place of "private" copy. brain-ui-designer owns the SVG edits (text node replacements; preserve layout + design tokens). | locked | "Document only, don't update SVGs" was rejected — the mockups serve as designer reference + onboarding artifact; copy drift between TSX and SVG is a known onboarding pain. |
+| D22 | 3 pre-existing TS errors in `tests/e2e/cross-domain-modal.spec.ts` fixed via `@ts-expect-error` with a comment explaining the intentional shape OR by narrowing the type at the call site (whichever fits each error individually). | locked | "Suppress all 3 with `@ts-ignore`" was rejected — `@ts-expect-error` is preferred (it errors when the suppression becomes unnecessary). "Skip — pre-existing" was rejected because Plan 15 Task 7 review explicitly asked for the sweep. |
+| D23 | act() warnings sweep in `chat-screen.test.tsx`: each test that triggers async dispatch wraps the dispatch in `await act(async () => { ... })`. Vitest stderr captured + asserted clean. | locked | "Suppress with vitest config" was rejected — suppression hides the underlying bug class (un-awaited React state updates). "Skip" was rejected — Plan 15 Task 7 review noted the noisy log. |
+| D24 | `test_config_get._mk_ctx` Path A alignment (matches Plan 15 Task 9 D8 — required `config: Config`, no `= None` default). All call sites updated. Mirrors the Plan 13 Task 1 None-policy strictness. | locked | "Skip — same shape as the others, just a fixture" was rejected because Plan 15 Task 9 review explicitly recommended the alignment for full consistency. The 4th `_mk_ctx` variant is the only outlier post-Plan 15. |
+| D25 | Three trivially-small Plan 15 review residuals grouped in one PR: (a) toast lead/msg period normalization in `panel-domains.tsx`'s active-domain toast; (b) Plan 07 Task 5 forward-looking deferrals dropped from `config_set.py:81/90` + `schema.py:101` (mirrors Plan 15 Task 10 docstring cleanup); (c) positive unit test for `PrivacyRailedGlossaryTooltip` (Plan 15 Task 5 review). Each ~5 LOC; one PR. | locked | "Three separate tasks" was rejected as task-count bloat for ~15 LOC total. "Drop one of the three" was rejected — each is named explicitly in Plan 16 candidate scope. Pairing is natural; they're all "tiny clean-up" shape. |
 
-### Group X — Bigger architectural moves (T26-T32)
-
-| # | Decision | Locked | Why |
-|---|---|---|---|
-| D26 | Per-domain budget caps SCAFFOLD: `Config.budget.per_domain: dict[str, BudgetOverride]` field where `BudgetOverride` extends the existing override model with `monthly_cap_usd: float | None`. Schema only — no enforcement plumbing. Spec footnote in §6 (Cost) noting the field exists, full enforcement deferred. | pending | "Land enforcement too" was rejected — enforcement requires cost-ledger schema migration + per-call lookup; both are Plan 17+ work. "Skip — defer entirely" was rejected because Plan 16 candidate scope explicitly named the SCAFFOLD as Plan 16 work. The schema-first approach mirrors Plan 11 (which landed `Config.privacy_railed: list[str]` as schema first, then layered enforcement in Plan 12+). |
-| D27 | Per-domain rate limits SCAFFOLD: `Config.providers[provider].rate_limit_per_domain: dict[str, RateLimitOverride]` field where `RateLimitOverride` is `requests_per_minute: int | None`. Schema only — no provider-client enforcement. Same spec footnote pattern as D26. | pending | Same rationale as D26 — schema-first, defer enforcement to Plan 17+. |
-| D28 | Repair-config UI screen + cross-process hot-reload SCAFFOLDS paired in one task: dialog scaffold (per D9 — full surface deferred); `Config.config_version: int` field (incremented on every save_config); `_resolve_config` reads the version and re-loads if version mismatch is detected (single-process invalidation). Cross-process pubsub (e.g., brain_api notifying brain_mcp via on-disk SIGHUP-style file watch) is full Plan 17+ work. | pending | Pairing the two is natural because the repair-config UI's "re-apply" button needs the same `config_version` infrastructure that hot-reload would use. Single source of truth in the schema. |
-| D29 | `validate_assignment=True` on Config: perf-measure outcome decides. Implementer measures `Config()` instantiation + assignment-heavy round-trip (e.g., 1000 random field assignments) with and without `validate_assignment=True`. If overhead < 10%, set the flag, update the KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`) to pass with the new shape. If overhead > 10%, document the perf-measure outcome in `tasks/lessons.md` and defer (KNOWN-LIMITATION test stays as-is). | pending | "Just enable it" was rejected — Plan 11 Task 4 added the KNOWN-LIMITATION pin test specifically because the perf impact was untested. "Defer until measured" was rejected as not actionable. The measure-and-decide approach commits to the answer in Plan 16. |
-| D30 | Per-domain autonomy categories: brainstorm-only task. Plan 16 produces a "Findings" subsection with the locked schema shape (e.g., `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries"], bool]]`); no implementation. Plan 17+ implements the locked shape. | pending | "Implement now" was rejected — Plan 12 D1 chose DELETE for `resolve_autonomous_mode` because the per-domain shape wasn't yet decided. Plan 16 closes the brainstorm; Plan 17+ implements. "Skip the brainstorm" was rejected because the candidate scope explicitly asked for it. |
-| D31 | Trio of trivially-small architectural moves grouped in T31: (a) "Set as default" topbar button SCAFFOLD — adds a button to the topbar scope picker that calls the existing `setActiveDomain` API; (b) generic zustand promotion across other hooks SCAFFOLD — start with `useBudget` (lift to `budget-store.ts`); (c) `pendingSendRef`-as-local audit — grep `chat-screen.tsx` + neighboring handlers for the same shape, file an audit doc with findings (no implementation unless an obvious extension hits). Each ~10-20 LOC; one PR. | pending | "Three separate tasks" was rejected as task-count bloat for ~50 LOC total. "Skip the audit (no surface today)" was rejected because Plan 15 Task 7 review explicitly asked for it. |
-| D32 | Generic ctx.config lint rule SCAFFOLD: a custom mypy plugin OR a ruff custom rule that flags any `ctx.config` read outside the allowed entry-point list. CI step runs the lint; failures point to the audit. Scaffold is sufficient — full enforcement (e.g., automated rewrites, IDE integration) is Plan 17+. | pending | "Inline manual audit at every commit" was rejected as not-structural. "Full enforcement" was rejected as out-of-scope for a polish plan. The scaffold pins the contract; future tools layer on top. |
-
-### Group XI — Plan shape (T33)
+### Group X — Bigger architectural moves at FULL PRODUCTION (T26-T46) — locked 1.B
 
 | # | Decision | Locked | Why |
 |---|---|---|---|
-| D33 | Plan 16 task count: 30 tasks + closure (T33). Mirrors Plan 14 (9 tasks) + Plan 15 (11 tasks) cadence at the polish-heavy upper end multiplied by the carry-forward scope. Each task narrowly scoped (~20 LOC PR shape; tasks exceeding ~20 LOC at implementation time MUST split rather than expand). Combined spec-and-code-quality review per task per Plan 15 lesson. NO `gh workflow run --validate` step lifted into pre-commit until Task 16 lands (otherwise it would block Tasks 1-15 dispatch). | pending | "Fewer tasks (~20)" was rejected — combining items beyond what's done in Group IV-IX would muddy review attribution. "More tasks (~40)" was rejected — pairing the trivially-small items (T20, T25, T31) keeps task count down without losing review granularity. |
-| D34 | Demo gate composition: 33 gates. One assertion per substantive item plus regression + sentinel. Mirrors Plan 15's per-item gate shape. | pending | "Collapse to ~15 gates" was rejected — less granular failure signal. "More than 35 gates" was rejected — diminishing returns vs gate-runtime cost. |
-| D35 | Sequential per-task dispatch via `superpowers:subagent-driven-development`. Combined spec-and-code-quality review per task (no separate spec-pass + code-pass). NO parallelization. Spec text touched: ONE footnote in §6 (Cost) for Tasks 26+27 (per-domain budget + rate-limit caps SCAFFOLD). All other tasks NO spec text changes. Owners as listed in "Owning subagents" above. | pending | "Two-stage review per task" was rejected — combined review caught all M-class issues in Plan 15's 11 tasks at < 50 LOC scope; Plan 16's 30 tasks are even smaller per-task. "Parallel where dep graph allows" was rejected for review-discipline reasons (Plan 11-15 all caught real bugs at sequential checkpoints). |
+| D26 | **Per-domain budget caps — full production** (T26-T29; 4 tasks): T26 schema (`Config.budget.per_domain: dict[str, BudgetOverride]` with `monthly_cap_usd: float \| None` + `daily_cap_usd: float \| None`; Pydantic v2 + tests). T27 cost-ledger migration (verify `costs.sqlite` `domain` column already exists per spec; per-domain rollup queries land in `cost_report.py`; tests). T28 BudgetGuard per-call enforcement (`BudgetGuard` reads per-domain caps; raises `BudgetCapExceeded` BEFORE the LLM call when domain-specific cap exceeded; threading via `ctx.config` + `ctx.domain`; pin tests for both daily + monthly windows). T29 UI surface (`panel-domains-row.tsx` per-row gets "Daily cap" + "Monthly cap" optional inputs; persists via `setDomainBudget` API call). Spec footnote in §6 (Cost). | locked (user, 1.B) | Per 1.B "full production": ship the feature working end-to-end. T27's cost-ledger migration leverages the existing `domain` column (no new migration; verify only). The 4-task decomposition is dictated by D33's ~20-LOC PR-shape rule — schema + migration + enforcement + UI are each ~20 LOC. |
+| D27 | **Per-domain rate limits — full production** (T30-T32; 3 tasks): T30 schema (`Config.providers[provider].rate_limit_per_domain: dict[str, RateLimitOverride]` with `requests_per_minute: int \| None`; Pydantic + tests). T31 AnthropicProvider enforcement (provider-client reads per-domain rate-limit cap; uses **leaky-bucket semantics** — locked by recommendation: queues briefly when overflow is mild, raises `RateLimitExceeded` when queue depth exceeds `requests_per_minute * 2`; freezegun-driven tests). T32 UI surface (`panel-domains-row.tsx` rate-limit input — extends T29's row component; persists via `setDomainRateLimit` API). Spec footnote in §6 (Cost) — combined with D26's footnote. | locked (user, 1.B; leaky-bucket recommendation locked) | Per 1.B "full production". Leaky-bucket recommendation locked over sliding-window because (a) leaky-bucket queues smooth bursty traffic, (b) sliding-window is harder to reason about correctness for, (c) Anthropic's own rate limiter is documented as bucket-shaped. Implementer routes back if leaky-bucket is the wrong fit at implementation time. |
+| D28 | **Repair-config UI + cross-process hot-reload — full production** (T33-T35; 3 tasks): T33 repair-config dialog full polish (Re-run button + per-step results panel + Re-apply repaired config flow; replaces v1 D9's SCAFFOLD wording — D9 is now scaffold-at-T9, full polish at T33). T34 `Config.config_version: int` field (default 0; increment in `save_config` on every write; `_resolve_config` reads version + re-loads on mismatch — single-process invalidation; pin tests). T35 cross-process hot-reload (`watchdog` Python file-watcher on `<vault>/.brain/config.json`; on change event, brain_api emits SIGHUP signal to brain_mcp subprocess; brain_mcp's signal handler triggers config re-load; `pytest-asyncio` + `freezegun` tests; new `watchdog` dev-dep). Spec footnote in §6 reflects hot-reload semantics. | locked (user, 1.B) | Per 1.B "full production": v1 deferred cross-process pubsub to Plan 17+; lifted into Plan 16. SIGHUP is the canonical UNIX signal-based IPC; on Windows we use `signal.SIGTERM` + a marker file fallback (Python's `signal.SIGHUP` doesn't exist on Windows — implementer routes back if a cleaner abstraction is needed). |
+| D29 | **`validate_assignment=True` perf-measure + ENABLE ALWAYS** (T36; 1 task): per locked decision 3.A (with 1.B amendment): implementer measures `Config()` instantiation + assignment-heavy round-trip (1000 random field assignments) with and without `validate_assignment=True`. **Regardless of measurement outcome, the flag is set unconditionally** (`Config.model_config = ConfigDict(validate_assignment=True)`). Measurement is to surface the perf cost, not gate the rollout. KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`) is UPDATED to assert the new validation behavior (no longer KNOWN-LIMITATION). Perf-measure outcome documented in `tasks/lessons.md` Plan 16 section regardless of overhead — if overhead ≥ 10%, lessons.md captures the perf-impact note (this is a divergence from v1's "defer if > 10%" wording — under 1.B, full production lands regardless). | locked (user, 3.A + 1.B amendment) | The user explicitly chose 3.A and 1.B together. Per 1.B, deferring on a perf measurement isn't an option for Plan 16; the measurement is informational. Plan 11 Task 4's KNOWN-LIMITATION pin test is the artifact that becomes a positive validation test. |
+| D30 | **Per-domain autonomy categories — full production** (T37-T40; 4 tasks): T37 brainstorm + lock task (produces "Task 37 findings" subsection in this plan file with locked schema shape: `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries","concepts","draft"], bool]]`). T38 schema migration (Pydantic field shape changes from flat `Config.autonomous: AutonomousConfig` to nested per-domain × per-category; **read-time backwards-compat migration** for old config.json files (one-time in-place transformation: flat `autonomous: true` becomes `{"<all-domains>": {"new_files": true, "edits": true, "index_entries": true, "concepts": true, "draft": true}}`). T39 AutonomyGate enforcement (`AutonomyGate` reads per-domain category; `apply_patch._resolve_config` threads `ctx.domain`; pin tests cover edits-only domain + new-files-gated domain). T40 UI surface (Settings → Autonomous → `panel-autonomous.tsx` per-domain × per-category grid; tests). | locked (user, 1.B) | Per 1.B "full production": v1 deferred everything past the brainstorm to Plan 17+; lifted to T37-T40. The schema migration in T38 is **in-place at read time**, distinct from T41's `brain config migrate` CLI which is a one-shot user-runnable tool. Both land — T38's read-time migration handles silent rollover; T41's CLI gives users an explicit migration with backup. |
+| D31 | **`brain config migrate` CLI tool** (T41; 1 task): lifted from v1 NOT-DOING per 1.B. CLI subcommand `brain config migrate <path>` reads an old-shape config.json + rewrites in the new shape; original file backed up to `config.json.pre-migrate.bak`; idempotent (re-runs are no-ops). Subprocess test coverage. | locked (user, 1.B; lift from NOT-DOING) | Per 1.B's "full production" + the per-domain autonomy schema migration in T38, users on the old `Config.autonomous: bool` shape need a clean rollover path; while T38's read-time migration handles silent rollover, the explicit CLI tool gives users (a) a backup file, (b) a deterministic point-in-time when the migration happened, (c) a hook for future schema evolution. v1 deferred; v2 lifts. |
+| D32 | **Trio of architectural moves at FULL implementation** (T42-T44; 3 tasks; v1 was T31 "scaffold-only"): T42 "Set as default" topbar button (full impl — button on topbar scope picker calling existing `setActiveDomain`; toast on success; ~10 LOC + unit test). T43 generic zustand promotion (`useBudget` → `budget-store.ts` + `useDomainOverrides` → `domain-overrides-store.ts`; mirror Plan 12's `useDomains` + Plan 13's `useCrossDomainGate` patterns; consumers updated). T44 `pendingSendRef`-as-local audit + APPLY (audit `chat-screen.tsx` + neighboring handlers; APPLY the capture-into-local pattern wherever the ref-spans-await anti-pattern is found — NOT just file an audit doc per v1; findings appended to plan file). | locked (user, 1.B) | Per 1.B: each item lands at full implementation, not as a scaffold-with-deferred-polish. T42 is trivially small (~10 LOC). T43 mirrors existing zustand-promotion shape. T44 was previously "audit-only with no implementation" in v1; under 1.B the audit IS followed by the apply step. |
+| D33 | **`ctx.config` lint rule via Ruff custom rule, locked** (T45-T46; 2 tasks): per locked decision 4.A (recommendation): T45 ruff custom rule plumbing (implement `BRN001` "ctx.config read outside allowed entry-points" via ruff's plugin API; allowed entry-points list lives in `pyproject.toml` `[tool.ruff.lint.brain]` section; tests with sample violations). T46 violation cleanup (run the rule across the codebase; fix all violations OR add `# noqa: BRN001` with rationale comment; CI step gates `ruff check . --select BRN001`). The mypy-plugin alternative is dropped — ruff is the locked tool. Rule name `BRN001` locked (BRN namespace = brain custom rules). | locked (user, 4.A) | The user explicitly chose 4.A. Ruff's plugin API is more mature than mypy's for project-local rules; ruff already runs in pre-commit + CI. `BRN001` namespace reserves the future for additional brain-specific rules (`BRN002`, etc.). |
 
-The implementer routes any unrecognized rule edge case (D1 alternative race-fix shape, D6 BroadcastChannel polyfill quirks, D26/D27/D28 schema field naming, D29 perf-measure threshold, D30 per-domain autonomy shape) back to the plan author for re-sign-off before changing scope.
+### Group XI — Plan shape (T47)
+
+| # | Decision | Locked | Why |
+|---|---|---|---|
+| D34 | Plan 16 task count: **47 tasks** + closure (T47). v2 expansion: v1 was 30 tasks + closure; under 1.B, Theme 10 expanded from 7 SCAFFOLD tasks to 21 production tasks (+14 net), and the `brain config migrate` CLI lifted from NOT-DOING (+1 net). Net: 30 + 14 + 1 + closure renumber = 47 tasks + T47 closure. Mirrors Plan 14 (9 tasks) + Plan 15 (11 tasks) cadence at the polish-heavy upper end multiplied by carry-forward scope multiplied by 1.B's full-production multiplier. Each task narrowly scoped (~20 LOC PR shape; tasks exceeding ~20 LOC at implementation time MUST split rather than expand). Combined spec-and-code-quality review per task per Plan 15 lesson. NO `gh workflow run --validate` step lifted into pre-commit until Task 16 lands (otherwise it would block Tasks 1-15 dispatch). | locked | "Stay at 30 tasks (1.A scaffold-and-defer)" was rejected by user-locked 1.B. "Pair Theme 10 tasks more aggressively (~40 tasks)" was rejected because schema + migration + enforcement + UI each warrant their own review surface; pairing them muddies attribution. |
+| D35 | Demo gate composition: **47 gates**. One assertion per substantive task + sentinel. Mirrors Plan 15's per-item gate shape. v2 grows from v1's 33 to 47 along with task count. | locked | "Collapse to ~25 gates" was rejected — less granular failure signal makes Theme 10's per-domain schema/enforcement/UI debugging painful. "More than 50 gates" was rejected — diminishing returns vs gate-runtime cost; the 1:1 task-to-gate ratio is right. |
+| D36 | Sequential per-task dispatch via `superpowers:subagent-driven-development`. Combined spec-and-code-quality review per task (no separate spec-pass + code-pass). NO parallelization. **Spec text touched: THREE footnotes** — (a) §6 (Cost) for T26-T29 + T30-T32 (per-domain budget + rate-limit caps full production); (b) §3 (Vault) for T37-T41 (per-domain autonomy categories full implementation + migration tool); (c) §4 (Privacy) strengthening the "one-time" clause to make explicit that per-thread cross-domain confirmation is an intentional architectural NO (not an oversight). All other tasks NO spec text changes. Owners as listed in "Owning subagents" above. | locked | "Two-stage review per task" was rejected — combined review caught all M-class issues in Plan 15's 11 tasks at < 50 LOC scope; Plan 16's 47 tasks are even smaller per-task. "Parallel where dep graph allows" was rejected for review-discipline reasons. "One spec footnote (v1)" was rejected because under 1.B, the spec text grows where the implementation grows: Theme 10 ships three substantive feature areas → three footnotes. |
+
+The implementer routes any unrecognized rule edge case (D1 alternative race-fix shape, D6 BroadcastChannel polyfill quirks, D26 budget-cap edge cases like multi-domain ctx, D27 leaky-bucket vs sliding-window choice, D28 SIGHUP-on-Windows fallback, D29 perf-measure ≥ 10% lessons-doc shape, D30 autonomy schema field naming, D33 BRN001 ruff plugin shape) back to the plan author for re-sign-off before changing scope.
 
 ---
 
@@ -215,70 +228,101 @@ The implementer routes any unrecognized rule edge case (D1 alternative race-fix 
 packages/brain_core/
 ├── src/brain_core/
 │   ├── config/
-│   │   └── schema.py                       # MODIFY: drop Plan 07 Task 5 forward-looking comment at line 101 (D25); add Config.config_version field (D28); add Config.budget.per_domain field (D26); add Config.providers[*].rate_limit_per_domain field (D27); per-domain autonomy SCAFFOLD per D30 findings (Plan 16 brainstorm-only)
-│   │   └── loader.py                       # MODIFY: _resolve_config reads config_version, re-loads on mismatch (D28)
-│   └── tools/
-│       ├── config_set.py                   # MODIFY: drop Plan 07 Task 5 forward-looking comment at lines 81+90 (D25)
-│       └── apply_patch.py                  # (no change — Plan 15 Task 10 already cleaned)
+│   │   ├── schema.py                       # MODIFY: drop Plan 07 Task 5 forward-looking comment at line 101 (D25); add Config.config_version field (T34); add Config.budget.per_domain field (T26); add Config.providers[*].rate_limit_per_domain field (T30); per-domain autonomy schema reshape (T38); validate_assignment=True (T36)
+│   │   ├── loader.py                       # MODIFY: _resolve_config reads config_version, re-loads on mismatch (T34); read-time backwards-compat migration for old autonomous shape (T38)
+│   │   └── hot_reload.py                   # NEW: watchdog file-watcher + cross-process notifier per T35
+│   ├── budget/
+│   │   ├── per_domain_guard.py             # NEW: BudgetGuard reads per-domain caps, raises BudgetCapExceeded (T28)
+│   │   └── cost_report.py                  # MODIFY: per-domain rollup queries (T27)
+│   ├── llm/providers/
+│   │   └── anthropic.py                    # MODIFY: per-domain leaky-bucket rate-limit enforcement (T31)
+│   ├── autonomy/
+│   │   └── gate.py                         # MODIFY: AutonomyGate reads per-domain category (T39)
+│   ├── tools/
+│   │   ├── config_set.py                   # MODIFY: drop Plan 07 Task 5 forward-looking comment at lines 81+90 (D25); + setDomainBudget + setDomainRateLimit + setDomainAutonomy keys (T26+T30+T38)
+│   │   └── apply_patch.py                  # MODIFY: thread ctx.domain into AutonomyGate (T39)
+│   └── cli/
+│       └── migrate.py                      # NEW: `brain config migrate` subcommand (T41)
 └── tests/
     ├── tools/
     │   └── test_config_get.py              # MODIFY: _mk_ctx requires config (D24)
     ├── config/
-    │   ├── test_schema_per_domain_budget.py    # NEW: schema-only round-trip pin (D26)
-    │   ├── test_schema_per_domain_rate_limit.py # NEW: schema-only round-trip pin (D27)
-    │   ├── test_config_version_field.py    # NEW: version-bump + reload pin (D28)
-    │   └── test_validate_assignment_perf.py # NEW: perf-measure for D29
+    │   ├── test_schema_per_domain_budget.py        # NEW: schema round-trip pin (T26)
+    │   ├── test_schema_per_domain_rate_limit.py    # NEW: schema round-trip pin (T30)
+    │   ├── test_config_version_field.py            # NEW: version-bump + reload pin (T34)
+    │   ├── test_hot_reload.py                      # NEW: pytest-asyncio cross-process pin (T35)
+    │   ├── test_validate_assignment_perf.py        # NEW: perf-measure for T36 (lessons.md captures outcome regardless)
+    │   ├── test_validate_assignment_enforcement.py # NEW: validation enforcement pin (T36, replaces KNOWN-LIMITATION)
+    │   ├── test_autonomy_schema_migration.py       # NEW: read-time backwards-compat pin (T38)
+    │   └── test_config_migrate_cli.py              # NEW: subprocess test for `brain config migrate` (T41)
+    ├── budget/
+    │   ├── test_per_domain_guard.py        # NEW: BudgetGuard daily + monthly cap pin (T28)
+    │   └── test_cost_report_rollup.py      # NEW: per-domain rollup queries (T27)
+    ├── llm/
+    │   └── test_anthropic_rate_limit.py    # NEW: freezegun leaky-bucket pin (T31)
+    ├── autonomy/
+    │   └── test_gate_per_domain.py         # NEW: AutonomyGate per-domain enforcement pin (T39)
     └── linting/
-        └── test_ctx_config_lint_rule.py    # NEW: scaffold contract for D32
+        └── test_brn001_lint_rule.py        # NEW: BRN001 ruff custom rule contract test (T45)
 
 packages/brain_api/
 └── src/brain_api/
-    └── static_ui.py                        # MODIFY: _spa_fallback @overload on raise_on_miss (D2)
+    ├── static_ui.py                        # MODIFY: _spa_fallback @overload on raise_on_miss (D2)
+    └── routes/
+        └── config.py                       # MODIFY: setDomainBudget + setDomainRateLimit + setDomainAutonomy endpoints (T26+T30+T38)
+
+packages/brain_mcp/
+└── src/brain_mcp/
+    └── server.py                           # MODIFY: SIGHUP handler triggers config re-load (T35)
 
 apps/brain_web/
 ├── src/components/
 │   ├── settings/
 │   │   ├── panel-domains.tsx               # MODIFY: use removeDomainOptimistic + render error banner (D4); 3-file split per D8; toast period + CTA copy normalization (D25)
-│   │   ├── panel-domains-row.tsx           # NEW: per-row editor (D8)
+│   │   ├── panel-domains-row.tsx           # NEW: per-row editor (D8); + Daily cap + Monthly cap inputs (T29); + rate-limit input (T32)
 │   │   ├── panel-domains-add.tsx           # NEW: add-domain affordance (D8)
-│   │   └── panel-domains-active.tsx       # NEW: active-domain dropdown (D8)
+│   │   ├── panel-domains-active.tsx        # NEW: active-domain dropdown (D8)
+│   │   └── panel-autonomous.tsx            # NEW: per-domain × per-category grid for autonomy (T40)
 │   ├── bulk/
 │   │   └── bulk-screen.tsx                 # MODIFY: useDomains() (D3)
 │   ├── dialogs/
 │   │   ├── file-to-wiki-dialog.tsx         # MODIFY: useDomains() (D3)
-│   │   ├── repair-config-dialog.tsx        # NEW: scaffold per D9 + D28
-│   │   ├── autonomy-modal.tsx              # NEW: scaffold per D10
-│   │   └── file-preview-overlay.tsx        # NEW: dedicated overlay per D11
+│   │   ├── repair-config-dialog.tsx        # NEW: scaffold per D9 (T9); full polish — Re-run + per-step results + Re-apply (T33)
+│   │   ├── autonomy-modal.tsx              # NEW: scaffold per D10 (T10)
+│   │   └── file-preview-overlay.tsx        # NEW: dedicated overlay per D11 (T11)
 │   ├── chat/
-│   │   ├── chat-screen.tsx                 # MODIFY: per-message Fork dialog wired (D11); pendingSendRef-as-local audit findings (D31)
-│   │   └── wikilink-hover.tsx              # MODIFY: a11y tooltip role + scan (D11)
+│   │   ├── chat-screen.tsx                 # MODIFY: per-message Fork dialog wired (T11); pendingSendRef-as-local apply (T44)
+│   │   └── wikilink-hover.tsx              # MODIFY: a11y tooltip role + scan (T11)
 │   └── topbar/
-│       └── scope-picker.tsx                # MODIFY: "Set as default" button SCAFFOLD (D31)
+│       └── scope-picker.tsx                # MODIFY: "Set as default" button — full impl per D32 (T42)
 ├── src/lib/state/
 │   ├── domains-store.ts                    # MODIFY: add removeDomainOptimistic (D4); domainsLoaded → loaded rename (D5); BroadcastChannel pubsub (D6)
 │   ├── cross-domain-gate-store.ts          # MODIFY: wire error field (D5); BroadcastChannel pubsub (D6); setAcknowledgedOptimistic early-return (D7)
-│   └── budget-store.ts                     # NEW: zustand promotion scaffold per D31(b)
+│   ├── budget-store.ts                     # NEW: zustand promotion of useBudget per D32 (T43)
+│   └── domain-overrides-store.ts           # NEW: zustand promotion of useDomainOverrides per D32 (T43)
 ├── src/lib/state/inbox-store.ts            # MODIFY: loadRecent id-keyed merge (D1)
 ├── tests/e2e/
 │   ├── _helpers.ts                         # MODIFY: + waitForToolResponse helper (D19)
-│   ├── a11y-populated.spec.ts              # MODIFY: 3 new cases (D11); waitForTimeout removal (D19); test.afterEach cleanup (D20)
+│   ├── a11y-populated.spec.ts              # MODIFY: 3 new cases (T11); waitForTimeout removal (T19); test.afterEach cleanup (T20); + repair-config full surface case (T33); + autonomy panel case (T40)
 │   └── cross-domain-modal.spec.ts          # MODIFY: 3 TS errors fixed (D22)
 └── tests/unit/
-    ├── inbox-store-loadRecent.test.ts      # NEW: race-fix pin (D1)
-    ├── domains-store-removeOptimistic.test.ts # NEW: pin (D4)
-    ├── domains-store-broadcast.test.ts     # NEW: cross-tab pubsub pin (D6)
-    ├── cross-domain-gate-store-broadcast.test.ts # NEW: pin (D6)
-    ├── panel-domains-row.test.tsx          # NEW: split component pin (D8)
-    ├── repair-config-dialog.test.tsx       # NEW: scaffold pin (D9)
-    ├── autonomy-modal.test.tsx             # NEW: scaffold pin (D10)
-    ├── privacy-railed-glossary-tooltip.test.tsx # NEW: positive unit test (D25)
-    └── chat-screen.test.tsx                # MODIFY: act() warnings cleared (D23)
+    ├── inbox-store-loadRecent.test.ts             # NEW: race-fix pin (T1)
+    ├── domains-store-removeOptimistic.test.ts     # NEW: pin (T4)
+    ├── domains-store-broadcast.test.ts            # NEW: cross-tab pubsub pin (T6)
+    ├── cross-domain-gate-store-broadcast.test.ts  # NEW: pin (T6)
+    ├── panel-domains-row.test.tsx                 # NEW: split component pin + budget caps + rate limit (T8 + T29 + T32)
+    ├── panel-autonomous.test.tsx                  # NEW: per-domain × per-category grid pin (T40)
+    ├── repair-config-dialog.test.tsx              # NEW: scaffold pin (T9); full surface pin (T33)
+    ├── autonomy-modal.test.tsx                    # NEW: scaffold pin (T10)
+    ├── privacy-railed-glossary-tooltip.test.tsx   # NEW: positive unit test (T25)
+    ├── scope-picker-set-as-default.test.tsx       # NEW: button + toast pin (T42)
+    ├── budget-store.test.ts                       # NEW: zustand promotion pin (T43)
+    ├── domain-overrides-store.test.ts             # NEW: zustand promotion pin (T43)
+    └── chat-screen.test.tsx                       # MODIFY: act() warnings cleared (T23); pendingSendRef capture-into-local apply (T44)
 
 packages/brain_cli/
-└── (no changes — Plan 15 Task 4 already migrated)
-
-packages/brain_mcp/
-└── (no changes — Plan 12 + 13 wiring is current)
+└── src/brain_cli/commands/
+    └── config.py                           # MODIFY: + `migrate` subcommand wires to brain_core.cli.migrate (T41)
 
 apps/brain_web/src/styles/
 ├── tokens.css                              # MODIFY: add --tt-cyan-hover token (D12)
@@ -286,15 +330,17 @@ apps/brain_web/src/styles/
 
 apps/brain_web/.stylelintrc.json            # NEW: stylelint config with no-hardcoded-hex-outside-root (D13)
 
+pyproject.toml                              # MODIFY: + [tool.ruff.lint.brain] allowed-entry-points list (T45); BRN001 plugin entry registered
+
 .github/
 ├── actions/
 │   └── setup-brain-test-env/
 │       └── action.yml                      # NEW: composite action DRY (D15)
 ├── workflows/
-│   ├── ci.yml                              # MODIFY: caching (D14); composite action (D15); summary writeback (D18)
+│   ├── ci.yml                              # MODIFY: caching (D14); composite action (D15); summary writeback (D18); + ruff BRN001 lint step (T46)
 │   └── playwright.yml                      # MODIFY: caching (D14); composite action (D15); pnpm install --filter (D16); SmartScreen pre-step (D17); summary writeback (D18)
 └── pre-commit-config.yaml (or .pre-commit-config.yaml)
-                                            # MODIFY: + gh workflow run --validate hook (D16)
+                                            # MODIFY: + gh workflow run --validate hook (D16); + ruff BRN001 hook (T46)
 
 docs/design/
 ├── cross-domain-modal/
@@ -304,16 +350,16 @@ docs/design/
 └── (other design files unchanged)
 
 docs/superpowers/specs/
-└── 2026-04-13-cj-llm-kb-design.md          # MODIFY: §6 (Cost) footnote noting per-domain budget + rate-limit caps SCAFFOLD (Plan 16 D26 + D27)
+└── 2026-04-13-cj-llm-kb-design.md          # MODIFY: §6 (Cost) footnote noting per-domain budget + rate-limit full implementation (T26-T29 + T30-T32); §3 (Vault) footnote noting per-domain autonomy categories full implementation (T37-T41); §4 (Privacy) clause strengthening for per-thread cross-domain confirmation (architectural NO)
 
 scripts/
-└── demo-plan-16.py                         # NEW: 33-gate demo per D34
+└── demo-plan-16.py                         # NEW: 47-gate demo per D35
 
 tasks/
 ├── plans/
 │   └── 16-comprehensive-carry-forward.md   # this file
-├── lessons.md                              # MODIFY: + Plan 16 closure section (8+ lessons captured)
-└── todo.md                                 # MODIFY: row 16 → ✅ Complete; remove Plan 16 candidate-scope; add Plan 17 candidate-scope (post-Plan-16 deferrals + remaining bigger architectural moves)
+├── lessons.md                              # MODIFY: + Plan 16 closure section (12+ lessons captured)
+└── todo.md                                 # MODIFY: row 16 → ✅ Complete; remove Plan 16 candidate-scope; add Plan 17 candidate-scope (residuals only — no full-feature carry-forwards remain since 1.B landed everything)
 ```
 
 ---
@@ -332,7 +378,7 @@ Same discipline as Plan 11 + 12 + 13 + 14 + 15, **PLUS one new step (item 8) for
 8. **NEW (Plan 16 Task 13 + onward):** `cd apps/brain_web && npx stylelint 'src/**/*.css'` — clean. Closes the hardcoded-hex drift class.
 9. Frontend tasks add: `cd apps/brain_web && npm run lint && npx vitest run && cd -`
 10. Per `docs/style/plan-authoring.md` rule 5, every `len(...) == N` or count check is invariant-based, not total-based.
-11. **Browser-in-the-loop verification** for any UI-touching task (Tasks 1, 3-13, 21, 23, 25, 28, 31): start brain, take screenshots pre and post change, attach to per-task review.
+11. **Browser-in-the-loop verification** for any UI-touching task (Tasks 1, 3-13, 21, 23, 25, 29, 32, 33, 40, 42, 43, 44): start brain, take screenshots pre and post change, attach to per-task review.
 12. `git status` — clean after commit.
 
 Any failure in 4–11 must be fixed before reporting DONE. No blanket ignores, no weakened assertions.
@@ -494,14 +540,14 @@ Any failure in 4–11 must be fixed before reporting DONE. No blanket ignores, n
 - Create: `apps/brain_web/tests/unit/repair-config-dialog.test.tsx`
 - Modify: `apps/brain_web/tests/e2e/a11y-populated.spec.ts` (add case)
 
-**Goal:** Per D9, minimal dialog scaffold that satisfies the a11y-populated.spec.ts gate AND lays the groundwork for full UI in Plan 17+ (per Task 28 — the Config.config_version infrastructure).
+**Goal:** Per D9, minimal dialog scaffold that satisfies the a11y-populated.spec.ts gate. Full polish lands at Task 33 (which calls into Task 34's `Config.config_version` infrastructure).
 
 **What to do:**
-1. **Dialog component.** `<RepairConfigDialog isOpen onClose>` — radix-ui Dialog primitive (matches existing dialog conventions). Title: "Repair config". Body: short description of the auto-fallback chain ("If your config.json is corrupted, brain falls back to .bak then defaults"). Single "Run repair" button (calls a stub `repairConfig()` action that re-loads — full implementation in Task 28).
+1. **Dialog component.** `<RepairConfigDialog isOpen onClose>` — radix-ui Dialog primitive (matches existing dialog conventions). Title: "Repair config". Body: short description of the auto-fallback chain ("If your config.json is corrupted, brain falls back to .bak then defaults"). Single "Run repair" button (calls a stub `repairConfig()` action that re-loads — full implementation in Task 33).
 2. **brain-ui-designer copy.** Microcopy verbatim ("Repair config", "Run repair", description) lands as a designer artifact.
 3. **a11y case.** New `a11y-populated.spec.ts` case opens the dialog from Settings → General; axe-core scan; 0 violations.
 
-**Per-task review:** scaffold satisfies the a11y gate; full polish is Task 28. Per-task self-review checklist.
+**Per-task review:** scaffold satisfies the a11y gate; full polish is Task 33. Per-task self-review checklist.
 
 ---
 
@@ -519,7 +565,7 @@ Any failure in 4–11 must be fixed before reporting DONE. No blanket ignores, n
 2. **brain-ui-designer copy.** Microcopy verbatim.
 3. **a11y case.** New `a11y-populated.spec.ts` case; axe-core scan; 0 violations.
 
-**Per-task review:** scaffold-only; per-domain category schema is Task 30 (brainstorm-only). Per-task self-review checklist.
+**Per-task review:** scaffold-only; per-domain category schema lands at Task 38 (after Task 37's brainstorm-and-lock); the deep-config UI panel at Task 40 (`panel-autonomous.tsx`). Per-task self-review checklist.
 
 ---
 
@@ -776,159 +822,433 @@ Any failure in 4–11 must be fixed before reporting DONE. No blanket ignores, n
 
 ---
 
-## Task 26 — Per-domain budget caps SCAFFOLD (bigger architectural moves)
+## Task 26 — Per-domain budget caps schema (full production T26-T29 / 1.B)
 
 **Files:**
 - Modify: `packages/brain_core/src/brain_core/config/schema.py` (add `Config.budget.per_domain` field)
 - Create: `packages/brain_core/tests/config/test_schema_per_domain_budget.py`
-- Modify: `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` (§6 Cost footnote)
 
-**Goal:** Per D26, schema-only SCAFFOLD. Field exists, round-trips, but no enforcement plumbing yet.
+**Goal:** Per D26 step 1 of 4: schema lands. Field exists, round-trips. No enforcement yet (T28 lands enforcement; T29 lands UI).
 
 **What to do:**
-1. **Schema.** `BudgetConfig` model gets `per_domain: dict[str, BudgetOverride]` field where `BudgetOverride.monthly_cap_usd: float | None`. Pydantic v2 model; default `{}`.
-2. **Pin test.** Round-trip: write a Config with `per_domain={"research": BudgetOverride(monthly_cap_usd=10.0)}`; serialize to JSON; re-read; assert equality.
-3. **Spec footnote.** §6 (Cost): "Plan 16 lands `Config.budget.per_domain: dict[str, BudgetOverride]` as schema scaffolding. Full enforcement (per-call lookup + cost-ledger schema migration) deferred to Plan 17+."
+1. **Schema.** `BudgetConfig` model gets `per_domain: dict[str, BudgetOverride]` field. New `BudgetOverride` model: `monthly_cap_usd: float | None = None`, `daily_cap_usd: float | None = None`. Pydantic v2; default `{}`.
+2. **Pin test.** Round-trip: write a Config with `per_domain={"research": BudgetOverride(monthly_cap_usd=10.0, daily_cap_usd=1.0)}`; serialize to JSON; re-read; assert equality.
+3. **Validation.** `monthly_cap_usd` and `daily_cap_usd` both must be > 0 if set; both can be None (meaning "no cap"); validator rejects negative or zero values.
 
-**Per-task review:** schema test + spec footnote. Per-task self-review checklist.
+**Per-task review:** schema test + Pydantic v2 validator coverage. Per-task self-review checklist.
 
 ---
 
-## Task 27 — Per-domain rate limits SCAFFOLD (bigger architectural moves)
+## Task 27 — Cost-ledger per-domain rollups (full production T26-T29 / 1.B)
+
+**Files:**
+- Verify: `packages/brain_core/src/brain_core/cost/schema.py` (`costs.sqlite` `domain` column already exists per spec)
+- Modify: `packages/brain_core/src/brain_core/cost/cost_report.py` (add per-domain rollup query)
+- Create: `packages/brain_core/tests/budget/test_cost_report_rollup.py`
+
+**Goal:** Per D26 step 2 of 4: surface per-domain spend totals. Spec specifies the `domain` column on `costs.sqlite` already exists; verify and add the rollup queries.
+
+**What to do:**
+1. **Verify schema.** `cost/schema.py`: confirm `domain TEXT` column on `cost_entry` table. If not, ADD it (defensible migration since this is a derived cache per spec — `vault is source of truth, SQLite is a cache`).
+2. **Rollup query.** `cost_report.py`: new function `domain_spend_within_window(domain: str, since: datetime) -> Decimal` returns total cost in window for given domain. Same shape as existing total-spend rollup.
+3. **Pin test.** Seed ledger with 3 entries across 2 domains; assert rollup returns correct sum per domain.
+
+**Per-task review:** `pytest packages/brain_core/tests/budget/test_cost_report_rollup.py -q` green. Per-task self-review checklist.
+
+---
+
+## Task 28 — BudgetGuard per-domain enforcement (full production T26-T29 / 1.B)
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/budget/per_domain_guard.py`
+- Modify: `packages/brain_core/src/brain_core/llm/budget_guard.py` (or wherever the existing top-level guard lives — verify path at implementation time)
+- Modify: any LLM call site that currently invokes the budget guard (thread `ctx.domain` through)
+- Create: `packages/brain_core/tests/budget/test_per_domain_guard.py`
+
+**Goal:** Per D26 step 3 of 4: enforce per-domain caps per-call. `BudgetGuard.check(ctx)` reads `ctx.config.budget.per_domain[ctx.domain]`; raises `BudgetCapExceeded` BEFORE the LLM call when daily or monthly cap is exceeded.
+
+**What to do:**
+1. **Per-domain guard.** New `PerDomainBudgetGuard.check(ctx: ToolContext) -> None`. Reads `ctx.config.budget.per_domain.get(ctx.domain)`; if no override or both caps None, no-op. Otherwise, queries `cost_report.domain_spend_within_window` for the daily and monthly windows; if either spent ≥ cap, raise `BudgetCapExceeded("domain={...}, window={daily|monthly}, spent={...}, cap={...}")`.
+2. **Wire in.** Existing top-level `BudgetGuard.check` chains to `PerDomainBudgetGuard.check` after its own check passes. Threading: the LLM-call entry point (look at `chat.py` + `apply_patch.py`) already builds `ctx`; ensure `ctx.domain` is set.
+3. **Pin tests.** `test_per_domain_guard.py`: (a) no override → no-op; (b) only daily set, under cap → no-op; (c) daily exceeded → raises; (d) only monthly set, under cap → no-op; (e) monthly exceeded → raises; (f) both set, only one exceeded → raises with correct window in message.
+
+**Per-task review:** all 6 pin-test cases pass. Per-task self-review checklist. Browser verification: set a $1 daily cap on a test domain; chat 10 turns; verify the cap kicks in.
+
+---
+
+## Task 29 — Per-domain budget UI in panel-domains-row (full production T26-T29 / 1.B)
+
+**Files:**
+- Modify: `apps/brain_web/src/components/settings/panel-domains-row.tsx` (per Task 8 split — extends with budget cap inputs)
+- Modify: `apps/brain_web/src/lib/api/tools.ts` (add `setDomainBudget` API call)
+- Modify: `packages/brain_api/src/brain_api/routes/config.py` (add `setDomainBudget` endpoint)
+- Modify: `apps/brain_web/tests/unit/panel-domains-row.test.tsx` (extend with budget cap test cases)
+
+**Goal:** Per D26 step 4 of 4: UI surface lets users set per-domain budget caps via Settings → Domains.
+
+**What to do:**
+1. **UI.** `panel-domains-row.tsx`: add a "Budget caps" subsection with 2 optional `<input type="number" min="0" step="0.01">` for "Daily cap (USD)" and "Monthly cap (USD)". Empty inputs = `None`. Live-validation: must be > 0 if set.
+2. **API call.** `tools.ts`: `setDomainBudget(slug: string, cap: BudgetOverride): Promise<void>`.
+3. **API endpoint.** `routes/config.py`: POST `/tools/setDomainBudget` calls `config_set` with key `budget.per_domain.<slug>`.
+4. **Persistence.** On blur, save to backend. Toast on success ("Budget caps saved for {domain}.").
+5. **Test.** Extend `panel-domains-row.test.tsx`: render with no caps → both inputs empty; type "10" in monthly → mutation triggers `setDomainBudget`; assert payload shape matches schema.
+
+**Per-task review:** vitest + browser verification. Per-task self-review checklist.
+
+---
+
+## Task 30 — Per-domain rate limits schema (full production T30-T32 / 1.B)
 
 **Files:**
 - Modify: `packages/brain_core/src/brain_core/config/schema.py` (add `Config.providers[*].rate_limit_per_domain`)
 - Create: `packages/brain_core/tests/config/test_schema_per_domain_rate_limit.py`
-- Modify: `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` (§6 Cost footnote — combined with Task 26)
 
-**Goal:** Per D27, schema-only SCAFFOLD. Mirrors Task 26's shape.
+**Goal:** Per D27 step 1 of 3: schema lands. Field exists, round-trips. No enforcement yet (T31 lands enforcement; T32 lands UI).
 
 **What to do:**
-1. **Schema.** `ProviderConfig.rate_limit_per_domain: dict[str, RateLimitOverride]` where `RateLimitOverride.requests_per_minute: int | None`.
-2. **Pin test.** Round-trip.
-3. **Spec footnote.** Combined with Task 26's footnote.
+1. **Schema.** `ProviderConfig` (per-provider config under `Config.providers["anthropic"]` etc.) gets `rate_limit_per_domain: dict[str, RateLimitOverride]` field. New `RateLimitOverride` model: `requests_per_minute: int | None = None`. Pydantic v2; default `{}`.
+2. **Pin test.** Round-trip with `rate_limit_per_domain={"research": RateLimitOverride(requests_per_minute=60)}`.
+3. **Validation.** `requests_per_minute` must be > 0 if set; reject negative or zero.
 
 **Per-task review:** Per-task self-review checklist.
 
 ---
 
-## Task 28 — Repair-config UI + cross-process hot-reload SCAFFOLDS
+## Task 31 — AnthropicProvider per-domain rate-limit enforcement (leaky-bucket; full production T30-T32 / 1.B)
 
 **Files:**
-- Modify: `apps/brain_web/src/components/dialogs/repair-config-dialog.tsx` (full surface beyond Task 9 scaffold)
+- Modify: `packages/brain_core/src/brain_core/llm/providers/anthropic.py`
+- Create: `packages/brain_core/tests/llm/test_anthropic_rate_limit.py`
+
+**Goal:** Per D27 step 2 of 3: AnthropicProvider reads per-domain rate limit; enforces via leaky-bucket semantics (queue brief overflow; raise on excessive overflow).
+
+**What to do:**
+1. **Leaky-bucket state.** Module-private `_per_domain_buckets: dict[str, LeakyBucket]`. New `LeakyBucket(rpm: int)` class: tracks tokens replenished at `rpm/60` per second, capacity = `rpm`; `acquire()` blocks (asyncio sleep) up to `bucket_size_seconds` or raises `RateLimitExceeded` if queue depth > `rpm * 2`.
+2. **Wire into call.** Before the actual `client.messages.create(...)` call: read `config.providers["anthropic"].rate_limit_per_domain.get(ctx.domain)`; if no override or `requests_per_minute` is None, bypass. Otherwise, await `_get_bucket(ctx.domain, rpm).acquire()`.
+3. **Pin tests with freezegun.** (a) `rpm=2`, send 2 calls within same minute → both pass; (b) 3rd call within window queues briefly; (c) overflow beyond `rpm * 2` raises `RateLimitExceeded`; (d) advance clock by 1 minute → bucket replenishes; (e) different domain has independent bucket.
+
+**Per-task review:** `pytest packages/brain_core/tests/llm/test_anthropic_rate_limit.py -q` green. Per-task self-review checklist.
+
+---
+
+## Task 32 — Per-domain rate-limit UI in panel-domains-row (full production T30-T32 / 1.B)
+
+**Files:**
+- Modify: `apps/brain_web/src/components/settings/panel-domains-row.tsx` (extends T29's row component)
+- Modify: `apps/brain_web/src/lib/api/tools.ts` (add `setDomainRateLimit` API call)
+- Modify: `packages/brain_api/src/brain_api/routes/config.py` (add `setDomainRateLimit` endpoint)
+- Modify: `apps/brain_web/tests/unit/panel-domains-row.test.tsx` (extend with rate-limit cases)
+
+**Goal:** Per D27 step 3 of 3: UI surface for per-domain rate-limit setting.
+
+**What to do:**
+1. **UI.** `panel-domains-row.tsx`: add "Rate limit" subsection with one optional `<input type="number" min="1">` for "Requests per minute". Empty = `None`. Live-validation: must be > 0 if set.
+2. **API call.** `setDomainRateLimit(slug, override)`.
+3. **API endpoint.** `routes/config.py`: POST `/tools/setDomainRateLimit`.
+4. **Test.** Extend `panel-domains-row.test.tsx` with rate-limit case.
+
+**Per-task review:** vitest + browser verification. Per-task self-review checklist.
+
+---
+
+## Task 33 — Repair-config dialog full polish (full production T33-T35 / 1.B)
+
+**Files:**
+- Modify: `apps/brain_web/src/components/dialogs/repair-config-dialog.tsx` (full polish beyond T9 scaffold)
+- Modify: `apps/brain_web/src/lib/api/tools.ts` (add `repairConfig` API call returning per-step results)
+- Modify: `apps/brain_api/src/brain_api/routes/config.py` (add `repairConfig` endpoint that runs the loader chain + returns per-step results)
+- Modify: `apps/brain_web/tests/unit/repair-config-dialog.test.tsx` (extend with full-surface assertions)
+- Modify: `apps/brain_web/tests/e2e/a11y-populated.spec.ts` (full surface case)
+
+**Goal:** Per D28 step 1 of 3: T9 landed the scaffold; T33 lands the full polish — Re-run / per-step results panel / Re-apply repaired config flow.
+
+**What to do:**
+1. **Re-run button.** Triggers `repairConfig()` API call. Spinner during the run.
+2. **Per-step results panel.** Each step in the loader chain (`config.json read` → `validate` → `.bak fallback if invalid` → `defaults fallback if .bak invalid`) renders as a row with status (success/warning/error) + a one-line description. Mirrors `brain doctor` output shape.
+3. **Re-apply button.** If the repaired config differs from the in-memory copy, "Re-apply" writes the repaired config to disk via `save_config`. Disabled if no diff.
+4. **a11y.** Full keyboard navigation: Tab order through Re-run → results → Re-apply. Escape closes. axe-core: 0 violations on populated state.
+
+**Per-task review:** vitest + a11y case + browser verification. Per-task self-review checklist.
+
+---
+
+## Task 34 — Config.config_version field + single-process invalidation (full production T33-T35 / 1.B)
+
+**Files:**
 - Modify: `packages/brain_core/src/brain_core/config/schema.py` (`Config.config_version: int`)
-- Modify: `packages/brain_core/src/brain_core/config/loader.py` (`_resolve_config` reads version, re-loads on mismatch)
+- Modify: `packages/brain_core/src/brain_core/config/loader.py` (`save_config` increments; `_resolve_config` reads version + re-loads on mismatch)
 - Create: `packages/brain_core/tests/config/test_config_version_field.py`
 
-**Goal:** Per D28, repair-config dialog gets the "Run repair" button wired to a real action; Config gains a version field that single-process invalidation reads on every refresh.
+**Goal:** Per D28 step 2 of 3: Config gains a version field; single-process loader invalidates its in-memory cache when version changes.
 
 **What to do:**
-1. **`config_version` field.** Default `0`. Increment in `save_config` on every write.
-2. **Loader hot-reload.** `_resolve_config` (or equivalent loader): keep an in-memory cache; on each request, stat the config file's `version` field; reload if changed.
-3. **Repair-config button.** Wires to `repairConfig()` action that re-runs the loader against `.bak` if `config.json` is corrupt; surfaces per-step results in the dialog.
+1. **`config_version` field.** Default `0`. Increment in `save_config` on every write (atomic + locked + backup chain stays the same).
+2. **Loader invalidation.** `_resolve_config` (or whichever loader is the single-process cache layer): keep an in-memory `_cached_config: Config | None`; on each request, stat the file's `config_version` (parse JSON head only — don't re-read whole file unless mismatch); if mismatch or no cache, full re-load.
+3. **Pin tests.** (a) `save_config` increments version; (b) `_resolve_config` returns cached object on consecutive calls when no save in between (object identity); (c) after `save_config`, next `_resolve_config` returns new object.
 
-**Per-task review:** schema test + dialog surface verified in browser. Cross-process pubsub deferred to Plan 17+ (a separate subprocess SIGHUP-style file watch). Per-task self-review checklist.
+**Per-task review:** Per-task self-review checklist.
 
 ---
 
-## Task 29 — `validate_assignment=True` perf-measure + decision
+## Task 35 — Cross-process hot-reload via watchdog + SIGHUP (full production T33-T35 / 1.B)
 
 **Files:**
-- Create: `packages/brain_core/tests/config/test_validate_assignment_perf.py` (perf-measure benchmark)
-- Modify: `packages/brain_core/src/brain_core/config/schema.py` (set `validate_assignment=True` IF perf passes)
-- Modify: `tasks/lessons.md` (Plan 16 section: perf-measure outcome)
+- Create: `packages/brain_core/src/brain_core/config/hot_reload.py` (watchdog file-watcher + cross-process notifier)
+- Modify: `packages/brain_mcp/src/brain_mcp/server.py` (SIGHUP handler triggers config re-load)
+- Modify: `packages/brain_api/src/brain_api/main.py` (or wherever the lifespan hook is — start the watcher; on change, signal MCP subprocess)
+- Modify: `pyproject.toml` (add `watchdog` dev-dep — verify it's not already there)
+- Create: `packages/brain_core/tests/config/test_hot_reload.py`
 
-**Goal:** Per D29, measure perf overhead; decide based on threshold.
+**Goal:** Per D28 step 3 of 3: cross-process hot-reload. brain_api watches `<vault>/.brain/config.json`; on change, signals brain_mcp subprocess to re-load.
 
 **What to do:**
-1. **Benchmark.** `test_validate_assignment_perf.py`: run 1000 random field assignments with and without `validate_assignment=True`. Measure wall-clock.
-2. **Decide.** If overhead < 10%, set `model_config = ConfigDict(validate_assignment=True)` on Config + sub-configs; update KNOWN-LIMITATION pin test (`test_invalid_value_currently_persists_without_validation`) to assert the new behavior. If overhead > 10%, document the perf-measure outcome in `tasks/lessons.md`; KNOWN-LIMITATION test stays.
-3. **Either way.** Document the decision in `tasks/lessons.md` Plan 16 section.
+1. **Watcher.** `hot_reload.py`: `ConfigWatcher(config_path: Path, on_change: Callable[[], None])` using `watchdog.observers.Observer` + `FileSystemEventHandler`. Start in brain_api lifespan.
+2. **Cross-process notify.** brain_api keeps the brain_mcp subprocess pid (existing `brain mcp install` flow); on change, send `signal.SIGHUP` (Unix) or write a marker file (`<vault>/.brain/run/config-version`) that brain_mcp polls (Windows fallback). Document the platform split clearly in `hot_reload.py` docstring.
+3. **MCP handler.** `brain_mcp/server.py`: register `signal.signal(SIGHUP, ...)` (Unix) or filesystem polling (Windows) → on signal, call `loader._invalidate_cache()` to force next `_resolve_config` to re-read.
+4. **Pin test.** `pytest-asyncio` test: spawn subprocess running an `_resolve_config` loop; main process writes a new config; subprocess detects change within 500ms; new value visible.
 
-**Per-task review:** perf-measure outcome + decision + (if enabled) updated pin test. Per-task self-review checklist.
+**Per-task review:** pytest-asyncio test passes on Mac AND Windows CI. Per-task self-review checklist.
 
 ---
 
-## Task 30 — Per-domain autonomy categories — brainstorm-only
+## Task 36 — `validate_assignment=True` perf-measure + ENABLE ALWAYS (full production / 1.B + 3.A)
 
 **Files:**
-- Modify: `tasks/plans/16-comprehensive-carry-forward.md` (Task 30 Findings subsection)
+- Create: `packages/brain_core/tests/config/test_validate_assignment_perf.py` (perf benchmark; OUTCOME captured to lessons.md)
+- Modify: `packages/brain_core/src/brain_core/config/schema.py` (set `model_config = ConfigDict(validate_assignment=True)` UNCONDITIONALLY)
+- Modify: `packages/brain_core/tests/config/test_invalid_value_currently_persists_without_validation.py` → rename + flip semantics → `test_validate_assignment_enforcement.py` (asserts the new validation behavior)
+- Modify: `tasks/lessons.md` (Plan 16 section: perf-measure outcome, regardless of overhead)
 
-**Goal:** Per D30, brainstorm + lock the schema shape for Plan 17+. NO implementation in Plan 16.
+**Goal:** Per D29 (locked 1.B + 3.A): measure perf overhead → enable the flag REGARDLESS of outcome → document the cost. The KNOWN-LIMITATION pin test becomes a positive validation pin.
 
 **What to do:**
-1. **Brainstorm.** Schema shape: `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries"], bool]]`. Current shape: `Config.autonomous: bool` (single global flag).
-2. **Findings doc.** Append a "Task 30 findings" subsection to this plan file. Cover: (a) the locked schema shape; (b) migration story (existing `autonomous=True` becomes `{"<all-domains>": {"new_files": True, "edits": True, "index_entries": True}}`); (c) UI impact (Task 10's autonomy modal grows per-category sliders); (d) any open questions.
-3. **No code change.** Plan 17+ implements.
+1. **Benchmark.** `test_validate_assignment_perf.py`: 1000 random field assignments with and without `validate_assignment=True`. Capture wall-clock delta as a number; assert that the test always passes (this is informational, not a gate).
+2. **Enable unconditionally.** `schema.py`: `Config.model_config = ConfigDict(validate_assignment=True)`. Apply same to sub-configs (`BudgetConfig`, `ProviderConfig`, etc.) where assignment validation matters.
+3. **Flip pin test.** `test_invalid_value_currently_persists_without_validation` → `test_validate_assignment_enforcement`: now asserts that an invalid assignment raises `ValidationError` instead of silently persisting.
+4. **Lessons.md capture.** Plan 16 section: paragraph noting the perf overhead measurement (e.g., "measured X% overhead on 1000 random field assignments"). Per 1.B: enable regardless. If overhead ≥ 10%, additionally note the perf-impact in the lesson with a recommendation to revisit if Config-instantiation hot-paths emerge.
+
+**Per-task review:** old KNOWN-LIMITATION test is now a positive pin; perf data captured in lessons.md. Per-task self-review checklist.
+
+---
+
+## Task 37 — Per-domain autonomy categories — brainstorm + lock schema (full production T37-T40 / 1.B)
+
+**Files:**
+- Modify: `tasks/plans/16-comprehensive-carry-forward.md` (Task 37 Findings subsection appended)
+
+**Goal:** Per D30 step 1 of 4: brainstorm + lock the schema shape. Plan 16 implements the locked shape in T38-T40 (NOT deferred to Plan 17+ per 1.B).
+
+**What to do:**
+1. **Brainstorm.** Final shape: `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries","concepts","draft"], bool]]`. Categories chosen to mirror the patch-set member fields plus `concepts` and `draft` for chat-mode autonomy.
+2. **Findings doc.** Append "Task 37 findings" subsection to this plan file. Cover: (a) the LOCKED schema (not "recommended"); (b) read-time backwards-compat migration: existing `autonomous: bool = true` becomes `{slug: {"new_files": true, "edits": true, "index_entries": true, "concepts": true, "draft": true} for slug in domains}`; (c) UI impact (T40 panel-autonomous.tsx grid — domains × categories); (d) interaction with T10 autonomy modal (modal becomes the quick global on/off; panel becomes the deep-config); (e) confirmed open questions resolved at lock time.
+3. **No code change in T37.** T38 implements the schema migration; T39 the AutonomyGate; T40 the UI.
 
 **Per-task review:** findings doc IS the artifact. Per-task self-review checklist.
 
 ---
 
-## Task 31 — "Set as default" topbar + generic zustand promotion + pendingSendRef-as-local audit
+## Task 38 — Per-domain autonomy schema migration (full production T37-T40 / 1.B)
 
 **Files:**
-- Modify: `apps/brain_web/src/components/topbar/scope-picker.tsx` ("Set as default" button SCAFFOLD)
-- Create: `apps/brain_web/src/lib/state/budget-store.ts` (zustand promotion of `useBudget`)
-- Modify: `apps/brain_web/src/components/chat/chat-screen.tsx` (any pendingSendRef-as-local extensions)
-- Append: `tasks/plans/16-comprehensive-carry-forward.md` (Task 31 audit doc)
+- Modify: `packages/brain_core/src/brain_core/config/schema.py` (`Config.autonomous` field shape change)
+- Modify: `packages/brain_core/src/brain_core/config/loader.py` (read-time backwards-compat transformation)
+- Create: `packages/brain_core/tests/config/test_autonomy_schema_migration.py`
 
-**Goal:** Per D31, three trivially-small architectural moves grouped in one PR.
+**Goal:** Per D30 step 2 of 4: the schema field shape changes from flat to nested per-domain × per-category. Old config.json files transparently migrate at read time.
 
 **What to do:**
-1. **"Set as default" button.** Topbar scope picker gets a button that calls existing `setActiveDomain` API. ~10 LOC + one unit test.
-2. **`budget-store.ts`.** Zustand promotion of `useBudget`. Mirror `domains-store.ts` shape. Migrate consumers.
-3. **`pendingSendRef`-as-local audit.** Grep `chat-screen.tsx` + neighboring handlers for refs that span an await. Findings doc filed in this plan file's Review section. Implement extensions ONLY if an obvious bug class hits.
+1. **Schema.** `Config.autonomous: dict[str, dict[Literal[...], bool]]` (per T37's locked shape). Default: `{slug: {"new_files": false, ...} for slug in default_domains}` (or empty dict; default to all-False at lock time).
+2. **Read-time migration.** `loader._migrate_legacy_autonomous(raw: dict) -> dict`: if `raw["autonomous"]` is a `bool`, expand to nested shape using current domain list (read from `raw["domains"]`). Idempotent: if already nested, no-op.
+3. **Pin tests.** (a) old shape `{"autonomous": true}` migrates to nested; (b) old shape `{"autonomous": false}` migrates to all-false nested; (c) already-nested shape passes through unchanged; (d) round-trip after migration produces nested shape.
 
-**Per-task review:** ~50 LOC total. Per-task self-review checklist.
+**Per-task review:** Per-task self-review checklist.
 
 ---
 
-## Task 32 — Generic `ctx.config` lint rule SCAFFOLD
+## Task 39 — AutonomyGate per-domain enforcement (full production T37-T40 / 1.B)
 
 **Files:**
-- Create: ruff custom rule OR mypy plugin entry (location TBD by implementer)
-- Modify: `.github/workflows/ci.yml` (add lint step)
-- Create: `packages/brain_core/tests/linting/test_ctx_config_lint_rule.py`
+- Modify: `packages/brain_core/src/brain_core/autonomy/gate.py` (or wherever the existing autonomy check lives; refactor for per-domain)
+- Modify: `packages/brain_core/src/brain_core/tools/apply_patch.py` (thread `ctx.domain` into the gate)
+- Create: `packages/brain_core/tests/autonomy/test_gate_per_domain.py`
 
-**Goal:** Per D32, structural enforcement of "tools that need Config call `raise_if_no_config(ctx, ...)`; no other tool reads `ctx.config` directly".
+**Goal:** Per D30 step 3 of 4: AutonomyGate reads per-domain × per-category flags. apply_patch threads ctx.domain.
 
 **What to do:**
-1. **Rule scaffold.** Either a ruff custom rule (if ruff supports project-local rules) OR a mypy plugin entry. Whitelist: `config_get`, `list_domains`, `config_set` (the 3 callers from Plan 15 Task 8). Anything else reading `ctx.config` triggers a lint error.
-2. **CI step.** Lint step in `ci.yml`.
-3. **Pin test.** `test_ctx_config_lint_rule.py`: scaffold contract — assert the rule fires on a known-bad pattern.
+1. **Gate.** `AutonomyGate.check_category(ctx: ToolContext, category: Literal[...]) -> bool` returns True if the category is autonomous-approved for `ctx.domain`. Reads `ctx.config.autonomous[ctx.domain][category]`.
+2. **apply_patch.** Iterate the patch set's member fields (`new_files`, `edits`, `index_entries`, `concepts`, `draft`); for each non-empty field, call `AutonomyGate.check_category(ctx, "<field>")`; if any returns False, route the WHOLE patch through the approval queue (not partial — partial-apply opens up scope-guard concerns).
+3. **Pin tests.** (a) all-true autonomy → patch auto-applies; (b) `new_files=false` + patch contains new_files → routed to approval; (c) `edits=false` + patch contains edits but not new_files → routed; (d) all-false → routed.
 
-**Per-task review:** lint step runs in CI. Per-task self-review checklist.
+**Per-task review:** Per-task self-review checklist + browser verification (toggle a category off; verify a patch hitting that category goes to approval queue).
 
 ---
 
-## Task 33 — Closure: 33-gate demo + lessons + todo.md + spec footnote
+## Task 40 — Per-domain autonomy UI panel (full production T37-T40 / 1.B)
+
+**Files:**
+- Create: `apps/brain_web/src/components/settings/panel-autonomous.tsx` (per-domain × per-category grid)
+- Modify: `apps/brain_web/src/lib/api/tools.ts` (add `setDomainAutonomy` API call)
+- Modify: `packages/brain_api/src/brain_api/routes/config.py` (`setDomainAutonomy` endpoint)
+- Create: `apps/brain_web/tests/unit/panel-autonomous.test.tsx`
+- Modify: `apps/brain_web/tests/e2e/a11y-populated.spec.ts` (add panel-autonomous case)
+
+**Goal:** Per D30 step 4 of 4: Settings → Autonomous gets the per-domain × per-category grid surface.
+
+**What to do:**
+1. **UI.** `panel-autonomous.tsx`: rows = domains, columns = categories (`new_files`, `edits`, `index_entries`, `concepts`, `draft`); each cell is a `<Switch>`. Header row labels columns; first column lists domain slug + accent dot.
+2. **API call.** `setDomainAutonomy(slug, category, value)`.
+3. **API endpoint.** POST `/tools/setDomainAutonomy` calls `config_set` with key `autonomous.<slug>.<category>`.
+4. **a11y.** Each Switch has `aria-label="<domain> {category}"` for screen readers. Tab through the grid in row-major order. axe-core: 0 violations.
+5. **Tests.** vitest unit test renders the grid; e2e a11y case opens the panel; axe-core scan.
+
+**Per-task review:** Per-task self-review checklist + browser verification.
+
+---
+
+## Task 41 — `brain config migrate` CLI (lifted from NOT-DOING per 1.B)
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/cli/migrate.py` (`migrate_config_file(path: Path) -> MigrationResult`)
+- Modify: `packages/brain_cli/src/brain_cli/commands/config.py` (+ `migrate` subcommand)
+- Create: `packages/brain_core/tests/config/test_config_migrate_cli.py`
+
+**Goal:** Per D31: CLI subcommand `brain config migrate <path>` rewrites old-shape config.json to new shape; backs up the original.
+
+**What to do:**
+1. **Core function.** `migrate_config_file(path: Path) -> MigrationResult`: read file → run `_migrate_legacy_autonomous` (T38) + any other migrations → write back. Backup original to `<path>.pre-migrate.bak` BEFORE write. Idempotent: re-runs detect already-new shape and no-op.
+2. **CLI plumbing.** `brain_cli/commands/config.py`: Typer `app.command("migrate")` that calls `migrate_config_file` against the given path (default `~/Documents/brain/.brain/config.json`).
+3. **Pin tests.** (a) old-shape file migrates; backup created; (b) re-run is a no-op + no new backup; (c) backup naming is stable (no overwrite if `.pre-migrate.bak` already exists — append `.1`, `.2`, etc.).
+
+**Per-task review:** subprocess test runs the actual CLI; verifies output. Per-task self-review checklist.
+
+---
+
+## Task 42 — "Set as default" topbar button (full implementation per D32)
+
+**Files:**
+- Modify: `apps/brain_web/src/components/topbar/scope-picker.tsx`
+- Create: `apps/brain_web/tests/unit/scope-picker-set-as-default.test.tsx`
+
+**Goal:** Per D32(a) (1.B full impl, not v1's scaffold): topbar scope picker gets a "Set as default" button that calls existing `setActiveDomain` API; success toast.
+
+**What to do:**
+1. **Button.** Inside the open dropdown of the scope picker, add a footer row "Set selected as default" button. Disabled when no selection, or when selection equals current `activeDomain`.
+2. **Wiring.** On click, calls `setActiveDomain(slug)` from existing `domains-store.ts`. On success, push toast: "Default domain set to {slug}.". On failure, toast with error.
+3. **Test.** Unit test: render with `activeDomain="research"`, select "personal" in dropdown, click button → assert `setActiveDomain("personal")` called → assert toast.
+
+**Per-task review:** ~15 LOC + test. Per-task self-review checklist + browser verification.
+
+---
+
+## Task 43 — Generic zustand promotion: useBudget + useDomainOverrides (full implementation per D32)
+
+**Files:**
+- Create: `apps/brain_web/src/lib/state/budget-store.ts` (mirrors `domains-store.ts` shape)
+- Create: `apps/brain_web/src/lib/state/domain-overrides-store.ts`
+- Modify: `apps/brain_web/src/hooks/useBudget.ts` (becomes a thin selector over `budget-store`)
+- Modify: `apps/brain_web/src/hooks/useDomainOverrides.ts` (becomes a thin selector over `domain-overrides-store`)
+- Update consumers (grep for both hook usages; verify cross-instance pubsub continues to work)
+- Create: `apps/brain_web/tests/unit/budget-store.test.ts`
+- Create: `apps/brain_web/tests/unit/domain-overrides-store.test.ts`
+
+**Goal:** Per D32(b): two more zustand-promotion migrations matching Plan 12's `useDomains` and Plan 13's `useCrossDomainGate` pattern.
+
+**What to do:**
+1. **`budget-store.ts`.** Persists current spend snapshot; refresh action; loaded flag; error field.
+2. **`domain-overrides-store.ts`.** Persists per-domain LLM/autonomy overrides; mutations call API + update store optimistically.
+3. **Hook refactors.** Both hooks become 3-line selectors.
+4. **Consumer migration.** Grep + verify no behavioral change.
+5. **Pin tests.** Mirror `domains-store.test.ts` shape; assert refresh + optimistic mutations + cross-instance via BroadcastChannel (T6 plumbing reused if applicable).
+
+**Per-task review:** ~30 LOC per store + tests. Per-task self-review checklist + browser verification.
+
+---
+
+## Task 44 — pendingSendRef-as-local audit + APPLY (full implementation per D32)
+
+**Files:**
+- Audit: `apps/brain_web/src/components/chat/chat-screen.tsx` + neighboring handlers (`fork-thread-dialog.tsx`, `compose-dialog.tsx`, etc.)
+- Modify: any file where the ref-spans-await anti-pattern appears
+- Append findings to `tasks/plans/16-comprehensive-carry-forward.md` (Task 44 audit findings subsection)
+
+**Goal:** Per D32(c) (1.B full impl, not v1's audit-only): audit + APPLY the capture-into-local pattern wherever the ref-spans-await anti-pattern appears.
+
+**What to do:**
+1. **Audit.** Grep `apps/brain_web/src/` for `useRef(` plus any `await` in the same handler. List each candidate site with file:line.
+2. **For each site.** Apply the canonical pattern: capture `ref.current` into a local synchronously, clear the ref BEFORE the await, dispatch from the local. Add a unit test that exercises the throw-leak path (mock the await to throw; assert ref is cleared).
+3. **Findings doc.** Append "Task 44 findings" subsection to this plan file: (a) sites inspected; (b) sites that needed the fix (with diff); (c) sites that didn't (with rationale).
+
+**Per-task review:** every fix site has a regression test. Per-task self-review checklist + browser verification on chat-screen send path.
+
+---
+
+## Task 45 — Ruff custom rule BRN001 plumbing (full production per D33)
+
+**Files:**
+- Create: `packages/brain_core/src/brain_core/_lint/brn001.py` (or `tools/lint/brn001.py` — locate per ruff plugin API conventions)
+- Modify: `pyproject.toml` (`[tool.ruff.lint.brain]` allowed-entry-points list; ruff plugin entry registration)
+- Create: `packages/brain_core/tests/linting/test_brn001_lint_rule.py`
+
+**Goal:** Per D33 step 1 of 2: ruff custom rule `BRN001` flags `ctx.config` reads outside the allowed entry-points list.
+
+**What to do:**
+1. **Rule plumbing.** Per ruff's plugin API (project-local rule), implement an AST visitor that catches `Attribute(value=Name("ctx"), attr="config")` reads and reports `BRN001` if the file is not in the allowed-entry-points list.
+2. **`pyproject.toml`.** New `[tool.ruff.lint.brain]` section with `allowed-entry-points = ["packages/brain_core/src/brain_core/tools/config_get.py", "packages/brain_core/src/brain_core/tools/list_domains.py", "packages/brain_core/src/brain_core/tools/config_set.py", "packages/brain_core/src/brain_core/tools/_errors.py", ...]`. Implementer adds others as the rule discovers legitimate sites.
+3. **Tests.** `test_brn001_lint_rule.py`: (a) sample violation file → rule fires; (b) sample allowed file → no fire; (c) `# noqa: BRN001` suppresses.
+
+**Per-task review:** rule fires on a known-bad pattern in tests. Per-task self-review checklist.
+
+---
+
+## Task 46 — BRN001 violation cleanup across the codebase (full production per D33)
+
+**Files:**
+- Modify: every file ruff flags (run the rule across `packages/`, `apps/brain_web/` if applicable)
+- Modify: `.github/workflows/ci.yml` (add `ruff check . --select BRN001` step)
+- Modify: `.pre-commit-config.yaml` (add BRN001 to the existing ruff hook)
+
+**Goal:** Per D33 step 2 of 2: run BRN001 across the repo; fix all violations OR add `# noqa: BRN001` with rationale.
+
+**What to do:**
+1. **Run.** `uv run ruff check . --select BRN001`. Capture all violations.
+2. **For each violation.** Either (a) refactor to use `raise_if_no_config(ctx, tool_name)` (the canonical entry-point from Plan 15 Task 8); or (b) add the file to `[tool.ruff.lint.brain].allowed-entry-points` if it's a legitimate read site; or (c) add `# noqa: BRN001  # rationale: ...` if one-off justified.
+3. **CI step.** ci.yml gets `uv run ruff check . --select BRN001` as a hard-fail gate.
+4. **Pre-commit.** Add BRN001 to the existing ruff hook (already in pre-commit per Plan 15 Task 1).
+
+**Per-task review:** `uv run ruff check . --select BRN001` reports 0 errors. Per-task self-review checklist.
+
+---
+
+## Task 47 — Closure: 47-gate demo + lessons + todo.md + spec footnotes
 
 **Files:**
 - Create: `scripts/demo-plan-16.py`
 - Modify: `tasks/lessons.md` (Plan 16 closure section)
-- Modify: `tasks/todo.md` (row 16 → ✅ Complete; remove Plan 16 candidate-scope; add Plan 17 candidate-scope)
-- Modify: `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` (§6 Cost footnote per Tasks 26+27)
+- Modify: `tasks/todo.md` (row 16 → ✅ Complete; remove Plan 16 candidate-scope; add Plan 17 candidate-scope — residuals only)
+- Modify: `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` (THREE footnotes per D36)
 
-**Goal:** Land the 33-gate demo. Lessons capture. todo.md update. ONE spec footnote per D31.
+**Goal:** Land the 47-gate demo. Lessons capture. todo.md update. THREE spec footnotes per D36.
 
 **What to do:**
-1. **demo-plan-16.py.** Mirror `scripts/demo-plan-15.py` structure. Build the 33 gates per the demo gate description in plan header.
+1. **demo-plan-16.py.** Mirror `scripts/demo-plan-15.py` structure. Build the 47 gates per the demo gate description in plan header.
 2. **Demo script execution prefix:** `chflags 0 .../_editable_impl_*.pth && .venv/bin/python scripts/demo-plan-16.py` per lesson 341.
 3. **Lessons capture.** Mirror Plan 15 closure-section format. Closure summary, then one paragraph per lesson:
    - **Production race fix (T1).** `loadRecent` overwrite race: id-keyed merge preserves optimistic rows. The Plan 14 Task 6 `waitForResponse` band-aid is now deletable. Lesson: production races that surface under test conditions are real bugs; fix production, then delete the test arm.
-   - **Architectural carry-forward at scale (T3-T8 + T26-T32).** Plan 16's 30-task shape was sustainable because (a) most tasks were < 50 LOC + combined review; (b) the SCAFFOLD shape for bigger moves let us land schema-first without committing to enforcement. Lesson: when carry-forward scope hits 50+ items, prefer 30 narrow tasks over 10 wide tasks.
-   - **Schema-first SCAFFOLD pattern.** Per-domain budget + rate-limit caps landed as schema fields without enforcement. Mirrors Plan 11 (`Config.privacy_railed: list[str]` schema first, enforcement layered on later). Lesson: when a feature has uncertain UX ergonomics, ship the data shape first; let it sit on disk for a user-iteration before committing to the polish.
-   - **BroadcastChannel cross-tab pubsub.** Closes the optimistic-clobber race class for both `domains-store` and `cross-domain-gate-store`. Lesson: when one store has a known race shape, audit sibling stores for the same shape; the second one is usually waiting in the wings.
-   - **Stylelint as structural enforcement.** Plan 14 lesson C3 (theme-aware tokens) is now enforced by stylelint. Lesson: when a discipline relies on "remember to use the token", structural enforcement (stylelint, custom ruff rule) is the only durable fix.
-   - **CI duration observability.** Plan 14 Task 7+8 added Mac+Windows matrix; Plan 16 Task 18 surfaces per-job wall-clock to `$GITHUB_STEP_SUMMARY`. Lesson: the act of measuring CI duration creates pressure to keep it down. Caching (Task 14) + composite action (Task 15) follow naturally.
-   - **Brainstorm-only tasks have a place.** Task 30 (per-domain autonomy categories) lands findings, no implementation. Lesson: when a schema redesign is genuinely ambiguous, separating the brainstorm from the implementation across plans is better than rushing both into one plan.
-   - **Forward-looking deferral comments at scale.** Plan 15 Task 10 cleaned one forward-looking deferral; Plan 16 Task 25 cleans three more. Lesson: every plan should have a "drop stale Plan-N references" sweep as an explicit task.
-   - **Combined review held across 30 tasks.** Plan 15 lesson 5 said combined review is sufficient for < 50 LOC; Plan 16 stress-tested it at 30 tasks. Lesson: combined review scales with plan size IF per-task PR shape stays narrow.
-4. **`tasks/todo.md` update.** Row 16 → ✅ Complete. Remove "Plan 16 candidate scope" tail section. Add "Plan 17 candidate scope (forwarded from Plan 16)" — pre-populate with the post-Plan-16 deferrals (full enforcement of per-domain budget caps; full enforcement of per-domain rate limits; cross-process hot-reload pubsub; per-domain autonomy implementation; migration tool IF/when needed; `seedBrainMd` / `seedScope` extraction once 5th caller appears; any new candidate scope discovered during Plan 16 execution).
-5. **Spec footnote.** §6 (Cost): one paragraph noting `Config.budget.per_domain` + `Config.providers[*].rate_limit_per_domain` are SCAFFOLD fields; full enforcement deferred. NO other spec text changes.
+   - **Full-production interpretation of carry-forward at scale (T26-T46 + 1.B).** Plan 16's 47-task shape was sustainable because (a) most tasks were < 50 LOC + combined review; (b) Theme 10's expansion from 7 SCAFFOLD tasks to 21 production tasks landed each schema/enforcement/UI as a discrete reviewable unit. Lesson: when the user chooses "ship the feature working end-to-end" over "ship the data shape and defer", the natural decomposition is one task per layer (schema → migration → enforcement → UI), not one task per concern.
+   - **Per-domain × per-category schema reshape (T37-T41).** The autonomy schema went from `bool` to `dict[str, dict[Literal[...], bool]]` in one plan because (a) T37 brainstormed + locked the shape; (b) T38 landed read-time backwards-compat migration; (c) T39 enforcement; (d) T40 UI; (e) T41 explicit CLI migration. Lesson: schema-shape changes that touch many call sites are tractable IF the migration is explicit (CLI tool) AND the read-time fallback (T38) covers users who never run the CLI.
+   - **Leaky-bucket vs sliding-window for rate limiting (T31).** Locked leaky-bucket recommendation upheld at implementation time. Lesson: the decision rationale ("queue smooths bursty traffic; sliding-window is harder to reason about correctness for; Anthropic's own limiter is bucket-shaped") proved load-bearing — implementer routed back zero times.
+   - **Cross-process hot-reload via SIGHUP + watchdog (T35).** Unix uses signal.SIGHUP; Windows fallback is filesystem polling on a marker file. Lesson: cross-process IPC should not assume Unix; Windows needs a fallback at the design phase, not an afterthought during implementation.
+   - **`validate_assignment=True` enabled despite perf overhead (T36 / 1.B).** Per locked decision 1.B + 3.A, the flag landed regardless of measurement outcome. Lesson: when "ship the correctness improvement" beats "preserve a perf budget that may not matter in practice", measure-and-document beats measure-and-gate.
+   - **BroadcastChannel cross-tab pubsub (T6).** Closes the optimistic-clobber race class for both `domains-store` and `cross-domain-gate-store`. Lesson: when one store has a known race shape, audit sibling stores for the same shape; the second one is usually waiting in the wings.
+   - **Stylelint as structural enforcement (T13).** Plan 14 lesson C3 (theme-aware tokens) is now enforced by stylelint. Lesson: when a discipline relies on "remember to use the token", structural enforcement is the only durable fix.
+   - **CI duration observability (T18).** Plan 14 Task 7+8 added Mac+Windows matrix; Plan 16 Task 18 surfaces per-job wall-clock to `$GITHUB_STEP_SUMMARY`. Lesson: the act of measuring CI duration creates pressure to keep it down. Caching (T14) + composite action (T15) follow naturally.
+   - **Ruff custom rule BRN001 (T45-T46).** ctx.config reads outside the allowed-entry-points list now fail CI. Lesson: when a discipline has a small, well-defined scope (3-5 legitimate read sites), an AST-level lint rule is the right shape; it's cheaper than a code review checklist and survives staff turnover.
+   - **`pendingSendRef`-as-local audit + apply (T44 / 1.B).** v1 had this as audit-only; under 1.B the audit IS followed by the apply step. Lesson: "file an audit doc" is rarely the right ending — audits without follow-up rot into wishlists. Apply OR add to NOT-DOING with a strengthened spec rationale; don't leave the middle state.
+   - **Combined review held across 47 tasks.** Plan 15 lesson 5 said combined review is sufficient for < 50 LOC; Plan 16 stress-tested it at 47 tasks. Lesson: combined review scales with plan size IF per-task PR shape stays narrow. Plan 16 confirms the upper-bound claim from Plan 15.
+4. **`tasks/todo.md` update.** Row 16 → ✅ Complete. Remove "Plan 16 candidate scope" tail section. Add "Plan 17 candidate scope (forwarded from Plan 16)" — pre-populate with the residuals-only post-Plan-16 deferrals: `seedBrainMd` / `seedScope` extraction once 5th caller appears; per-thread cross-domain confirmation (still NOT-DOING per spec §4); any new candidate scope discovered during Plan 16 execution. Note that under 1.B, the v1 "bigger architectural moves" carry-forward is empty — everything landed in Plan 16.
+5. **Spec footnotes (THREE per D36).** (a) §6 (Cost): per-domain budget caps + rate limits full implementation (T26-T29 + T30-T32). (b) §3 (Vault) [or §5 (Autonomy) depending on spec layout]: per-domain autonomy categories full implementation + migration tool (T37-T41). (c) §4 (Privacy): strengthen the "one-time" clause to make explicit that per-thread cross-domain confirmation is an intentional architectural NO.
 
-**Per-task review:** demo gates 1-33 all green. Lessons capture is the Plan 16 retrospective. todo.md update is the closure handoff. Spec footnote is the one explicit user-facing surface change. Per-task self-review checklist runs to completion.
+**Per-task review:** demo gates 1-47 all green. Lessons capture is the Plan 16 retrospective. todo.md update is the closure handoff. Three spec footnotes are the user-facing surface change. Per-task self-review checklist runs to completion.
 
 ---
 
@@ -936,32 +1256,33 @@ Any failure in 4–11 must be fixed before reporting DONE. No blanket ignores, n
 
 To be filled in on closure following Plan 10 + 11 + 12 + 13 + 14 + 15 format:
 - **Tag:** `plan-16-comprehensive-carry-forward` (cut on green demo).
-- **Closes:** all 50+ items from Plan 16 candidate scope (themes 1-9 directly; theme 10 as SCAFFOLDS or DEFERS). Plan 16 candidate-scope tail block in `tasks/todo.md` removed; Plan 17 candidate-scope tail block added.
-- **Bumps:** schema gains 3 new fields (`Config.budget.per_domain`, `Config.providers[*].rate_limit_per_domain`, `Config.config_version`). New components: `RepairConfigDialog`, `AutonomyModal`, `FilePreviewOverlay`, `PanelDomainsRow` + `PanelDomainsAdd` + `PanelDomainsActive`, `BudgetStore`. New stores: `budget-store.ts`. New tooling: stylelint (with hardcoded-hex rule), pre-commit gh workflow validate hook, ctx.config lint rule scaffold. New CI infrastructure: composite action, workflow caching, per-job summary writeback, Defender SmartScreen feature flag.
-- **Verification:** all 33 demo gates green (`scripts/demo-plan-16.py` → `PLAN 16 DEMO OK`); pytest count + vitest count + Playwright count + Mac+Windows CI green to be filled in.
-- **Backlog forward:** Plan 17 candidate scope pre-populated per Task 33 step 4. Themes: full enforcement of bigger architectural moves landed as scaffolds (per-domain budget + rate-limit + autonomy + cross-process hot-reload pubsub); migration tool if/when needed; `seedBrainMd` / `seedScope` once 5th caller appears; any new candidate scope discovered during Plan 16 execution.
+- **Closes:** all 50+ items from Plan 16 candidate scope (themes 1-9 directly; theme 10 at FULL PRODUCTION per locked 1.B). Plan 16 candidate-scope tail block in `tasks/todo.md` removed; Plan 17 candidate-scope tail block added (residuals only).
+- **Bumps:** schema gains 4 new fields (`Config.budget.per_domain`, `Config.providers[*].rate_limit_per_domain`, `Config.config_version`, `Config.autonomous` reshape from `bool` → nested per-domain × per-category) + `validate_assignment=True` flag. New components: `RepairConfigDialog` (full polish), `AutonomyModal`, `FilePreviewOverlay`, `PanelDomainsRow` + `PanelDomainsAdd` + `PanelDomainsActive`, `PanelAutonomous`, `BudgetStore`, `DomainOverridesStore`. New CLI: `brain config migrate`. New infrastructure: `watchdog` file-watcher, cross-process SIGHUP signaling, `BRN001` ruff rule, leaky-bucket rate-limit enforcement. New tooling: stylelint (with hardcoded-hex rule), pre-commit gh workflow validate hook, BRN001 lint rule. New CI infrastructure: composite action, workflow caching, per-job summary writeback, Defender SmartScreen feature flag.
+- **Verification:** all 47 demo gates green (`scripts/demo-plan-16.py` → `PLAN 16 DEMO OK`); pytest count + vitest count + Playwright count + Mac+Windows CI green to be filled in.
+- **Backlog forward:** Plan 17 candidate scope pre-populated per Task 47 step 4. Themes: residuals only — `seedBrainMd` / `seedScope` once 5th caller appears; per-thread cross-domain (still NOT-DOING by spec). Under 1.B, the v1 "bigger architectural moves" carry-forward block is EMPTY — everything landed in Plan 16.
 - **Forwards:** lessons captured in `tasks/lessons.md` under "Plan 16" feed Plan 17's authoring.
 
 ---
 
-## Task 30 — Findings (to be filled by implementer)
+## Task 37 — Findings (to be filled by implementer)
 
-To be appended by Task 30 implementer per D30. Expected shape:
+To be appended by Task 37 implementer per D30. Expected shape:
 
-- **Locked schema:** TBD (recommended: `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries"], bool]]`).
-- **Migration story:** TBD.
-- **UI impact:** TBD.
-- **Open questions:** TBD.
+- **Locked schema:** `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries","concepts","draft"], bool]]`.
+- **Read-time backwards-compat migration:** TBD (T38 implements; T37 documents the algorithm).
+- **UI impact:** TBD (T40 panel-autonomous; T10 modal becomes quick global on/off).
+- **Resolved open questions:** TBD.
 
 ---
 
-## Task 31 — pendingSendRef-as-local audit findings (to be filled by implementer)
+## Task 44 — pendingSendRef-as-local audit findings (to be filled by implementer)
 
-To be appended by Task 31 implementer per D31(c). Expected shape:
+To be appended by Task 44 implementer per D32(c). Expected shape:
 
-- **Surfaces inspected:** TBD.
-- **Refs spanning an await:** TBD.
-- **Recommended extensions:** TBD (or "no extension needed").
+- **Sites inspected:** TBD.
+- **Sites that needed the fix (with diff):** TBD.
+- **Sites that didn't need it (with rationale):** TBD.
+- **Regression tests added:** TBD.
 
 ---
 
