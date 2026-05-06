@@ -1,58 +1,54 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ChevronRight, Edit2, Lock, Trash2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { ACCENT_SWATCHES, DomainForm } from "@/components/settings/domain-form";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ACCENT_SWATCHES } from "@/components/settings/domain-form";
 import { PrivacyRailedGlossaryTooltip } from "@/components/dialogs/cross-domain-modal";
-import {
-  DomainOverrideForm,
-  type DomainOverrideValues,
-} from "@/components/settings/domain-override-form";
+import { type DomainOverrideValues } from "@/components/settings/domain-override-form";
+import { PanelDomainsActive } from "@/components/settings/panel-domains-active";
+import { PanelDomainsAdd } from "@/components/settings/panel-domains-add";
+import { PanelDomainsRow } from "@/components/settings/panel-domains-row";
 import { useDomains } from "@/lib/hooks/use-domains";
 import { useDomainsStore } from "@/lib/state/domains-store";
 import { useCrossDomainGateStore } from "@/lib/state/cross-domain-gate-store";
 import {
   brainDeleteDomain,
   configGet,
-  setActiveDomain,
   setCrossDomainWarningAcknowledged,
   setPrivacyRailed,
 } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
-import { ApiError } from "@/lib/api/types";
 
 /**
  * PanelDomains (Plan 07 Task 22 → Plan 10 Task 6 → Plan 11 Task 7 →
- * Plan 13 Task 2).
+ * Plan 13 Task 2 → Plan 16 Task 8 / D8).
+ *
+ * Plan 16 Task 8 (D8) factored this file from a single 850-LOC monolith
+ * into an orchestrator + three children:
+ *
+ *   - ``panel-domains-active.tsx`` — ``ActiveDomainSelector`` dropdown.
+ *   - ``panel-domains-row.tsx`` — per-domain row chrome + override
+ *     panel. Pure-presentation; the orchestrator owns mutations.
+ *   - ``panel-domains-add.tsx`` — "Add domain" section header +
+ *     ``<DomainForm>`` wrapper.
+ *
+ * This orchestrator owns the data-fetching effects, the privacy-rail
+ * + override state caches, the rename/delete/expand callbacks the
+ * children invoke, and the inline error banners (Plan 16 Tasks 4 + 5).
  *
  * - List renders from the zustand ``useDomainsStore`` (Plan 12 Task 5)
  *   via the ``useDomains()`` selector. Plan 13 Task 2 dropped the
  *   parallel local ``domains: string[]`` state that previously
  *   hydrated from a separate ``listDomains()`` call: single source of
- *   truth, peer-consumer pubsub, no drift. Each row shows a colour
- *   swatch, the slug, a privacy-rail checkbox, and an expand caret.
- *   Rename opens the existing RenameDomainDialog via dialogs-store
- *   with an ``onRenamed`` callback so the list refreshes after a
- *   successful rename. Delete opens TypedConfirmDialog and on confirm
- *   calls ``brain_delete_domain``.
+ *   truth, peer-consumer pubsub, no drift.
  *
- * - Personal's privacy-rail checkbox is ``disabled`` AND ``checked``
- *   with a tooltip "personal is required and cannot be un-railed" per
- *   Plan 11 D11. The Config validator enforces this on persist; the
- *   UI mirrors it so the user gets immediate feedback.
- *
- * - Personal also has NO delete button (Plan 10 D5).
+ * - Personal is structurally protected: privacy-rail can't be
+ *   un-railed, no delete button. Both the UI and the Config validator
+ *   enforce this; the row component mirrors the validator so the user
+ *   gets immediate feedback.
  *
  * - Plan 11 Task 7: each row is expandable to a ``<DomainOverrideForm>``
  *   showing the five optional override fields (classify_model,
@@ -62,7 +58,13 @@ import { ApiError } from "@/lib/api/types";
  *   after every successful save.
  */
 
-const PROTECTED_DOMAINS = new Set<string>(["personal"]);
+const EMPTY_OVERRIDE: DomainOverrideValues = {
+  classify_model: null,
+  default_model: null,
+  temperature: null,
+  max_output_tokens: null,
+  autonomous_mode: null,
+};
 
 // Built-in domain dots use the brand-skin's semantic ``--dom-*`` tokens so
 // the colors match the topbar's scope-picker dots, the chat pane's domain
@@ -76,14 +78,6 @@ const BUILTIN_DOMAIN_ACCENT: Record<string, string> = {
   research: "var(--dom-research)",
   work: "var(--dom-work)",
   personal: "var(--dom-personal)",
-};
-
-const EMPTY_OVERRIDE: DomainOverrideValues = {
-  classify_model: null,
-  default_model: null,
-  temperature: null,
-  max_output_tokens: null,
-  autonomous_mode: null,
 };
 
 /** Read ``Config.domain_overrides`` for a single slug.
@@ -251,150 +245,6 @@ function CrossDomainWarningToggle(): React.ReactElement {
   );
 }
 
-/**
- * ActiveDomainSelector (Plan 12 D3 / Task 8).
- *
- * Surfaces ``Config.active_domain`` as a top-of-panel dropdown so users
- * never need to hand-edit ``config.json`` to change the persisted scope
- * default. Selection flow:
- *
- *   1. Optimistic update via ``useDomainsStore.setActiveDomainOptimistic``
- *      so peer subscribers (topbar scope chip, browse scope filter,
- *      future surfaces) re-render immediately. This is the load-bearing
- *      Plan 12 Task 5 contract — without zustand promotion the chip
- *      would stay stale until next page-load.
- *   2. Fire ``brain_config_set({key:"active_domain", value:slug})`` via
- *      the typed helper. Backend cross-field validator
- *      (``_check_active_domain_membership``) raises ``ValueError`` if
- *      ``slug`` isn't in ``Config.domains`` — defensive against the
- *      race where another tab concurrently deletes the slug between
- *      the dropdown rendering and the user picking it. Dropdown
- *      options are populated from the same ``domains`` list so the
- *      validator can't realistically fire on the user's own pick;
- *      the guard exists for that cross-tab race only.
- *   3. On failure, revert the optimistic update by re-pushing the
- *      previous value through ``setActiveDomainOptimistic`` and toast
- *      a "danger" variant pointing the user at picking a different
- *      domain. The next ``refresh()`` reconciles whatever the API
- *      ultimately returned.
- *
- * Native ``<select>`` (not shadcn ``<Select>``) deliberately:
- *   - Browser-managed keyboard nav + screen-reader announcements out
- *     of the box. No portal / pointer-capture jsdom pitfalls in tests.
- *   - The dropdown lists flat slug strings; shadcn's richer custom
- *     popper isn't needed for a single-column slug list.
- *   - Mirrors ``DomainOverrideForm``'s native ``<select>`` for
- *     ``classify_model``/``default_model`` choices — consistent inside
- *     the Settings → Domains panel.
- */
-function ActiveDomainSelector(): React.ReactElement {
-  const pushToast = useSystemStore((s) => s.pushToast);
-  // Read directly off the store rather than ``useDomains()`` so we get
-  // the live optimistic-update view AND avoid the hook's first-mount
-  // auto-refresh side effect (``PanelDomains``'s own ``refresh()``
-  // already populates the store on mount).
-  const domains = useDomainsStore((s) => s.domains);
-  const activeDomain = useDomainsStore((s) => s.activeDomain);
-
-  const onChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const next = event.target.value;
-    if (!next || next === activeDomain) return;
-    const previous = activeDomain;
-    // Plan 15 Task 6 (D5): toast payload is built inside catch but
-    // dispatched OUTSIDE the catch block (defensive scoping — pushToast
-    // is a zustand setter that shouldn't realistically throw, but keeping
-    // it out of the catch means a bug there can't swallow the optimistic
-    // rollback or shadow the original error). Plan 12 Task 8 review I2.
-    let pendingToast: { lead: string; msg: string; variant: "danger" } | null =
-      null;
-
-    // 1. Optimistic update — peer consumers re-render now.
-    useDomainsStore.getState().setActiveDomainOptimistic(next);
-    try {
-      // 2. Persist via brain_config_set wrapper.
-      await setActiveDomain(next);
-      pushToast({
-        lead: "Active domain updated.",
-        msg: `Default scope is now ${next}.`,
-        variant: "success",
-      });
-    } catch (err) {
-      // 3. Revert the optimistic update — peer consumers see ``previous``
-      //    again. Done first so the UI snaps back even if anything below
-      //    were to throw.
-      useDomainsStore.getState().setActiveDomainOptimistic(previous);
-
-      // 4. Classify the error to pick a CTA that matches reality
-      //    (Plan 15 Task 6 / D5; Plan 12 Task 8 review I1).
-      //
-      //    - ``ApiError`` with ``status === 400`` is a validator error:
-      //      the cross-field ``_check_active_domain_membership`` raises
-      //      ``ValueError`` ("active_domain X not in Config.domains
-      //      [..]") which the brain_api error layer renders as a flat
-      //      400 envelope (``code: "invalid_input"``). The user-actionable
-      //      next step is to pick a different domain.
-      //    - Anything else (network error / fetch reject / 5xx) is a
-      //      transport error — the user's choice was fine; the wire
-      //      blew up. The next step is to retry.
-      const isValidatorError = err instanceof ApiError && err.status === 400;
-      const detail = err instanceof Error ? err.message : "Unknown error.";
-      const cta = isValidatorError
-        ? "Pick a different domain."
-        : "Try again.";
-      pendingToast = {
-        lead: "Couldn't update active domain.",
-        msg: `${detail} ${cta}`,
-        variant: "danger",
-      };
-    }
-
-    // 5. Dispatch the danger toast outside the catch block.
-    if (pendingToast) {
-      pushToast(pendingToast);
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-2 rounded-md border border-[var(--hairline)] bg-[var(--surface-1)] p-3">
-      <label
-        htmlFor="active-domain-selector"
-        className="text-xs font-semibold text-[var(--text)]"
-      >
-        Active domain
-      </label>
-      <p className="text-[11px] text-[var(--text-muted)]">
-        The default scope for new chats, ingest calls, and any tool
-        that does not override the domain explicitly. Persists to
-        Config.active_domain.
-      </p>
-      <select
-        id="active-domain-selector"
-        data-testid="active-domain-selector"
-        value={activeDomain}
-        onChange={(e) => void onChange(e)}
-        disabled={domains.length === 0}
-        className="h-9 rounded-md border border-[var(--hairline)] bg-[var(--surface-0)] px-2 text-sm text-[var(--text)] focus:outline-none focus:ring-1 focus:ring-[var(--ring,_currentColor)] disabled:cursor-not-allowed disabled:opacity-50"
-        aria-label="Active domain"
-      >
-        {/* Empty placeholder option for the cold-cache / pre-Task-6
-            backend case where ``activeDomain`` is "". Hidden once any
-            real value is selected so the dropdown can never re-pick
-            the empty value through the keyboard. */}
-        {activeDomain === "" && (
-          <option value="" disabled hidden>
-            — none selected —
-          </option>
-        )}
-        {domains.map((d) => (
-          <option key={d.slug} value={d.slug}>
-            {d.slug}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
 export function PanelDomains(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
   const openDialog = useDialogsStore((s) => s.open);
@@ -403,10 +253,7 @@ export function PanelDomains(): React.ReactElement {
   // the zustand store. Plan 12 Task 5 promoted ``useDomains()`` to a
   // store-backed selector; this panel now reads through that selector
   // instead of maintaining a parallel ``domains: string[]`` local
-  // state hydrated from a separate ``listDomains()`` call. The two
-  // read paths previously landed at the same backend so they stayed
-  // coincidentally aligned, but the seam was drift-prone (see Plan 12
-  // Task 5 + Task 8 reviews and ``tasks/lessons.md``).
+  // state hydrated from a separate ``listDomains()`` call.
   const { domains: domainEntries, loading: domainsLoading } = useDomains();
   // Plan 16 Task 4 (D4): surface ``useDomainsStore.error`` as an inline
   // banner above the list so a failed ``refresh()`` (transient backend
@@ -619,7 +466,7 @@ export function PanelDomains(): React.ReactElement {
         {/* Plan 12 Task 8 (D3): active-domain dropdown lives above the
             per-domain rows so users never need to hand-edit
             ``config.json`` to change the persisted scope default. */}
-        <ActiveDomainSelector />
+        <PanelDomainsActive />
 
         {/* Plan 12 Task 9 (D8): cross-domain confirmation toggle —
             below the active-domain dropdown, above the per-domain
@@ -686,164 +533,34 @@ export function PanelDomains(): React.ReactElement {
             >
               {domainEntries.map((entry, idx) => {
                 const slug = entry.slug;
-                const protectedDomain = PROTECTED_DOMAINS.has(slug);
                 const builtinAccent = BUILTIN_DOMAIN_ACCENT[slug];
                 const accent =
                   builtinAccent ??
                   ACCENT_SWATCHES[idx % ACCENT_SWATCHES.length] ??
                   "#6A8CAA";
-                const isExpanded = expanded.has(slug);
-                const isRailed = railed.includes(slug);
-                const railCheckboxId = `privacy-rail-${slug}`;
                 return (
-                  <li
+                  <PanelDomainsRow
                     key={slug}
-                    data-testid="domain-row"
-                    className="flex flex-col border-b border-[var(--hairline)] last:border-0"
-                  >
-                    <div className="flex items-center gap-3 px-3 py-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggleExpanded(slug)}
-                        aria-label={
-                          isExpanded
-                            ? `Collapse ${slug} overrides`
-                            : `Expand ${slug} overrides`
-                        }
-                        aria-expanded={isExpanded}
-                        aria-controls={`override-panel-${slug}`}
-                        className="h-7 w-7 p-0"
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="h-4 w-4" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4" />
-                        )}
-                      </Button>
-                      <span
-                        aria-hidden="true"
-                        className="h-4 w-4 rounded-full border border-[var(--hairline)]"
-                        style={{ background: accent }}
-                      />
-                      <span className="font-mono text-sm text-[var(--text)]">
-                        {slug}
-                      </span>
-
-                      {protectedDomain && (
-                        <span
-                          data-testid="personal-privacy-badge"
-                          className="inline-flex items-center gap-1 rounded-full border border-[var(--hairline-strong)] px-2 py-0.5 text-[10px] font-medium"
-                          style={{
-                            background: "var(--dom-personal-soft)",
-                            color: "var(--dom-personal)",
-                          }}
-                        >
-                          <Lock className="h-2.5 w-2.5" />
-                          Privacy-railed
-                        </span>
-                      )}
-
-                      <div className="ml-auto flex items-center gap-3">
-                        {/* Privacy-rail checkbox per row. Personal is
-                            disabled-and-checked; tooltip explains
-                            why. */}
-                        {protectedDomain ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="inline-flex items-center gap-1.5">
-                                <Checkbox
-                                  id={railCheckboxId}
-                                  checked={true}
-                                  disabled={true}
-                                  data-testid={`privacy-rail-checkbox-${slug}`}
-                                  aria-labelledby={`privacy-rail-label-${slug}`}
-                                />
-                                <label
-                                  id={`privacy-rail-label-${slug}`}
-                                  htmlFor={railCheckboxId}
-                                  className="text-[11px] text-[var(--text-muted)]"
-                                >
-                                  Privacy-railed
-                                </label>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              personal is required and cannot be un-railed.
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5">
-                            <Checkbox
-                              id={railCheckboxId}
-                              checked={isRailed}
-                              onCheckedChange={(v) =>
-                                void togglePrivacyRail(slug, Boolean(v))
-                              }
-                              data-testid={`privacy-rail-checkbox-${slug}`}
-                              aria-labelledby={`privacy-rail-label-${slug}`}
-                            />
-                            <label
-                              id={`privacy-rail-label-${slug}`}
-                              htmlFor={railCheckboxId}
-                              className="text-[11px] text-[var(--text-muted)]"
-                            >
-                              Privacy-railed
-                            </label>
-                          </span>
-                        )}
-
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRename(slug)}
-                          aria-label={`Rename ${slug}`}
-                          className="h-7 gap-1 px-2 text-xs"
-                        >
-                          <Edit2 className="h-3 w-3" />
-                          Rename
-                        </Button>
-                        {!protectedDomain && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDelete(slug)}
-                            aria-label={`Delete ${slug}`}
-                            className="h-7 gap-1 px-2 text-xs text-red-400 hover:text-red-300"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Delete
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-
-                    {isExpanded && (
-                      <div
-                        id={`override-panel-${slug}`}
-                        className="border-t border-[var(--hairline)] bg-[var(--surface-0)] px-3 py-3"
-                      >
-                        <DomainOverrideForm
-                          slug={slug}
-                          initialValues={overrides[slug] ?? EMPTY_OVERRIDE}
-                          onChanged={() => void refreshOverrides(slug)}
-                        />
-                      </div>
-                    )}
-                  </li>
+                    domain={entry}
+                    accent={accent}
+                    isExpanded={expanded.has(slug)}
+                    isRailed={railed.includes(slug)}
+                    overrideValues={overrides[slug] ?? EMPTY_OVERRIDE}
+                    onToggleExpanded={toggleExpanded}
+                    onTogglePrivacyRail={(s, checked) =>
+                      void togglePrivacyRail(s, checked)
+                    }
+                    onRename={handleRename}
+                    onDelete={handleDelete}
+                    onOverrideChanged={(s) => void refreshOverrides(s)}
+                  />
                 );
               })}
             </ul>
           )}
         </section>
 
-        <section>
-          <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">
-            Add domain
-          </h2>
-          <DomainForm onAdded={() => void refresh()} />
-        </section>
+        <PanelDomainsAdd onAdded={() => void refresh()} />
       </div>
     </TooltipProvider>
   );
