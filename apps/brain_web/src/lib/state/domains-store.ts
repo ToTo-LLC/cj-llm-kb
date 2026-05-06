@@ -150,6 +150,17 @@ export interface DomainsState {
    *  ``refresh()`` reconciles whatever the API returns. Fire-and-
    *  forget; the caller owns the API call. */
   setActiveDomainOptimistic: (slug: string) => void;
+  /** Drop a domain row from ``domains`` immediately for snappy UI —
+   *  used by the Settings → Domains delete handler (Plan 16 Task 4 /
+   *  D4) after the user confirms a delete but before the API round-
+   *  trip resolves. Mirrors ``setActiveDomainOptimistic``'s in-store-
+   *  only pattern: no API call, no fetch, just a synchronous state
+   *  update so peer subscribers (topbar scope chip, active-domain
+   *  dropdown, browse) re-render without waiting on the network.
+   *  Caller owns the API call AND the rollback (``refresh()`` to
+   *  restore the row on failure). No-op when ``slug`` is not in
+   *  ``domains``. */
+  removeDomainOptimistic: (slug: string) => void;
   /** Test-only: reset the store to initial state + clear any
    *  in-flight promise. Used by ``beforeEach`` in unit tests so
    *  cases don't leak through the singleton store. */
@@ -215,6 +226,9 @@ export const useDomainsStore = create<DomainsState>((set, get) => ({
     if (get().activeDomain === slug) return;
     set({ activeDomain: slug });
   },
+
+  removeDomainOptimistic: (slug) =>
+    set((s) => ({ domains: s.domains.filter((d) => d.slug !== slug) })),
 
   _resetForTesting: () => {
     inFlightPromise = null;

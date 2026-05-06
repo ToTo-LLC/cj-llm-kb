@@ -408,6 +408,13 @@ export function PanelDomains(): React.ReactElement {
   // coincidentally aligned, but the seam was drift-prone (see Plan 12
   // Task 5 + Task 8 reviews and ``tasks/lessons.md``).
   const { domains: domainEntries, loading: domainsLoading } = useDomains();
+  // Plan 16 Task 4 (D4): surface ``useDomainsStore.error`` as an inline
+  // banner above the list so a failed ``refresh()`` (transient backend
+  // hiccup, network drop) is visible to the user — not just a stale
+  // list. The store's ``refresh()`` uses resolve-always semantics
+  // (failures land on ``error`` rather than rejecting the Promise) so
+  // a peer-consumer's failed refresh won't otherwise surface here.
+  const storeError = useDomainsStore((s) => s.error);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const [overrides, setOverrides] = React.useState<
     Record<string, DomainOverrideValues>
@@ -536,6 +543,13 @@ export function PanelDomains(): React.ReactElement {
       word: slug, // per plan: typed-match on the slug itself
       danger: true,
       onConfirm: async () => {
+        // Plan 16 Task 4 (D4): drop the row from the store BEFORE
+        // awaiting the API so the UI feels snappy — peer subscribers
+        // (topbar scope chip, active-domain dropdown, browse) re-render
+        // immediately. Mirrors ``setActiveDomainOptimistic``'s pattern.
+        // On API failure, ``refresh()`` reconciles by re-fetching
+        // ``brain_list_domains`` so the row reappears.
+        useDomainsStore.getState().removeDomainOptimistic(slug);
         try {
           // Plan 11 Task 7: if the slug is currently in the privacy
           // rail, drop it from the rail FIRST so the post-delete
@@ -558,7 +572,8 @@ export function PanelDomains(): React.ReactElement {
           // broadcasts to every subscriber — including this panel
           // (which now reads ``domains`` off the store via
           // ``useDomains()``) so the deleted row falls out of the
-          // rendered list automatically.
+          // rendered list automatically. Also reconciles the optimistic
+          // remove with the canonical server list.
           void useDomainsStore.getState().refresh();
           // Drop any stale override state for the deleted slug.
           setOverrides((prev) => {
@@ -572,6 +587,12 @@ export function PanelDomains(): React.ReactElement {
             variant: "success",
           });
         } catch (err) {
+          // Plan 16 Task 4 (D4): API failed — restore the row by
+          // re-fetching the canonical server list. ``refresh()`` will
+          // overwrite ``domains`` with whatever the backend has now
+          // (the slug, since the delete didn't land), bringing the
+          // optimistically-removed row back.
+          await useDomainsStore.getState().refresh();
           pushToast({
             lead: "Couldn't delete domain.",
             msg: err instanceof Error ? err.message : "Unknown error.",
@@ -609,6 +630,23 @@ export function PanelDomains(): React.ReactElement {
             Personal is structurally required and cannot be un-railed.
           </p>
 
+          {/* Plan 16 Task 4 (D4): inline error banner — surfaces a failed
+              ``useDomainsStore.refresh()`` (resolve-always semantics
+              record errors on store state rather than rejecting). The
+              toast subsystem fires for write failures (delete, rename,
+              etc.) but a passive read failure has no other visible
+              channel. ``role="alert"`` so screen-readers announce the
+              banner when it appears. */}
+          {storeError && (
+            <div
+              role="alert"
+              data-testid="domains-error-banner"
+              className="mb-3 rounded-md border border-[var(--hairline-strong)] bg-[var(--surface-2)] p-3 text-xs text-[var(--danger,_#FF4503)]"
+            >
+              <span className="font-semibold">Couldn&rsquo;t load domains.</span>{" "}
+              <span className="text-[var(--text)]">{storeError.message}</span>
+            </div>
+          )}
           {loading ? (
             <div className="rounded-md border border-[var(--hairline)] bg-[var(--surface-1)] p-4 text-xs text-[var(--text-dim)]">
               Loading domains…
