@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Folder, Moon, Sun } from "lucide-react";
+import { Folder, Moon, Sun, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { RepairConfigDialog } from "@/components/dialogs/repair-config-dialog";
 import { configGet } from "@/lib/api/tools";
 import { useAppStore, type Density, type Theme } from "@/lib/state/app-store";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,10 @@ export function PanelGeneral(): React.ReactElement {
   const setDensity = useAppStore((s) => s.setDensity);
 
   const [vaultPath, setVaultPath] = React.useState<string | null>(null);
+  // Plan 16 Task 9: SCAFFOLD repair-config dialog. Local ``isOpen`` state
+  // (not ``dialogs-store``) per the Task 9 spec's prop shape — full UI
+  // lands at Task 33.
+  const [repairOpen, setRepairOpen] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -117,6 +122,36 @@ export function PanelGeneral(): React.ReactElement {
           location. Not a click operation — content is sacred.
         </p>
       </section>
+
+      {/* Plan 16 Task 9 (SCAFFOLD) — Repair config entry point. Full UI at
+          Task 33 with Config.config_version + per-step controls. The button
+          opens a minimal dialog that satisfies the a11y-populated.spec.ts
+          gate today; full repair flow lands later in Plan 16. */}
+      <section>
+        <h2 className="mb-3 text-sm font-semibold text-[var(--text)]">
+          Config
+        </h2>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-2"
+          onClick={() => setRepairOpen(true)}
+        >
+          <Wrench className="h-3.5 w-3.5" />
+          Repair config
+        </Button>
+        <p className="mt-2 text-[11px] text-[var(--text-muted)]">
+          If your <code className="font-mono">config.json</code> is corrupted,
+          brain falls back to <code className="font-mono">.bak</code> then
+          defaults.
+        </p>
+      </section>
+
+      <RepairConfigDialog
+        isOpen={repairOpen}
+        onClose={() => setRepairOpen(false)}
+      />
     </div>
   );
 }

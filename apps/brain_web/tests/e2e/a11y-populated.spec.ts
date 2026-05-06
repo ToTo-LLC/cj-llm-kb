@@ -16,21 +16,20 @@
  *   ✅ rename-domain dialog          (Settings → Domains → Rename)
  *   ✅ delete-domain dialog          (Settings → Domains → Delete; typed-confirm)
  *   ✅ fork-thread dialog            (Chat sub-header → Fork)
- *   ⏭ repair-config dialog          NOT IMPLEMENTED — no UI surface today;
- *                                    deferred to Plan 15 candidate scope.
- *                                    grep "repair_config|repairConfig" in
- *                                    apps/brain_web/src/ returns empty.
+ *   ✅ repair-config dialog          (Settings → General → Repair config;
+ *                                     SCAFFOLD per Plan 16 Task 9 / D9. Full
+ *                                     UI lands at Plan 16 Task 33.)
  *   ✅ backup-restore dialog        (Settings → Backups → Restore; typed-confirm)
  *   ✅ cross-domain modal           (chat send with scope=[research, personal])
  *   ✅ patch-card edit dialog       (Pending → select patch → "Edit, then approve")
  *   ⏭ autonomy modal               NOT IMPLEMENTED — autonomy surfaces are
  *                                    Switch toggles (inbox + pending screens),
- *                                    no modal exists today. Deferred to Plan 15.
+ *                                    no modal exists today. Deferred to Plan
+ *                                    16+ scope.
  *
- * Six implementable dialog cases land here. The two deferrals are filed
- * as Plan 15 candidates per the per-task review escalation policy: "if
- * a dialog doesn't have a UI surface, file as Plan 15 candidate; reduce
- * to 7 or fewer cases."
+ * Seven implementable dialog cases land here (six since Plan 14 plus the
+ * Plan 16 Task 9 repair-config scaffold). The remaining deferral is filed
+ * for follow-up plans per the per-task review escalation policy.
  *
  * Menu + overlay inventory (Task 4 dispatch text, 5 nominal cases):
  *
@@ -384,6 +383,40 @@ test.describe("a11y — populated-state dialog sweep", () => {
       patch_id: patchId,
       reason: "a11y populated-state spec cleanup",
     });
+  });
+
+  // ----------------------------------------------------------------
+  // Case 6b: repair-config dialog (Plan 16 Task 9 SCAFFOLD)
+  //
+  // Plan 14 Task 3's deferral receipt asked for a UI surface so this
+  // populated-state spec can scan it. Plan 16 Task 9 lands the scaffold:
+  // Settings → General has a "Repair config" button that opens a minimal
+  // ``<RepairConfigDialog>`` (Modal + Run repair + Cancel). Full
+  // implementation (per-step controls, ``Config.config_version``) lands
+  // at Plan 16 Task 33 — that re-uses the same component, so the a11y
+  // gate stays valid through the upgrade.
+  // ----------------------------------------------------------------
+  test("repair-config dialog has 0 violations", async ({ page, checkA11y }) => {
+    await page.goto("/settings/general/");
+    await page.waitForLoadState("networkidle");
+
+    const repairButton = page.getByRole("button", { name: /^Repair config$/i });
+    await expect(repairButton).toBeVisible();
+    await repairButton.click();
+
+    // Modal heading is "Repair config" per the Task 9 spec microcopy.
+    await expect(
+      page.getByRole("heading", { name: /^Repair config$/i }),
+    ).toBeVisible();
+    // Mirror the other dialog cases: settle one extra beat so autofocus +
+    // Radix transition complete before axe scans.
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "dialog:repair-config");
+
+    // Cleanup: dismiss with Escape so the dialog doesn't bleed into
+    // subsequent cases that share the page lifecycle.
+    await page.keyboard.press("Escape");
   });
 
   // ================================================================
