@@ -59,6 +59,20 @@ jobs:
         with:
           version: "0.11.*"
 
+      # Plan 16 D14 / Task 14: cache uv's download + wheel cache. Keyed on
+      # the lockfile + every pyproject.toml so any dep change invalidates.
+      # Both POSIX (~/.cache/uv) and Windows (%LOCALAPPDATA%\uv\cache) paths
+      # are listed; actions/cache@v4 tolerates non-existent paths per OS.
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~\AppData\Local\uv\cache
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml', 'packages/*/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
       - name: Set up Python
         run: uv python install 3.12
 
@@ -75,6 +89,21 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: "9.15.0"
+
+      # Plan 16 D14 / Task 14: cache pnpm content-addressable store.
+      # Default store paths differ by OS; both are listed so the cache
+      # action picks whichever exists per runner. Keyed on the workspace
+      # pnpm-lock.yaml so dep changes invalidate.
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/pnpm/store/v3
+            ~/Library/pnpm/store/v3
+            ~\AppData\Local\pnpm\store\v3
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
 
       - name: pnpm install (workspace)
         run: pnpm install --frozen-lockfile
@@ -96,7 +125,30 @@ jobs:
         # explicitly here keeps the failure mode obvious in CI logs.
         run: pnpm --filter brain_web build
 
+      # Plan 16 D14 / Task 14: cache the Playwright browser binaries.
+      # Mac default: ~/Library/Caches/ms-playwright; Linux: ~/.cache/ms-playwright;
+      # Windows: %USERPROFILE%\AppData\Local\ms-playwright. All three paths are
+      # listed; actions/cache@v4 ignores non-existent paths per OS. Keyed on
+      # the pnpm-lock.yaml hash because that captures the resolved
+      # @playwright/test version (bumping it invalidates the browser cache).
+      - name: Cache Playwright browsers
+        id: cache-playwright
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/ms-playwright
+            ~/.cache/ms-playwright
+            ~\AppData\Local\ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      # On a cache hit we still need the Linux apt deps that --with-deps
+      # supplies — but hosted macos-14 + windows-2022 runners have nothing
+      # to install on the system side, so the gate is straightforward:
+      # skip entirely when the browser cache already populated the path.
       - name: Install Playwright browsers (chromium + system deps)
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
         run: pnpm --filter brain_web exec playwright install --with-deps chromium
 
       # --- Run e2e suite (macOS) -----------------------------------------
