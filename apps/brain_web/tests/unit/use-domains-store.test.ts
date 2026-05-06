@@ -7,7 +7,7 @@
  *
  *   1. Fresh store has the documented zero-state.
  *   2. ``refresh()`` resolves and the store reflects the response,
- *      including ``domainsLoaded === true``.
+ *      including ``loaded === true``.
  *   3. ``setActiveDomainOptimistic`` propagates to peer consumers
  *      via the zustand subscription model (no manual reload — the
  *      whole point of Task 5).
@@ -48,7 +48,7 @@ describe("useDomainsStore — fresh state", () => {
     const s = useDomainsStore.getState();
     expect(s.domains).toEqual([]);
     expect(s.activeDomain).toBe("");
-    expect(s.domainsLoaded).toBe(false);
+    expect(s.loaded).toBe(false);
     expect(s.error).toBeNull();
   });
 });
@@ -77,7 +77,7 @@ describe("useDomainsStore — refresh()", () => {
       "work",
     ]);
     expect(s.activeDomain).toBe("research");
-    expect(s.domainsLoaded).toBe(true);
+    expect(s.loaded).toBe(true);
     expect(s.error).toBeNull();
     expect(listDomainsMock).toHaveBeenCalledTimes(1);
   });
@@ -94,12 +94,12 @@ describe("useDomainsStore — refresh()", () => {
     const s = useDomainsStore.getState();
     expect(s.error).toBeInstanceOf(Error);
     expect(s.error?.message).toBe("boom");
-    // ``domainsLoaded`` stays false on failure — the auto-refresh in
+    // ``loaded`` stays false on failure — the auto-refresh in
     // useDomains() doesn't loop because the effect's only dep is
-    // ``domainsLoaded``, which doesn't flip. (A retry requires either
+    // ``loaded``, which doesn't flip. (A retry requires either
     // an explicit ``refresh()`` from a button or a state mutation
     // that re-mounts the consumer.)
-    expect(s.domainsLoaded).toBe(false);
+    expect(s.loaded).toBe(false);
   });
 
   test("subsequent refresh after error retries (in-flight promise cleared)", async () => {
@@ -119,7 +119,7 @@ describe("useDomainsStore — refresh()", () => {
     await useDomainsStore.getState().refresh();
     expect(useDomainsStore.getState().error?.message).toBe("transient");
     await useDomainsStore.getState().refresh();
-    expect(useDomainsStore.getState().domainsLoaded).toBe(true);
+    expect(useDomainsStore.getState().loaded).toBe(true);
     expect(useDomainsStore.getState().error).toBeNull();
     expect(useDomainsStore.getState().domains.map((d) => d.slug)).toEqual([
       "research",
@@ -157,7 +157,7 @@ describe("useDomainsStore — in-flight serialization (Promise cache)", () => {
     });
     await Promise.all([a, b]);
 
-    expect(useDomainsStore.getState().domainsLoaded).toBe(true);
+    expect(useDomainsStore.getState().loaded).toBe(true);
     // Even after both awaiters complete, the call count stays at 1.
     expect(listDomainsMock).toHaveBeenCalledTimes(1);
   });
@@ -230,7 +230,7 @@ describe("useDomainsStore — setActiveDomainOptimistic", () => {
 });
 
 describe("useDomains() hook — auto-refresh on cold cache", () => {
-  test("first mount triggers refresh() when domainsLoaded=false", async () => {
+  test("first mount triggers refresh() when loaded=false", async () => {
     listDomainsMock.mockResolvedValue({
       text: "",
       data: {

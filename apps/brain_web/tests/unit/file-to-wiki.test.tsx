@@ -56,7 +56,7 @@ beforeEach(() => {
   // Plan 16 Task 3: the dialog reads domains via the zustand
   // ``useDomains()`` selector. The store is a module singleton, so
   // without an explicit reset between tests the first test hydrates
-  // ``domainsLoaded=true`` and subsequent tests skip the auto-refresh
+  // ``loaded=true`` and subsequent tests skip the auto-refresh
   // — which means ``listDomainsMock`` is never called for tests 2..N
   // and the ``waitFor(...listDomainsMock toHaveBeenCalled)`` assertion
   // hangs. Reset the store before each test so the auto-refresh fires

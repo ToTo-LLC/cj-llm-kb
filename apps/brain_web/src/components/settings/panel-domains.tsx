@@ -415,6 +415,16 @@ export function PanelDomains(): React.ReactElement {
   // (failures land on ``error`` rather than rejecting the Promise) so
   // a peer-consumer's failed refresh won't otherwise surface here.
   const storeError = useDomainsStore((s) => s.error);
+  // Plan 16 Task 5 (D5): same treatment for ``useCrossDomainGateStore.error``.
+  // The gate store fails open (defaults to ``privacyRailed=["personal"]`` +
+  // ``acknowledged=false``) on a backend hiccup so the user is never
+  // silently skipped past the cross-domain confirmation, but the failure
+  // itself never reaches the screen. Surfacing it as a banner here —
+  // panel-domains is the only Settings tab that reads this store — gives
+  // the user a chance to see "the privacy-rail state didn't actually load"
+  // and reload, rather than trusting a fallback default. ``role="alert"``
+  // for screen-reader announcement, mirrors the domains-store banner.
+  const gateError = useCrossDomainGateStore((s) => s.error);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const [overrides, setOverrides] = React.useState<
     Record<string, DomainOverrideValues>
@@ -645,6 +655,24 @@ export function PanelDomains(): React.ReactElement {
             >
               <span className="font-semibold">Couldn&rsquo;t load domains.</span>{" "}
               <span className="text-[var(--text)]">{storeError.message}</span>
+            </div>
+          )}
+          {/* Plan 16 Task 5 (D5): cross-domain-gate-store error banner —
+              same shape + tokens as the domains-store banner above.
+              Surfaces a failed ``useCrossDomainGateStore.refresh()``
+              (which would otherwise silently fall back to safe
+              defaults). Lives in this Settings tab only — D5 mirrors
+              D4's per-tab placement. */}
+          {gateError && (
+            <div
+              role="alert"
+              data-testid="cross-domain-gate-error-banner"
+              className="mb-3 rounded-md border border-[var(--hairline-strong)] bg-[var(--surface-2)] p-3 text-xs text-[var(--danger,_#FF4503)]"
+            >
+              <span className="font-semibold">
+                Couldn&rsquo;t load privacy-rail state.
+              </span>{" "}
+              <span className="text-[var(--text)]">{gateError.message}</span>
             </div>
           )}
           {loading ? (

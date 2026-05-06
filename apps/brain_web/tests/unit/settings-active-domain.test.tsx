@@ -98,7 +98,7 @@ beforeEach(() => {
 
   // Seed the zustand store with a known starting point — the
   // dropdown reads ``domains`` + ``activeDomain`` directly off the
-  // store. ``_setDomainsCacheForTesting`` flips ``domainsLoaded=true``
+  // store. ``_setDomainsCacheForTesting`` flips ``loaded=true``
   // so the hook's first-mount auto-refresh is suppressed.
   _setDomainsCacheForTesting(
     [

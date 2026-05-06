@@ -74,7 +74,7 @@ function seedThree() {
       },
     ],
     activeDomain: "research",
-    domainsLoaded: true,
+    loaded: true,
     error: null,
   });
 }
@@ -94,7 +94,7 @@ describe("useDomainsStore.removeDomainOptimistic", () => {
     expect(after.domains.map((d) => d.slug)).toEqual(["research", "work"]);
     // Other store fields are untouched — the action is in-store-only.
     expect(after.activeDomain).toBe("research");
-    expect(after.domainsLoaded).toBe(true);
+    expect(after.loaded).toBe(true);
     expect(after.error).toBeNull();
     // No fetch was triggered — confirms the action is purely in-store.
     expect(listDomainsMock).not.toHaveBeenCalled();

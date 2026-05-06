@@ -239,7 +239,7 @@ describe("PanelDomains — Plan 13 Task 2 (D2): store-only domain list", () => {
     render(<PanelDomains />);
 
     await waitFor(() => {
-      expect(useDomainsStore.getState().domainsLoaded).toBe(true);
+      expect(useDomainsStore.getState().loaded).toBe(true);
     });
 
     // The panel's mount-effect refresh and the store's first-mount

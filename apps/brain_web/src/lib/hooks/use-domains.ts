@@ -71,7 +71,7 @@ export function _setDomainsCacheForTesting(
     useDomainsStore.getState()._resetForTesting();
     return;
   }
-  // Tests that pre-seed the cache need ``domainsLoaded=true`` so the
+  // Tests that pre-seed the cache need ``loaded=true`` so the
   // first-mount auto-refresh in ``useDomains()`` skips the fetch.
   // Setting state directly here (rather than going through
   // ``refresh()``) keeps the test deterministic — no listDomains
@@ -80,7 +80,7 @@ export function _setDomainsCacheForTesting(
   useDomainsStore.setState({
     domains: entries,
     activeDomain,
-    domainsLoaded: true,
+    loaded: true,
     error: null,
   });
 }
@@ -106,26 +106,26 @@ export interface UseDomainsResult {
 export function useDomains(): UseDomainsResult {
   const domains = useDomainsStore((s) => s.domains);
   const activeDomain = useDomainsStore((s) => s.activeDomain);
-  const domainsLoaded = useDomainsStore((s) => s.domainsLoaded);
+  const loaded = useDomainsStore((s) => s.loaded);
   const error = useDomainsStore((s) => s.error);
 
   // First-mount auto-refresh for cold caches. The store's in-flight
   // Promise cache means concurrent first-mounts (e.g., topbar +
   // browse mounting in the same render tree) only trigger one fetch.
-  // Re-runs only when ``domainsLoaded`` flips false → true (first
+  // Re-runs only when ``loaded`` flips false → true (first
   // hydration) or back to false (after ``_resetForTesting``).
   React.useEffect(() => {
-    if (!domainsLoaded) {
+    if (!loaded) {
       void useDomainsStore.getState().refresh();
     }
-  }, [domainsLoaded]);
+  }, [loaded]);
 
   // ``loading`` is derived: still loading whenever the store hasn't
   // hydrated yet AND there's no error. Once hydrated, subsequent
   // refreshes don't flip back to ``loading`` — the existing data
   // stays visible while the new fetch lands (matches the old hook's
   // behaviour after first mount).
-  const loading = !domainsLoaded && error === null;
+  const loading = !loaded && error === null;
 
   // ``refresh`` is stable per render — store actions are stable, and
   // we just project the store's action through. Wrapping in

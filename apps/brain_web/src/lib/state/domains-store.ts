@@ -134,13 +134,15 @@ export interface DomainsState {
    *  pre-dates Plan 11 Task 6. */
   activeDomain: string;
   /** ``true`` once a ``refresh()`` has resolved at least once.
-   *  Consumers use this to gate first-mount auto-fetch. */
-  domainsLoaded: boolean;
+   *  Consumers use this to gate first-mount auto-fetch. Renamed from
+   *  ``domainsLoaded`` in Plan 16 Task 5 / D5 to align with
+   *  ``cross-domain-gate-store``'s ``loaded`` field naming. */
+  loaded: boolean;
   /** Last error from ``refresh()``. ``null`` on success. */
   error: Error | null;
 
   /** Fetch ``brain_list_domains`` and update ``domains`` /
-   *  ``activeDomain`` / ``domainsLoaded``. Concurrent calls share a
+   *  ``activeDomain`` / ``loaded``. Concurrent calls share a
    *  single in-flight Promise (see module docstring). Always re-fetches
    *  — callers who need rate-limiting wrap themselves. */
   refresh: () => Promise<void>;
@@ -188,7 +190,7 @@ let inFlightPromise: Promise<void> | null = null;
 export const useDomainsStore = create<DomainsState>((set, get) => ({
   domains: [],
   activeDomain: "",
-  domainsLoaded: false,
+  loaded: false,
   error: null,
 
   refresh: () => {
@@ -205,7 +207,7 @@ export const useDomainsStore = create<DomainsState>((set, get) => ({
         set({
           domains: payload.entries,
           activeDomain: payload.activeDomain,
-          domainsLoaded: true,
+          loaded: true,
           error: null,
         });
       })
@@ -235,7 +237,7 @@ export const useDomainsStore = create<DomainsState>((set, get) => ({
     set({
       domains: [],
       activeDomain: "",
-      domainsLoaded: false,
+      loaded: false,
       error: null,
     });
   },
