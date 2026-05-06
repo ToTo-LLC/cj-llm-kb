@@ -3,6 +3,7 @@
 import { create } from "zustand";
 
 import { configGet } from "@/lib/api/tools";
+import { createChannelPubsub, type ChannelPubsub } from "./_broadcast";
 
 /**
  * Cross-domain gate store (Plan 13 Task 3 / D3).
@@ -103,10 +104,73 @@ export interface CrossDomainGateStoreState {
  */
 let inFlightPromise: Promise<void> | null = null;
 
+// ---------- Cross-tab pubsub (Plan 16 Task 6 / D6) ----------
+
+/**
+ * Wire-format payload posted to the
+ * ``"brain-cross-domain-gate"`` BroadcastChannel on every store
+ * mutation. Peer tabs deserialize this back into ``{privacyRailed,
+ * acknowledged}`` via ``_internalSet`` so the Settings toggle in
+ * tab A and the chat-screen gate in tab B converge without a
+ * ``page.reload()``. ``loaded`` and ``error`` are intentionally
+ * NOT broadcast (per-tab transport state — see ``domains-store``'s
+ * matching docstring for the same rationale).
+ */
+interface CrossDomainGateBroadcastPayload {
+  privacyRailed: string[];
+  acknowledged: boolean;
+}
+
+/**
+ * BroadcastChannel name for cross-tab pubsub of cross-domain-gate-
+ * store mutations. MUST be distinct from ``domains-store``'s channel
+ * name (``"brain-domains"``) so the two stores don't cross-
+ * contaminate. Exported for tests.
+ */
+export const CROSS_DOMAIN_GATE_BROADCAST_CHANNEL = "brain-cross-domain-gate";
+
+/**
+ * Reentry guard — see ``domains-store``'s ``_isInternalUpdate``
+ * docstring. Same pattern: raised TRUE for the duration of an
+ * inbound-from-peer apply so ``post()`` skips the broadcast and the
+ * pair of tabs never ping-pongs.
+ */
+let _isInternalUpdate = false;
+
+let _channel: ChannelPubsub<CrossDomainGateBroadcastPayload> | null = null;
+
+function ensureChannel(): ChannelPubsub<CrossDomainGateBroadcastPayload> {
+  if (_channel) return _channel;
+  _channel = createChannelPubsub<CrossDomainGateBroadcastPayload>(
+    CROSS_DOMAIN_GATE_BROADCAST_CHANNEL,
+    (data) => {
+      _internalSet(data);
+    },
+  );
+  return _channel;
+}
+
+function post(data: CrossDomainGateBroadcastPayload): void {
+  if (_isInternalUpdate) return;
+  ensureChannel().post(data);
+}
+
+function _internalSet(data: CrossDomainGateBroadcastPayload): void {
+  _isInternalUpdate = true;
+  try {
+    useCrossDomainGateStore.setState({
+      privacyRailed: data.privacyRailed,
+      acknowledged: data.acknowledged,
+    });
+  } finally {
+    _isInternalUpdate = false;
+  }
+}
+
 // ---------- Store ----------
 
 export const useCrossDomainGateStore = create<CrossDomainGateStoreState>(
-  (set) => ({
+  (set, get) => ({
     privacyRailed: ["personal"],
     acknowledged: false,
     loaded: false,
@@ -122,14 +186,20 @@ export const useCrossDomainGateStore = create<CrossDomainGateStoreState>(
           ]);
           const rail = railRes.data?.value;
           const ack = ackRes.data?.value;
+          const nextRail = Array.isArray(rail)
+            ? (rail as string[])
+            : ["personal"];
+          const nextAck = typeof ack === "boolean" ? ack : false;
           set({
-            privacyRailed: Array.isArray(rail)
-              ? (rail as string[])
-              : ["personal"],
-            acknowledged: typeof ack === "boolean" ? ack : false,
+            privacyRailed: nextRail,
+            acknowledged: nextAck,
             loaded: true,
             error: null,
           });
+          // Plan 16 Task 6 / D6: broadcast the resolved-from-API
+          // view to peer tabs. ``post()`` short-circuits when the
+          // apply is an inbound peer payload, so this never echoes.
+          post({ privacyRailed: nextRail, acknowledged: nextAck });
         } catch (err) {
           // Fail open — default to show-the-modal so the user is never
           // silently skipped past the confirmation due to a transient
@@ -143,6 +213,8 @@ export const useCrossDomainGateStore = create<CrossDomainGateStoreState>(
             loaded: true,
             error,
           });
+          // Errors are intentionally NOT broadcast: per-tab transport
+          // state, not shared-vault state.
         } finally {
           // Drop the cache so the next call re-fetches. Done in a
           // ``finally`` so success AND failure both clear — otherwise
@@ -155,20 +227,42 @@ export const useCrossDomainGateStore = create<CrossDomainGateStoreState>(
     },
 
     setAcknowledgedOptimistic: (value) => {
-      set((state) => {
-        if (state.acknowledged === value) return state;
-        return { ...state, acknowledged: value };
+      const current = get();
+      if (current.acknowledged === value) return;
+      set({ acknowledged: value });
+      // Plan 16 Task 6 / D6: peer tabs (e.g. chat-screen gate when
+      // the toggle in Settings is flipped) see the new acknowledged
+      // value without waiting for the API round-trip + ``refresh()``.
+      post({
+        privacyRailed: current.privacyRailed,
+        acknowledged: value,
       });
     },
 
     _resetForTesting: () => {
       inFlightPromise = null;
+      // Tear down + re-arm the channel — see ``domains-store``'s
+      // matching docstring. Re-arming AFTER state reset means any
+      // race with a peer's still-in-flight post lands on the
+      // freshly-zeroed store, not stale pre-reset state.
+      if (_channel) {
+        _channel.close();
+        _channel = null;
+      }
+      _isInternalUpdate = false;
       set({
         privacyRailed: ["personal"],
         acknowledged: false,
         loaded: false,
         error: null,
       });
+      ensureChannel();
     },
   }),
 );
+
+// Eagerly construct the channel at module load so peer tabs can
+// deliver inbound updates even before this tab has called ``post()``
+// for the first time. SSR-safe via the helper's
+// ``typeof BroadcastChannel === "undefined"`` guard.
+ensureChannel();
