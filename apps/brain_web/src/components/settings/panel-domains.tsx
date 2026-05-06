@@ -30,6 +30,7 @@ import {
 } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
+import { ApiError } from "@/lib/api/types";
 
 /**
  * PanelDomains (Plan 07 Task 22 → Plan 10 Task 6 → Plan 11 Task 7 →
@@ -299,6 +300,14 @@ function ActiveDomainSelector(): React.ReactElement {
     const next = event.target.value;
     if (!next || next === activeDomain) return;
     const previous = activeDomain;
+    // Plan 15 Task 6 (D5): toast payload is built inside catch but
+    // dispatched OUTSIDE the catch block (defensive scoping — pushToast
+    // is a zustand setter that shouldn't realistically throw, but keeping
+    // it out of the catch means a bug there can't swallow the optimistic
+    // rollback or shadow the original error). Plan 12 Task 8 review I2.
+    let pendingToast: { lead: string; msg: string; variant: "danger" } | null =
+      null;
+
     // 1. Optimistic update — peer consumers re-render now.
     useDomainsStore.getState().setActiveDomainOptimistic(next);
     try {
@@ -310,18 +319,38 @@ function ActiveDomainSelector(): React.ReactElement {
         variant: "success",
       });
     } catch (err) {
-      // 3. Revert and surface the structured error. The cross-field
-      //    validator raises a plain ``ValueError`` whose ``message``
-      //    is the user-actionable string ("active_domain X not in
-      //    Config.domains [..]") — surface verbatim with a CTA.
+      // 3. Revert the optimistic update — peer consumers see ``previous``
+      //    again. Done first so the UI snaps back even if anything below
+      //    were to throw.
       useDomainsStore.getState().setActiveDomainOptimistic(previous);
-      const detail =
-        err instanceof Error ? err.message : "Unknown error.";
-      pushToast({
+
+      // 4. Classify the error to pick a CTA that matches reality
+      //    (Plan 15 Task 6 / D5; Plan 12 Task 8 review I1).
+      //
+      //    - ``ApiError`` with ``status === 400`` is a validator error:
+      //      the cross-field ``_check_active_domain_membership`` raises
+      //      ``ValueError`` ("active_domain X not in Config.domains
+      //      [..]") which the brain_api error layer renders as a flat
+      //      400 envelope (``code: "invalid_input"``). The user-actionable
+      //      next step is to pick a different domain.
+      //    - Anything else (network error / fetch reject / 5xx) is a
+      //      transport error — the user's choice was fine; the wire
+      //      blew up. The next step is to retry.
+      const isValidatorError = err instanceof ApiError && err.status === 400;
+      const detail = err instanceof Error ? err.message : "Unknown error.";
+      const cta = isValidatorError
+        ? "Pick a different domain."
+        : "Try again.";
+      pendingToast = {
         lead: "Couldn't update active domain.",
-        msg: `${detail} Pick a different domain.`,
+        msg: `${detail} ${cta}`,
         variant: "danger",
-      });
+      };
+    }
+
+    // 5. Dispatch the danger toast outside the catch block.
+    if (pendingToast) {
+      pushToast(pendingToast);
     }
   };
 

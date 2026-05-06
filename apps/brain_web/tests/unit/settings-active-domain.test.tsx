@@ -85,6 +85,7 @@ vi.mock("@/lib/state/system-store", () => ({
 import { PanelDomains } from "@/components/settings/panel-domains";
 import { useDomainsStore } from "@/lib/state/domains-store";
 import { _setDomainsCacheForTesting } from "@/lib/hooks/use-domains";
+import { ApiError } from "@/lib/api/types";
 
 beforeEach(() => {
   listDomainsMock.mockReset();
@@ -205,10 +206,21 @@ describe("ActiveDomainSelector — Plan 12 Task 8", () => {
     expect(useDomainsStore.getState().activeDomain).toBe("work");
   });
 
-  test("API failure: dropdown reverts to the original activeDomain and a danger-variant toast appears", async () => {
+  test("validator-error path: 400 ApiError → CTA 'Pick a different domain' + dropdown reverts (Plan 15 Task 6 / D5)", async () => {
+    // Backend cross-field validator (``_check_active_domain_membership``)
+    // raises ``ValueError`` which brain_api's error layer renders as a
+    // flat 400 envelope with code ``invalid_input``. apiFetch decodes
+    // that into ``new ApiError(400, "invalid_input", null, message)``.
+    // This is the realistic shape — the prior plain-``Error`` mock was
+    // a fabrication that didn't exercise the discriminator.
     const user = userEvent.setup();
     setActiveDomainMock.mockRejectedValueOnce(
-      new Error("active_domain 'work' not in Config.domains [..]"),
+      new ApiError(
+        400,
+        "invalid_input",
+        null,
+        "active_domain 'work' not in Config.domains [..]",
+      ),
     );
 
     render(<PanelDomains />);
@@ -227,7 +239,7 @@ describe("ActiveDomainSelector — Plan 12 Task 8", () => {
     expect(select.value).toBe("research");
 
     // A danger-variant toast was pushed with the structured error
-    // message + a "Pick a different domain" CTA.
+    // message + the validator-branch "Pick a different domain" CTA.
     const dangerToast = pushToastStub.mock.calls.find(
       (c) => (c[0] as { variant?: string }).variant === "danger",
     );
@@ -236,6 +248,137 @@ describe("ActiveDomainSelector — Plan 12 Task 8", () => {
     expect(payload.lead).toMatch(/couldn't update active domain/i);
     expect(payload.msg).toMatch(/Pick a different domain/i);
     expect(payload.msg).toMatch(/not in Config\.domains/);
+    // Negative assertion: validator errors must NOT use the transport CTA.
+    expect(payload.msg).not.toMatch(/Try again/i);
+  });
+
+  test("transport-error path: network failure → CTA 'Try again' (Plan 15 Task 6 / D5; Plan 12 Task 8 review I1)", async () => {
+    // Transport errors surface as fetch reject (``TypeError("fetch
+    // failed")`` in Node, ``TypeError("Failed to fetch")`` in the
+    // browser) or as non-2xx responses without a 400 body (e.g. a 502
+    // from an upstream proxy, surfaced as ``ApiError(502, ...)``). The
+    // user's domain choice was fine — the wire blew up. The CTA must
+    // be "Try again", not "Pick a different domain", because retrying
+    // the same value is the right next step.
+    const user = userEvent.setup();
+    setActiveDomainMock.mockRejectedValueOnce(
+      new TypeError("fetch failed"),
+    );
+
+    render(<PanelDomains />);
+    const select = (await screen.findByTestId(
+      "active-domain-selector",
+    )) as HTMLSelectElement;
+    expect(select.value).toBe("research");
+
+    await user.selectOptions(select, "work");
+
+    // Optimistic update reverts on transport error too.
+    await waitFor(() => {
+      expect(useDomainsStore.getState().activeDomain).toBe("research");
+    });
+    expect(select.value).toBe("research");
+
+    const dangerToast = pushToastStub.mock.calls.find(
+      (c) => (c[0] as { variant?: string }).variant === "danger",
+    );
+    expect(dangerToast).toBeDefined();
+    const payload = dangerToast![0] as { lead: string; msg: string };
+    expect(payload.lead).toMatch(/couldn't update active domain/i);
+    expect(payload.msg).toMatch(/Try again/i);
+    expect(payload.msg).toMatch(/fetch failed/i);
+    // Negative assertion: transport errors must NOT misdirect the user
+    // to picking a different domain.
+    expect(payload.msg).not.toMatch(/Pick a different domain/i);
+  });
+
+  test("transport-error path: 5xx ApiError also routes to 'Try again' (non-400 status is transport, not validator)", async () => {
+    // Belt-and-braces: a 502/503 from an upstream proxy is also a
+    // transport error from the user's POV — same CTA as the network
+    // failure. This pins the discriminator to ``status === 400`` and
+    // not just "any Error".
+    const user = userEvent.setup();
+    setActiveDomainMock.mockRejectedValueOnce(
+      new ApiError(502, "bad_gateway", null, "upstream timed out"),
+    );
+
+    render(<PanelDomains />);
+    const select = (await screen.findByTestId(
+      "active-domain-selector",
+    )) as HTMLSelectElement;
+
+    await user.selectOptions(select, "work");
+
+    await waitFor(() => {
+      expect(useDomainsStore.getState().activeDomain).toBe("research");
+    });
+
+    const dangerToast = pushToastStub.mock.calls.find(
+      (c) => (c[0] as { variant?: string }).variant === "danger",
+    );
+    expect(dangerToast).toBeDefined();
+    const payload = dangerToast![0] as { msg: string };
+    expect(payload.msg).toMatch(/Try again/i);
+    expect(payload.msg).not.toMatch(/Pick a different domain/i);
+  });
+
+  test("pushToast lives OUTSIDE the catch block: rollback happens BEFORE the toast dispatch (Plan 15 Task 6 / D5; Plan 12 Task 8 review I2)", async () => {
+    // Defensive scoping: pushToast is a zustand setter and shouldn't
+    // throw, but moving it out of the catch block means a hypothetical
+    // bug there can't shadow the optimistic rollback. The cleanest
+    // observable contract is the CALL ORDER — the optimistic rollback
+    // (``setActiveDomainOptimistic(previous)``) must execute BEFORE
+    // pushToast is called. We instrument both and assert the order.
+    setActiveDomainMock.mockRejectedValueOnce(
+      new ApiError(400, "invalid_input", null, "active_domain not in domains"),
+    );
+
+    // Spy on the store's optimistic action to capture invocation order.
+    const realOptimistic =
+      useDomainsStore.getState().setActiveDomainOptimistic;
+    const calls: string[] = [];
+    const spyOptimistic = vi.fn((slug: string) => {
+      calls.push(`optimistic:${slug}`);
+      realOptimistic(slug);
+    });
+    useDomainsStore.setState({ setActiveDomainOptimistic: spyOptimistic });
+
+    pushToastStub.mockImplementation((payload: { variant?: string }) => {
+      calls.push(`toast:${payload.variant ?? "default"}`);
+    });
+
+    const user = userEvent.setup();
+    render(<PanelDomains />);
+    const select = (await screen.findByTestId(
+      "active-domain-selector",
+    )) as HTMLSelectElement;
+    expect(select.value).toBe("research");
+
+    await user.selectOptions(select, "work");
+
+    // Wait for the failed-API rejection + revert path to settle.
+    await waitFor(() => {
+      expect(useDomainsStore.getState().activeDomain).toBe("research");
+    });
+
+    // Restore the real action so other tests aren't affected.
+    useDomainsStore.setState({ setActiveDomainOptimistic: realOptimistic });
+
+    // Three calls, in this order:
+    //   1. optimistic:work        — initial optimistic update
+    //   2. optimistic:research    — rollback (INSIDE the catch block)
+    //   3. toast:danger           — pushToast (OUTSIDE the catch block)
+    //
+    // If pushToast were still inside the catch block, observers
+    // couldn't distinguish — but the ordering ``optimistic:research``
+    // BEFORE ``toast:danger`` is the structural fingerprint of the
+    // refactor. Specifically, the rollback runs and completes before
+    // the toast dispatch is even queued.
+    expect(calls).toEqual([
+      "optimistic:work",
+      "optimistic:research",
+      "toast:danger",
+    ]);
   });
 
   test("domain-list mutation: dropdown options update without re-mount (Task 5 zustand cross-instance assertion)", async () => {
