@@ -1,4 +1,47 @@
 /* ============================================================
+   Plan 16 D13 — SELECTOR CONVENTION (onboarding doc).
+
+   Three body-text selectors live in this file (see grouped rule
+   below near "Chat stream" — currently `.msg-body, .turn-body,
+   .prose { ... }`). They are NOT interchangeable. Pick the right one
+   for the surface you're styling:
+
+     .prose
+       Ingested-content prose. Markdown bodies rendered into the
+       Browse reader (see `components/browse/reader.tsx`), the
+       chat-context preview drawer, and any future view that surfaces
+       a vault note's body. Inherits the prose typography ramp
+       (--font-sans / 15px / 1.6 line-height) and routes link color
+       through --tt-cyan / --tt-cyan-hover so dark-mode contrast
+       clears WCAG 2.2 AA 4.5:1 (Plan 14 Task 5 / D7).
+
+     .msg-body
+       Chat MESSAGE BUBBLES (assistant + user payload text). Tighter
+       wrapping than .prose; bubble background sits on --surface-2 /
+       --surface-3 so foreground reads through --text. Inherits the
+       same body ramp but its container governs spacing — never set
+       margins on .msg-body itself, set them on the bubble wrapper.
+
+     .turn-body
+       FULL CHAT-TURN WRAPPER (header + body + actions, one whole
+       turn). Container only; defines flex/grid + gap, NOT typography.
+       Children (.speaker, .msg-body, .tool-call, .turn-meta, ...)
+       carry their own type styles. If you find yourself reaching for
+       a font-* property on .turn-body, you probably want .msg-body.
+
+   When adding NEW content surface:
+     - Reading a vault note / external markdown? Use .prose.
+     - Rendering a chat assistant or user message body? Use .msg-body.
+     - Wrapping an entire chat turn (header + body + actions)? Use
+       .turn-body.
+     - None of those fit? Propose a new selector at plan-author level
+       (commit message must reference a plan deliverable) rather than
+       overload an existing one — the three names above carry semantic
+       weight that downstream a11y nudges (--tt-cyan / --tt-cyan-hover
+       routing) depend on.
+   ============================================================ */
+
+/* ============================================================
    brand-skin.css — applies the brain. brand to the app chrome.
 
    Source: docs/design/CJ Knowledge LLM v4/styles/brand-skin.css
@@ -31,6 +74,13 @@
 /* ============================================================
    Brand primitives (theme-agnostic) + LIGHT-mode token remap
    ============================================================ */
+/* stylelint-disable color-no-hex --
+   Plan 16 D13 / Task 13: token definition block. Hardcoded hex
+   primitives (--brand-*) and surface tier values are intentional
+   here — they are the source of truth consumed elsewhere via
+   var(--token-name). See header convention block above for the
+   .prose / .msg-body / .turn-body selector taxonomy that downstream
+   rules apply these tokens through. */
 :root,
 [data-theme="light"] {
   /* Brand primitives */
@@ -183,6 +233,7 @@ html[data-theme="dark"],
      keeps Radix buttons + accent-bg surfaces legible in dark mode. */
   --tt-ink:    #141414;
 }
+/* stylelint-enable color-no-hex */
 
 /* ============================================================
    Base typography

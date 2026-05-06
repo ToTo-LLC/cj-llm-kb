@@ -32,6 +32,14 @@
   src: url("/fonts/Roboto_Condensed-Medium.ttf") format("truetype");
 }
 
+/* stylelint-disable color-no-hex --
+   Plan 16 D13 / Task 13: this file is a TOKEN DEFINITION FILE. Hardcoded
+   hex literals are PERMITTED here because every value is the source of
+   truth for a design token (consumed elsewhere via var(--token-name)).
+   The .stylelintrc.json color-no-hex rule enforces "no hardcoded hex
+   outside :root / [data-theme] / [data-density] blocks" via these
+   explicit disable wrappers — see brand-skin.css for the matching
+   pattern in the v4 cascade override layer. */
 :root {
   /* ---------- TT brand palette ---------- */
   --tt-cream:       #FDEB9E;
@@ -228,6 +236,7 @@
 
   color-scheme: light;
 }
+/* stylelint-enable color-no-hex */
 
 /* ---------- Compact density ---------- */
 [data-density="compact"] {

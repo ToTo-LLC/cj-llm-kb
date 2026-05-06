@@ -57,7 +57,13 @@
 
 body {
   font-family: var(--sans, Roboto, system-ui, sans-serif);
+  /* stylelint-disable-next-line color-no-hex --
+     Defensive var() fallbacks: if tokens.css fails to load (or runs
+     after this rule for some pathological reason), the page still
+     renders with a near-final palette instead of UA white-on-black.
+     The hex values mirror --surface-0 / --text in the dark default. */
   background: var(--surface-0, #0a0a0a);
+  /* stylelint-disable-next-line color-no-hex -- see comment above */
   color: var(--text, #e8e8e8);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

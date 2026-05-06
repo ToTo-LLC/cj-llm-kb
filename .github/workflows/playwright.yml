@@ -79,6 +79,16 @@ jobs:
       - name: pnpm install (workspace)
         run: pnpm install --frozen-lockfile
 
+      # Plan 16 D13 / Task 13: stylelint CSS gate (fail-fast, before
+      # the slower web build + Playwright install). Enforces "no
+      # hardcoded hex outside :root / [data-theme] / [data-density]
+      # token-definition blocks" — see apps/brain_web/.stylelintrc.json
+      # and the convention block at the top of brand-skin.css. Runs on
+      # both Mac + Windows legs (`pnpm` is shell-agnostic; no chflags
+      # needed because no Python .pth files involved).
+      - name: Lint CSS (stylelint)
+        run: pnpm --filter brain_web stylelint
+
       - name: Build static UI bundle (apps/brain_web/out/)
         # The brain_api single-port mount serves apps/brain_web/out/ at /;
         # Playwright drives http://localhost:4317. Bundle must exist before

@@ -1,0 +1,10 @@
+{
+  "rules": {
+    "color-no-hex": [
+      true,
+      {
+        "message": "Hardcoded hex colors are only allowed inside :root / [data-theme] / [data-density] token-definition blocks. New colors must be added as design tokens in tokens.css or brand-skin.css and consumed via var(--token-name)."
+      }
+    ]
+  }
+}

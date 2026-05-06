@@ -8,6 +8,7 @@
     "build": "next build && test -d out",
     "start": "echo 'Static export — serve apps/brain_web/out/ via brain_api. See BRAIN_WEB_OUT_DIR.' && exit 1",
     "lint": "next lint",
+    "stylelint": "stylelint 'src/**/*.css'",
     "type-check": "tsc --noEmit",
     "test": "vitest",
     "test:e2e": "playwright test",
@@ -56,6 +57,7 @@
     "eslint-config-next": "15.0.3",
     "jsdom": "^25",
     "postcss": "^8.4",
+    "stylelint": "^17.11.0",
     "tailwindcss": "^3.4",
     "typescript": "^5.5",
     "vitest": "^2"
