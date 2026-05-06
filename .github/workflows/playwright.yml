@@ -53,16 +53,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- Python / uv ----------------------------------------------------
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.11.*"
-
       # Plan 16 D14 / Task 14: cache uv's download + wheel cache. Keyed on
       # the lockfile + every pyproject.toml so any dep change invalidates.
       # Both POSIX (~/.cache/uv) and Windows (%LOCALAPPDATA%\uv\cache) paths
       # are listed; actions/cache@v4 tolerates non-existent paths per OS.
+      # Cache MUST stay at workflow level (not in the composite action) so
+      # the cache key derives from the workflow's hashFiles context.
       - name: Cache uv
         uses: actions/cache@v4
         with:
@@ -72,23 +68,6 @@ jobs:
           key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml', 'packages/*/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-uv-
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: uv sync (workspace + extras)
-        run: uv sync --all-extras
-
-      # --- Node / pnpm / Playwright deps ---------------------------------
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "9.15.0"
 
       # Plan 16 D14 / Task 14: cache pnpm content-addressable store.
       # Default store paths differ by OS; both are listed so the cache
@@ -105,8 +84,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
-      - name: pnpm install (workspace)
-        run: pnpm install --frozen-lockfile
+      # Plan 16 D15 / Task 15: composite action consolidates the install +
+      # chflags + PYTHONPATH preamble that previously duplicated across
+      # the macOS and Windows legs of this workflow. The `pythonpath_separator`
+      # input handles the only OS-level difference Python actually cares about
+      # (`:` vs `;` for os.pathsep — the path-component separator within
+      # PYTHONPATH). Forward slashes inside each component work on Windows
+      # because CPython normalizes paths internally; not splitting on
+      # backslashes also keeps this YAML clean of `'\'`-style escape concerns.
+      # The chflags step inside the composite is gated on
+      # runner.os == 'macOS'. The workflow keeps its own chflags prefix on
+      # the actual `npx playwright test` line below as belt-and-suspenders
+      # per lesson 341 (the canonical recipe colocates chflags with the
+      # python invocation; the composite's chflags is best-effort cleanup
+      # right after uv sync, the workflow's chflags is the load-bearing one
+      # immediately before the test runner).
+      - name: Setup brain test environment
+        uses: ./.github/actions/setup-brain-test-env
+        with:
+          pythonpath_separator: ${{ runner.os == 'Windows' && ';' || ':' }}
 
       # Plan 16 D13 / Task 13: stylelint CSS gate (fail-fast, before
       # the slower web build + Playwright install). Enforces "no
@@ -154,10 +150,12 @@ jobs:
       # --- Run e2e suite (macOS) -----------------------------------------
       # Lesson 341 canonical recipe: chflags clamp on BOTH .pth files
       # in the SAME command line as `npx playwright test`. The PYTHONPATH
-      # escape hatch makes the test runner immune to .pth shadowing even
-      # if uv re-hides mid-run (the webServer's `uv run uvicorn` triggers
-      # auto-sync). Glob covers `_editable_impl_brain_core.pth` plus any
-      # numbered duplicates uv accumulated across syncs.
+      # escape hatch (set via $GITHUB_ENV by the setup-brain-test-env
+      # composite action above) makes the test runner immune to .pth
+      # shadowing even if uv re-hides mid-run (the webServer's
+      # `uv run uvicorn` triggers auto-sync). Glob covers
+      # `_editable_impl_brain_core.pth` plus any numbered duplicates uv
+      # accumulated across syncs.
       #
       # I1 TRAP CLOSURE (Plan 14 Task 8 review note from Task 7):
       # this step is intentionally Mac-only because chflags is a BSD/macOS
@@ -169,19 +167,20 @@ jobs:
       # review (sibling-step model) over Option C (one bash step with
       # conditional chflags) because PowerShell is the natural shell on
       # windows-2022 and matches `start-backend-for-e2e.ps1`.
+      #
+      # Plan 16 D15 / Task 15: PYTHONPATH is now exported by the
+      # setup-brain-test-env composite action via $GITHUB_ENV, so the
+      # step-level `env: PYTHONPATH:` block was removed (would have just
+      # restated what's already inherited). The composite already runs a
+      # best-effort chflags clear right after `uv sync`; the inline
+      # chflags below remains because lesson 341 requires it on the SAME
+      # command line as the python invocation (Spotlight may re-hide
+      # between the composite's chflags and this step's runner).
       - name: Playwright e2e (full suite, macOS)
         if: runner.os == 'macOS'
         working-directory: apps/brain_web
         env:
           CI: "true"
-          # Absolute PYTHONPATH so the webServer subprocess (which `cd`s
-          # into the repo root before exec'ing uvicorn) still resolves it.
-          # Set as `env:` on the step so Playwright's webServer env-merge
-          # propagates it through to uvicorn's child process; the `run:`
-          # block alone wouldn't be enough because start-backend-for-e2e.sh
-          # changes working directory before `exec uv run uvicorn`.
-          # Path-separator: `:` on POSIX (Python parses PYTHONPATH per platform).
-          PYTHONPATH: "${{ github.workspace }}/packages/brain_core/src:${{ github.workspace }}/packages/brain_api/src:${{ github.workspace }}/packages/brain_mcp/src:${{ github.workspace }}/packages/brain_cli/src"
         run: |
           chflags 0 "${{ github.workspace }}"/.venv/lib/python3.12/site-packages/_editable_impl_*.pth 2>/dev/null || true
           npx playwright test
@@ -192,7 +191,11 @@ jobs:
       #   UF_HIDDEN flag, no Spotlight re-hide loop), so the editable
       #   installs are visible to CPython's site.addpackage out of the box.
       # - PYTHONPATH separator on Windows is `;` (not `:`). Python's
-      #   `os.pathsep` switches on platform; CI must respect it.
+      #   `os.pathsep` switches on platform; CI must respect it. The
+      #   setup-brain-test-env composite action above sets PYTHONPATH via
+      #   $GITHUB_ENV using the `pythonpath_separator` input so this step
+      #   inherits it correctly. Forward-slash path components inside each
+      #   PYTHONPATH entry work on Windows because CPython normalizes paths.
       # - Shell is `pwsh` (PowerShell 7) — preinstalled on windows-2022 and
       #   what playwright.config.ts's webServer command uses to invoke
       #   start-backend-for-e2e.ps1.
@@ -211,11 +214,6 @@ jobs:
         shell: pwsh
         env:
           CI: "true"
-          # Path-separator: `;` on Windows. Mirrors the macOS step's
-          # absolute paths so the webServer subprocess (which Push-Locations
-          # to repo root before invoking uvicorn) still resolves the
-          # editable installs even if .pth shadowing somehow surfaces.
-          PYTHONPATH: "${{ github.workspace }}\\packages\\brain_core\\src;${{ github.workspace }}\\packages\\brain_api\\src;${{ github.workspace }}\\packages\\brain_mcp\\src;${{ github.workspace }}\\packages\\brain_cli\\src"
         run: |
           npx playwright test
 

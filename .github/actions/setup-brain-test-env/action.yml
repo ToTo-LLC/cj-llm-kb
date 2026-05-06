@@ -1,0 +1,156 @@
+# Plan 16 D15 / Task 15 — Composite action: brain test-env setup recipe.
+#
+# WHY THIS EXISTS
+# ---------------
+# The Plan 14 Task 8 review (lines: ci.yml + playwright.yml) flagged that the
+# install + chflags + PYTHONPATH preamble was duplicated across both workflows
+# AND across the macos-14 / windows-2022 matrix legs of playwright.yml.
+# Plan 16 D15 (locked) consolidates the recipe into one composite action so
+# Mac + Windows legs of every workflow call the same shape.
+#
+# SCOPE
+# -----
+# This composite encapsulates ONLY the install + venv-prep recipe:
+#   - uv install (astral-sh/setup-uv)
+#   - python install (uv python install 3.12)
+#   - uv sync --all-extras
+#   - (optional) pnpm setup + install
+#   - (Mac only) chflags 0 on uv's editable .pth files (lesson 341 canonical
+#     recipe — UF_HIDDEN clamp so CPython's site.addpackage does not silently
+#     skip the editable installs).
+#   - PYTHONPATH preamble appended to $GITHUB_ENV (cross-platform via the
+#     pythonpath_separator + workspace inputs; Python's os.pathsep is `:` on
+#     POSIX, `;` on Windows).
+#
+# WHAT THIS COMPOSITE DOES NOT OWN
+# --------------------------------
+# - actions/cache@v4 steps (uv cache, pnpm store, Playwright browsers) stay
+#   at workflow level. Composite actions are not the right owner for cache
+#   keying since the cache key depends on per-workflow inputs (lockfile hash
+#   etc.) and skipping the cache miss matters for one workflow but not the
+#   other.
+# - The actual test invocation (`npx playwright test` / `pytest`). Tests run
+#   per-workflow with workflow-specific env, working-directory, and
+#   suite filters.
+# - actions/checkout@v4 — the workflow must check out before this composite
+#   can read pyproject.toml etc.
+#
+# CROSS-PLATFORM POSTURE
+# ----------------------
+# Composite-action steps require explicit `shell:`. We use `bash` everywhere
+# possible — windows-2022 hosted runners ship with Git-Bash on PATH, so
+# `shell: bash` works. PowerShell-only steps would force the workflow to
+# fork and defeat the point of the composite. The chflags step is Mac-only
+# via `if: runner.os == 'macOS'` (chflags is a BSD/macOS syscall; Windows
+# would error on it).
+
+name: Setup brain test environment
+description: >
+  uv install + uv sync + (optional) pnpm install + chflags clamp (Mac) +
+  PYTHONPATH preamble. Replaces the duplicated install recipe across
+  ci.yml + playwright.yml Mac and Windows legs.
+
+inputs:
+  pythonpath_separator:
+    description: >
+      Path separator for PYTHONPATH — `:` on POSIX, `;` on Windows.
+      Caller passes `${{ runner.os == 'Windows' && ';' || ':' }}`.
+    required: false
+    default: ":"
+  install_pnpm:
+    description: >
+      `true` to set up Node + pnpm and run `pnpm install --frozen-lockfile`.
+      `false` for Python-only workflows (ci.yml). Default `true`.
+    required: false
+    default: "true"
+  set_pythonpath:
+    description: >
+      `true` to append PYTHONPATH (covering brain_core + brain_cli +
+      brain_api + brain_mcp src dirs) to $GITHUB_ENV. `false` skips —
+      pytest workflows discover packages via the workspace .venv and do
+      not need the escape hatch. Default `true` (Playwright path).
+    required: false
+    default: "true"
+  uv_version:
+    description: uv version pin passed to astral-sh/setup-uv.
+    required: false
+    default: "0.11.*"
+  python_version:
+    description: Python version installed via `uv python install`.
+    required: false
+    default: "3.12"
+  node_version:
+    description: Node version installed via actions/setup-node when install_pnpm=true.
+    required: false
+    default: "22"
+  pnpm_version:
+    description: pnpm version installed via pnpm/action-setup when install_pnpm=true.
+    required: false
+    default: "9.15.0"
+
+runs:
+  using: composite
+  steps:
+    # --- Python / uv ----------------------------------------------------
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ inputs.uv_version }}
+
+    - name: Set up Python
+      shell: bash
+      run: uv python install ${{ inputs.python_version }}
+
+    - name: uv sync (workspace + extras)
+      shell: bash
+      run: uv sync --all-extras
+
+    # --- Node / pnpm (optional) ----------------------------------------
+    - name: Set up Node.js
+      if: inputs.install_pnpm == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Set up pnpm
+      if: inputs.install_pnpm == 'true'
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm_version }}
+
+    - name: pnpm install (workspace)
+      if: inputs.install_pnpm == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # --- chflags clamp (lesson 341 canonical recipe, Mac only) ---------
+    # uv writes editable `.pth` shims with macOS UF_HIDDEN; CPython's
+    # site.addpackage silently skips hidden .pth files. Clear the flag
+    # so editable installs resolve. `|| true` because the glob may be
+    # empty on first run before uv sync has touched the venv (we run
+    # this AFTER uv sync above so the path should exist, but staying
+    # defensive keeps the step idempotent across reruns).
+    - name: chflags clear UF_HIDDEN on editable .pth files (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        chflags 0 "${{ github.workspace }}"/.venv/lib/python3.12/site-packages/_editable_impl_*.pth 2>/dev/null || true
+
+    # --- PYTHONPATH preamble (escape hatch from .pth shadowing) --------
+    # Append to $GITHUB_ENV so subsequent steps in the same job inherit.
+    # Absolute paths anchored at GITHUB_WORKSPACE so the Playwright
+    # webServer subprocess (which `cd`s into the repo root before
+    # exec'ing uvicorn) still resolves the editable installs.
+    # Note on path separators: Python accepts forward slashes in paths on
+    # Windows just fine (CPython's path-handling normalizes internally).
+    # Only os.pathsep (`:` vs `;`) needs to switch per platform — that's the
+    # one separator Python uses when parsing PYTHONPATH itself. Using `/`
+    # everywhere keeps the composite simple and avoids YAML/GHA-expression
+    # backslash-escaping concerns.
+    - name: Set PYTHONPATH (cross-platform)
+      if: inputs.set_pythonpath == 'true'
+      shell: bash
+      run: |
+        SEP='${{ inputs.pythonpath_separator }}'
+        WS='${{ github.workspace }}'
+        echo "PYTHONPATH=${WS}/packages/brain_core/src${SEP}${WS}/packages/brain_api/src${SEP}${WS}/packages/brain_mcp/src${SEP}${WS}/packages/brain_cli/src" >> "$GITHUB_ENV"

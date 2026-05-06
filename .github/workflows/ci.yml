@@ -15,15 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.11.*"
-
       # Plan 16 D14 / Task 14: cache uv's download + wheel cache. Keyed on
       # the lockfile + every pyproject.toml so any dep change invalidates.
       # Both POSIX (~/.cache/uv) and Windows (%LOCALAPPDATA%\uv\cache) paths
       # are listed; actions/cache@v4 tolerates non-existent paths per OS.
+      # Cache MUST stay at workflow level (not in the composite action) so
+      # the cache key derives from the workflow's hashFiles context.
       - name: Cache uv
         uses: actions/cache@v4
         with:
@@ -34,11 +31,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync --all-extras
+      # Plan 16 D15 / Task 15: composite action consolidates the uv install
+      # + sync recipe shared with playwright.yml. ci.yml is Python-only —
+      # `install_pnpm: false` skips Node/pnpm setup, `set_pythonpath: false`
+      # skips the PYTHONPATH escape hatch (pytest discovers packages via
+      # the workspace .venv directly).
+      - name: Setup brain test environment
+        uses: ./.github/actions/setup-brain-test-env
+        with:
+          install_pnpm: "false"
+          set_pythonpath: "false"
 
       - name: Lint
         run: uv run ruff check .
