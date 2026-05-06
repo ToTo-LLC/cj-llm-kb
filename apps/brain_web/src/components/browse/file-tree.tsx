@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ChevronDown,
   ChevronRight,
+  Eye,
   File as FileIcon,
   Folder,
   Lock,
@@ -49,6 +50,12 @@ export interface FileTreeProps {
    *  fresh ``hobby`` shows up immediately after creation. Omitted
    *  callers fall back to the v0.1 notes-driven grouping. */
   domains?: string[];
+  /** Plan 16 Task 11: optional handler for the per-row "Quick preview"
+   *  button. When provided, each file row renders an inline eye-icon
+   *  button that opens the populated-state ``<FilePreviewOverlay />``
+   *  via the parent (Browse owns the overlay state). Omitted callers
+   *  hide the button — the row still navigates via the Next.js Link. */
+  onQuickPreview?: (path: string) => void;
 }
 
 const PERSONAL_DOMAIN = "personal";
@@ -59,6 +66,7 @@ export function FileTree({
   activePath,
   onOpenSearch,
   domains,
+  onQuickPreview,
 }: FileTreeProps): React.ReactElement {
   const tree = React.useMemo(() => buildTree(notes), [notes]);
 
@@ -159,7 +167,9 @@ export function FileTree({
                       aria-expanded={!isCollapsed}
                       aria-label={`${fld.folder} folder`}
                       onClick={() => toggleFolder(key)}
-                      className="tree-folder flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-[var(--text-muted)] hover:bg-[var(--surface-2)]"
+                      // Plan 16 Task 11 a11y: min-h-6 (24px) keeps the
+                      // touch-target ≥ WCAG 2.2 AA 2.5.8 minimum (24x24).
+                      className="tree-folder flex min-h-6 items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-[var(--text-muted)] hover:bg-[var(--surface-2)]"
                     >
                       {isCollapsed ? (
                         <ChevronRight size={12} />
@@ -176,20 +186,44 @@ export function FileTree({
                       fld.notes.map((note) => {
                         const active = note.path === activePath;
                         return (
-                          <Link
+                          <div
                             key={note.path}
-                            href={`/browse/${note.path}`}
-                            data-testid={`tree-node-${note.path}`}
-                            data-active={active ? "true" : "false"}
                             className={cn(
-                              "tree-node ml-4 flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-[var(--text)] hover:bg-[var(--surface-2)]",
+                              "ml-4 flex items-center gap-0 rounded text-xs text-[var(--text)] hover:bg-[var(--surface-2)]",
                               active &&
                                 "bg-[var(--surface-3)] text-[var(--text)]",
                             )}
                           >
-                            <FileIcon size={11} />
-                            <span className="truncate">{note.title}</span>
-                          </Link>
+                            <Link
+                              href={`/browse/${note.path}`}
+                              data-testid={`tree-node-${note.path}`}
+                              data-active={active ? "true" : "false"}
+                              // Plan 16 Task 11 a11y: min-h-6 (24px) for
+                              // WCAG 2.2 AA 2.5.8 touch-target compliance.
+                              className="tree-node flex min-h-6 flex-1 items-center gap-1.5 px-1.5 py-0.5"
+                            >
+                              <FileIcon size={11} />
+                              <span className="truncate">{note.title}</span>
+                            </Link>
+                            {onQuickPreview ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  // Don't bubble to the Link's row click.
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  onQuickPreview(note.path);
+                                }}
+                                aria-label={`Quick preview ${note.title}`}
+                                title="Quick preview"
+                                // Plan 16 Task 11 a11y: 24x24 (h-6 w-6) for
+                                // WCAG 2.2 AA 2.5.8 touch-target compliance.
+                                className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]"
+                              >
+                                <Eye size={11} aria-hidden="true" />
+                              </button>
+                            ) : null}
+                          </div>
                         );
                       })}
                   </div>

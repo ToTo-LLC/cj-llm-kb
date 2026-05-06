@@ -41,12 +41,18 @@ export interface MessageProps {
   streamingText?: string;
   /** True while the assistant is still typing this message. */
   isStreaming?: boolean;
+  /** 0-based index in the transcript — forwarded to MsgActions so the
+   *  per-message Fork action knows which turn to fork at. Plan 16 Task
+   *  11. Optional; MsgActions falls back to the last-turn index when
+   *  omitted. */
+  turnIndex?: number;
 }
 
 export function Message({
   msg,
   streamingText,
   isStreaming,
+  turnIndex,
 }: MessageProps): React.ReactElement {
   const isUser = msg.role === "user";
   const body = isStreaming ? (streamingText ?? "") : msg.body;
@@ -103,7 +109,7 @@ export function Message({
       </div>
 
       {!isUser && !isStreaming && (
-        <MsgActions msg={msg} className="ml-8 mt-1" />
+        <MsgActions msg={msg} turnIndex={turnIndex} className="ml-8 mt-1" />
       )}
     </div>
   );

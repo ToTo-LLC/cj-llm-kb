@@ -5,7 +5,7 @@ import * as React from "react";
 import { readNote } from "@/lib/api/tools";
 
 /**
- * WikilinkHover (Plan 07 Task 18).
+ * WikilinkHover (Plan 07 Task 18; a11y-hardened in Plan 16 Task 11).
  *
  * Debounced (150 ms) hover popover that fetches the target note
  * via ``readNote`` and renders title + first paragraph (≤220
@@ -14,7 +14,22 @@ import { readNote } from "@/lib/api/tools";
  * Results are cached in a module-level map so repeat hovers in
  * the same session don't round-trip. Task 25 sweep: drop the
  * cache in favour of TanStack Query once query-client is wired.
+ *
+ * Plan 16 Task 11 (a11y):
+ *   - ``role="tooltip"`` (already pinned on the popover element).
+ *   - Stable ``id`` so the trigger anchor's ``aria-describedby``
+ *     can target this tooltip — the Reader sets the matching
+ *     attribute when it forwards a hover/focus event up.
+ *   - ``focusin`` / ``focusout`` parity with mouseover (Reader
+ *     wires both): keyboard users can Tab to a wikilink and the
+ *     same tooltip appears.
  */
+
+/** Stable DOM id for the tooltip element. Single-instance because
+ *  only one wikilink can be hovered/focused at a time. The Reader's
+ *  delegated handler stamps the matching ``aria-describedby`` on the
+ *  trigger anchor. */
+export const WIKILINK_HOVER_ID = "wikilink-hover-tooltip";
 
 interface CachedNote {
   path: string;
@@ -93,6 +108,7 @@ export function WikilinkHover({
   return (
     <div
       role="tooltip"
+      id={WIKILINK_HOVER_ID}
       className="wiki-hover pointer-events-auto fixed z-[70] w-[340px] overflow-hidden rounded-lg border border-[var(--hairline)] bg-[var(--surface-2)] p-3 text-xs shadow-xl"
       style={{ top, left }}
       onClick={() => onOpen(data.path)}

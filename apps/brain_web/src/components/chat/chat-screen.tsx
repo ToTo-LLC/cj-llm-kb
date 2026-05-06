@@ -36,6 +36,15 @@ import { useChatWebSocket } from "@/lib/ws/hooks";
  * chat route (``app/chat/page.tsx`` / ``app/chat/[thread_id]/page.tsx``)
  * from the per-run API token file. Null token → hook stays inert, so
  * the screen is safe to mount before setup completes.
+ *
+ * Plan 16 Task 11 — per-message Fork:
+ *   The chat-sub-header Fork button (forks at the LAST turn) and the
+ *   per-message Fork button on each ``MsgActions`` row both route
+ *   through ``dialogs-store.open({ kind: "fork", … })`` → ``DialogHost``
+ *   → the same ``<ForkDialog />``. The per-message variant passes its
+ *   row's ``turnIndex`` so the user can fork at any prior turn, not
+ *   just the latest. The Transcript forwards each row's index to
+ *   ``<Message />`` → ``<MsgActions turnIndex={…} />``.
  */
 
 export interface ChatScreenProps {

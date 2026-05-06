@@ -107,6 +107,7 @@ export function MsgActions({
       <button
         type="button"
         onClick={onFork}
+        aria-label="Fork from this message"
         className="rounded-sm px-1.5 py-0.5 text-xs text-text-muted hover:bg-surface-2 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         Fork

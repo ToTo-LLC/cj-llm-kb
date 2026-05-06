@@ -17,6 +17,8 @@ import { useSystemStore } from "@/lib/state/system-store";
 import { useDomains } from "@/lib/hooks/use-domains";
 import { resolveLink } from "@/lib/vault/wikilinks";
 
+import { FilePreviewOverlay } from "@/components/dialogs/file-preview-overlay";
+
 import { FileTree, type FileTreeNote } from "./file-tree";
 import { MetaStrip } from "./meta-strip";
 import { Reader } from "./reader";
@@ -168,6 +170,47 @@ export function BrowseScreen({
     anchor: null,
     timerId: null,
   });
+  // Plan 16 Task 11 — populated-state file-preview overlay. Independent
+  // of ``active`` (which drives the inline split-pane Reader); the
+  // overlay is a quick-preview surface launched from the FileTree's
+  // per-row Eye button.
+  const [previewPath, setPreviewPath] = React.useState<string | null>(null);
+  const [previewBody, setPreviewBody] = React.useState<string>("");
+  const [previewLoading, setPreviewLoading] = React.useState<boolean>(false);
+
+  const handleQuickPreview = React.useCallback((p: string) => {
+    setPreviewPath(p);
+    setPreviewBody("");
+    setPreviewLoading(true);
+  }, []);
+
+  const handleClosePreview = React.useCallback(() => {
+    setPreviewPath(null);
+    setPreviewLoading(false);
+  }, []);
+
+  // Fetch the preview body whenever ``previewPath`` flips to a non-null
+  // value. Identical shape to the active-note effect — separate state
+  // so the overlay's read does not mutate the inline Reader's note.
+  React.useEffect(() => {
+    if (!previewPath) return;
+    let cancelled = false;
+    readNote({ path: previewPath })
+      .then((res) => {
+        if (cancelled) return;
+        const body = res.data?.body ?? "";
+        setPreviewBody(body);
+        setPreviewLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPreviewBody("");
+        setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewPath]);
 
   // Build the tree from recent notes across every allowed domain.
   // Plan 10 Task 7: domain source flipped from a per-mount listDomains
@@ -180,8 +223,34 @@ export function BrowseScreen({
       try {
         const buckets = await Promise.all(
           liveDomainSlugs.map((d) =>
-            recent({ domain: d, limit: 200 })
-              .then((r) => ({ domain: d, items: r.data?.items ?? [] }))
+            // Plan 16 Task 11: ``brain_recent``'s INPUT_SCHEMA caps ``limit``
+            // at 50 (Pydantic 422s anything higher); the historical 200 here
+            // silently failed validation and Browse never picked up notes.
+            // 50 is enough for the FileTree's per-domain group AND keeps the
+            // request below the schema cap.
+            recent({ domain: d, limit: 50 })
+              .then((r) => {
+                // Plan 16 Task 11: ``brain_recent`` historically emitted
+                // ``data.notes`` (``{path, modified_at}``) while the
+                // typed FE wrapper expects ``data.items``
+                // (``RecentEntry``). Until ``brain_recent`` is updated to
+                // emit ``items`` directly (deferred), accept either —
+                // ``notes`` rows get adapted into ``RecentEntry`` shape
+                // here. ``slugOf`` + ``domainOf`` reconstruct the
+                // missing ``title`` + ``domain`` fields from the path.
+                const data = r.data as
+                  | { items?: RecentEntry[]; notes?: Array<{ path: string; modified_at: string }> }
+                  | undefined;
+                const items: RecentEntry[] = data?.items
+                  ? data.items
+                  : (data?.notes ?? []).map((n) => ({
+                      path: n.path,
+                      title: slugOf(n.path),
+                      modified: n.modified_at,
+                      domain: domainOf(n.path),
+                    }));
+                return { domain: d, items };
+              })
               .catch(() => ({
                 domain: d,
                 items: [] as RecentEntry[],
@@ -314,6 +383,7 @@ export function BrowseScreen({
   }
 
   return (
+    <>
     <div className="browse-screen grid h-full grid-cols-[260px_minmax(0,1fr)] overflow-hidden">
       <FileTree
         notes={notes}
@@ -321,6 +391,7 @@ export function BrowseScreen({
         activePath={active}
         onOpenSearch={() => setSearchOpen(true)}
         domains={liveDomainSlugs}
+        onQuickPreview={handleQuickPreview}
       />
       <div className="flex flex-col overflow-hidden">
         {note && active ? (
@@ -401,5 +472,18 @@ export function BrowseScreen({
         )}
       </div>
     </div>
+    {/* Plan 16 Task 11 — populated-state file-preview overlay. Mounted at
+        the screen-level so Radix portals it outside the grid layout. The
+        split-pane above stays as the inline empty-state default. */}
+    <FilePreviewOverlay
+      isOpen={previewPath !== null}
+      onClose={handleClosePreview}
+      path={previewPath ?? ""}
+      body={previewLoading ? "" : previewBody}
+      onOpenFull={(p) => {
+        router.push(`/browse/${p}`);
+      }}
+    />
+    </>
   );
 }

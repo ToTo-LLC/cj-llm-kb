@@ -1,6 +1,8 @@
 /**
  * Plan 14 Task 3 + Task 4 — populated-state a11y sweep
  * (C2.a dialogs + C2.b menus + overlays).
+ * Plan 16 Task 11 — populated-state additions (D11): file-preview
+ * overlay, WikilinkHover tooltip, per-message Fork dialog.
  *
  * The empty-state ``a11y.spec.ts`` only loads top-level routes against a
  * vault seeded with BRAIN.md and a welcome note; axe-core only flags
@@ -25,25 +27,33 @@
  *   ✅ autonomy modal               (Settings → General → Configure autonomy;
  *                                     SCAFFOLD per Plan 16 Task 10 / D10. Full
  *                                     per-domain UI lands at Plan 16 Task 40.)
+ *   ✅ file-preview overlay         (Browse → per-row Quick preview;
+ *                                     Plan 16 Task 11 / D11 — promotes the
+ *                                     SearchOverlay deviation below to a
+ *                                     dedicated populated-state surface.)
+ *   ✅ WikilinkHover tooltip        (Browse → focus a wikilink in the
+ *                                     Reader; Plan 16 Task 11 / D11 —
+ *                                     ``role="tooltip"`` + stable id +
+ *                                     ``aria-describedby`` on the trigger.)
+ *   ✅ per-message Fork dialog      (Chat → assistant bubble → Fork
+ *                                     from this message; Plan 16 Task 11
+ *                                     / D11. Same ``<ForkDialog />`` as
+ *                                     Case 3 — only the trigger point
+ *                                     and aria-label differ.)
  *
- * Seven implementable dialog cases land here (six since Plan 14 plus the
- * Plan 16 Task 9 repair-config scaffold). The remaining deferral is filed
- * for follow-up plans per the per-task review escalation policy.
+ * Ten implementable dialog cases land here (six since Plan 14, plus the
+ * Plan 16 Task 9 repair-config scaffold, plus Plan 16 Task 10 autonomy
+ * scaffold, plus the Plan 16 Task 11 trio). The remaining deferral is
+ * filed for follow-up plans per the per-task review escalation policy.
  *
  * Menu + overlay inventory (Task 4 dispatch text, 5 nominal cases):
  *
  *   ✅ topbar scope picker dropdown  (Topbar → click scope chip → Radix Popover)
  *   ✅ Settings tabs walk            (visit all 8 panels in one populated test)
- *   ✅ search overlay                (⌘K — closest "file-preview overlay"
- *                                     analogue; the app does not have a
- *                                     dedicated Browse → file → preview
- *                                     surface today, the closest live
- *                                     overlay reachable from Browse is
- *                                     ``<SearchOverlay />`` per
- *                                     ``system-overlays.tsx``. Documented
- *                                     deviation; Browse-side WikilinkHover
- *                                     is a tooltip, not a modal-shape
- *                                     overlay.)
+ *   ✅ search overlay                (⌘K — historical "file-preview overlay"
+ *                                     analogue. Plan 16 Task 11 / D11 lands
+ *                                     a dedicated overlay; this case stays
+ *                                     for ⌘K coverage on its own merits.)
  *   ✅ drop-zone overlay             (synthetic dragenter with Files-typed
  *                                     DataTransfer flips
  *                                     ``draggingFile`` → DropOverlay
@@ -236,12 +246,15 @@ test.describe("a11y — populated-state dialog sweep", () => {
       { timeout: 20_000 },
     );
 
-    // Now open the Fork dialog from the sub-header. Disambiguate from
-    // the per-message Fork button (msg-actions.tsx) which uses the same
-    // label — target by the sub-header's ``title="Fork"`` attribute via
-    // its enclosing button. The chat sub-header's button has both
-    // aria-label="Fork" AND title="Fork"; we use ``getByTitle`` to pick
-    // exactly that one (msg-actions has no title attribute).
+    // Now open the Fork dialog from the sub-header. Plan 16 Task 11 set
+    // the per-message Fork button's aria-label to "Fork from this
+    // message" (msg-actions.tsx) — distinct from this sub-header's
+    // aria-label="Fork". We pin against ``title="Fork"`` here for an
+    // additional belt-and-braces guarantee (the sub-header has both
+    // aria-label="Fork" AND title="Fork"; the per-message button has
+    // neither title nor matching label). Either selector would work
+    // post-Task 11; ``getByTitle`` pre-dates the rename and stays
+    // correct.
     await page.getByTitle("Fork", { exact: true }).click();
 
     // The fork dialog heading is "Start a fresh thread from this point."
@@ -452,6 +465,213 @@ test.describe("a11y — populated-state dialog sweep", () => {
 
     // Cleanup: dismiss with Escape so the dialog doesn't bleed into
     // subsequent cases that share the page lifecycle.
+    await page.keyboard.press("Escape");
+  });
+
+  // ----------------------------------------------------------------
+  // Case 6d: file-preview overlay (Plan 16 Task 11)
+  //
+  // Plan 14 Task 4 deferred a real "Browse → file → preview" overlay
+  // because no such surface existed (the inline split-pane was the
+  // closest analogue and the populated-state proxy was ⌘K's
+  // ``<SearchOverlay />``). Plan 16 Task 11 lands the dedicated
+  // overlay: each file row in the FileTree renders a per-row
+  // "Quick preview" eye-icon button that opens
+  // ``<FilePreviewOverlay />``. The split-pane stays as the inline
+  // empty-state default; this overlay is the populated-state surface.
+  //
+  // Seed flow: write the note straight to disk under the test vault
+  // ``seedPath`` (same pattern as ``seedBrainMd``). ``brain_recent``
+  // walks the filesystem on the next call so the note appears in the
+  // FileTree on Browse's mount effect. Reaching for an in-process disk
+  // write here (rather than ``brain_propose_note`` + apply_patch) keeps
+  // the test deterministic — Browse's mount effect runs once we hit
+  // the route, no patch round-trip race to manage.
+  // ----------------------------------------------------------------
+  test("file-preview overlay has 0 violations", async ({
+    page,
+    seedPath,
+    checkA11y,
+  }) => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const stamp = Date.now();
+    const slug = `a11y-preview-${stamp}`;
+    const targetPath = `research/notes/${slug}.md`;
+    const onDisk = path.join(seedPath, "research", "notes", `${slug}.md`);
+
+    await fs.mkdir(path.dirname(onDisk), { recursive: true });
+    await fs.writeFile(
+      onDisk,
+      `# A11y file-preview overlay\n\nSeeded at ${stamp}.\n`,
+      "utf-8",
+    );
+
+    await page.goto("/browse/");
+    await page.waitForLoadState("networkidle");
+
+    // The seeded note's row in the FileTree exposes a Quick preview
+    // button per Plan 16 Task 11. The aria-label is the canonical
+    // selector (visible icon-only + sr-only text).
+    const previewBtn = page.getByRole("button", {
+      name: new RegExp(`^Quick preview ${slug}$`, "i"),
+    });
+    await expect(previewBtn).toBeVisible({ timeout: 10_000 });
+    await previewBtn.click();
+
+    // Modal heading is the file path (the overlay uses the path as its
+    // title).
+    await expect(
+      page.getByRole("heading", { name: targetPath }),
+    ).toBeVisible();
+    // Settle one extra beat so the overlay's autofocus + Radix
+    // transition complete before axe scans (mirrors other dialog cases).
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "overlay:file-preview");
+
+    // Cleanup: dismiss with Escape so the overlay doesn't bleed into
+    // subsequent cases that share the page lifecycle.
+    await page.keyboard.press("Escape");
+  });
+
+  // ----------------------------------------------------------------
+  // Case 6e: WikilinkHover tooltip (Plan 16 Task 11)
+  //
+  // Plan 14 Task 4 noted the wikilink hover is a tooltip (role=tooltip),
+  // not a modal-shape overlay, and skipped it. Plan 16 D11 brings it
+  // into populated-state coverage with a dedicated case.
+  //
+  // The wikilink anchor is a focusable ``<a>`` with class ``wikilink``
+  // (see ``src/lib/chat/rendering.ts``); the Reader wires
+  // ``onFocus`` → enterAnchor → stamps ``aria-describedby`` and shows
+  // the tooltip. We seed two notes wired by a wikilink, navigate to
+  // the source, focus the link via keyboard, axe-scan the rendered
+  // tooltip, then move focus off to dismiss.
+  // ----------------------------------------------------------------
+  test("wikilink-hover tooltip has 0 violations", async ({
+    page,
+    seedPath,
+    checkA11y,
+  }) => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const stamp = Date.now();
+    const targetSlug = `target-${stamp}`;
+    const sourceSlug = `source-${stamp}`;
+    const sourcePath = `research/notes/${sourceSlug}.md`;
+    const notesDir = path.join(seedPath, "research", "notes");
+
+    await fs.mkdir(notesDir, { recursive: true });
+    // Target note (so the wikilink resolves to a real file).
+    await fs.writeFile(
+      path.join(notesDir, `${targetSlug}.md`),
+      `# Target\n\nA short body.\n`,
+      "utf-8",
+    );
+    // Source note contains a wikilink to the target.
+    await fs.writeFile(
+      path.join(notesDir, `${sourceSlug}.md`),
+      `# Source\n\nLink to [[${targetSlug}]] in this note.\n`,
+      "utf-8",
+    );
+
+    await page.goto(`/browse/${sourcePath}`);
+    await page.waitForLoadState("networkidle");
+
+    // Reader renders the wikilink as ``<a class="wikilink">`` whose
+    // text content is the slug. Focus it via JS (wikilinks have
+    // ``href="#"`` so they're tab-focusable; clicking the body and
+    // tabbing would also work but is fragile to focusable-element
+    // ordering — focus() is deterministic).
+    const link = page.locator(`a.wikilink`, { hasText: targetSlug });
+    await expect(link).toBeVisible({ timeout: 10_000 });
+    await link.focus();
+
+    // Reader's ``onFocus`` delegate stamps ``aria-describedby`` on the
+    // anchor and shows the tooltip. The tooltip is the readNote async
+    // round-trip; wait for it to mount (look for the canonical id).
+    const tooltip = page.locator("#wikilink-hover-tooltip");
+    await expect(tooltip).toBeVisible({ timeout: 10_000 });
+    await expect(tooltip).toHaveAttribute("role", "tooltip");
+    await expect(link).toHaveAttribute(
+      "aria-describedby",
+      "wikilink-hover-tooltip",
+    );
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "tooltip:wikilink-hover");
+
+    // Cleanup: blur the link so the tooltip dismisses + the
+    // aria-describedby comes off (otherwise stale ids could confuse
+    // any subsequent focus walk).
+    await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  });
+
+  // ----------------------------------------------------------------
+  // Case 6f: per-message Fork dialog (Plan 16 Task 11)
+  //
+  // Plan 16 D11 adds a second Fork trigger on each assistant message
+  // bubble (``MsgActions``); the chat-sub-header Fork (Case 3) already
+  // exists. Both route through the same ``<ForkDialog />`` via
+  // ``dialogs-store``; the per-message variant carries its row's
+  // ``turnIndex`` so the user can fork at any prior turn.
+  //
+  // Disambiguation: the per-message button is ``aria-label="Fork from
+  // this message"`` (Plan 16 Task 11); the sub-header is
+  // ``aria-label="Fork"`` + ``title="Fork"`` (unchanged).
+  //
+  // Drive a real chat turn so the assistant message exists, hover the
+  // assistant bubble to surface the actions row (also reachable via
+  // keyboard focus per ``focus-within``), click the per-message Fork,
+  // axe-scan the dialog, dismiss with Esc.
+  // ----------------------------------------------------------------
+  test("per-message Fork dialog has 0 violations", async ({
+    page,
+    checkA11y,
+  }) => {
+    const threadId = `e2e-a11y-msg-fork-${Date.now()}`;
+    await page.goto(`/chat/${threadId}`);
+    await page.waitForLoadState("networkidle");
+
+    // Send a turn so an assistant bubble exists (the per-message
+    // actions row only renders for non-streaming assistant messages).
+    await page
+      .getByRole("textbox", { name: "Message brain" })
+      .fill("hello brain — per-message fork");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.locator('[data-role="brain"]').first()).toContainText(
+      "Hello from FakeLLM",
+      { timeout: 20_000 },
+    );
+
+    // Hover the assistant bubble to surface the action row (the row
+    // uses ``opacity-0`` + ``group-hover:opacity-100`` — also visible
+    // on focus-within for keyboard users; hover is the production
+    // mouse path).
+    const bubble = page.locator('[data-role="brain"]').first();
+    await bubble.hover();
+
+    // Per Plan 16 Task 11 the per-message Fork's aria-label is "Fork
+    // from this message" — disambiguates from the sub-header Fork
+    // (aria-label="Fork").
+    const perMsgFork = page.getByRole("button", {
+      name: /^Fork from this message$/,
+    });
+    await expect(perMsgFork).toBeVisible();
+    await perMsgFork.click();
+
+    // Same ForkDialog as Case 3 — heading is "Start a fresh thread
+    // from this point.".
+    await expect(
+      page.getByRole("heading", { name: /Start a fresh thread/i }),
+    ).toBeVisible();
+    await page.waitForTimeout(200);
+
+    await checkA11y(page, "dialog:per-message-fork");
+
+    // Cleanup: dismiss with Escape so the dialog doesn't bleed into
+    // subsequent cases.
     await page.keyboard.press("Escape");
   });
 

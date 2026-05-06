@@ -65,6 +65,7 @@ export function Transcript(): React.ReactElement {
                 msg={msg}
                 streamingText={isLastStreaming ? streamingText : undefined}
                 isStreaming={isLastStreaming}
+                turnIndex={i}
               />
             );
           })
