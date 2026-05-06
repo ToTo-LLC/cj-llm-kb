@@ -4,12 +4,13 @@ Covers: secret-like refusal, non-settable-key refusal, and a successful
 in-memory "updated" write on an allowlisted key. brain_mcp's existing
 test_tool_config_get_set.py covers the transport wrapper behavior.
 
-Plan 13 Task 1 / D1: ``brain_config_set`` now raises ``RuntimeError`` when
-``ctx.config is None`` for persisted keys. Refusal-path tests (secret-like,
-non-allowlisted, wrong-shape domain-override) refuse BEFORE the cfg-None
-check, so they remain valid without a real Config; persistence-path tests
-seed a real ``Config`` to match the production shape (both wrappers thread
-Config through post-Plan 12 D6).
+Plan 15 D8: ``_mk_ctx`` requires an explicit ``Config`` — no default, no
+Optional union. Refusal-path tests (secret-like, non-allowlisted,
+wrong-shape domain-override) still refuse BEFORE the cfg check in
+``handle``, so they pass a default ``Config()`` for shape only;
+persistence-path tests seed a real ``Config`` whose contents matter (e.g.,
+``domains`` membership for domain-override leaves). The None-config raise
+behavior is pinned in ``test_errors_raise_if_no_config.py`` (Plan 15 Task 8).
 """
 
 from __future__ import annotations
@@ -22,12 +23,16 @@ from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.config_set import _SETTABLE_KEYS, NAME, handle
 
 
-def _mk_ctx(vault: Path, *, config: Config | None = None) -> ToolContext:
+def _mk_ctx(vault: Path, *, config: Config) -> ToolContext:
     """Build a ToolContext for config_set tests.
 
-    ``config`` defaults to ``None`` for backwards compatibility with refusal-path
-    tests (secret-like, non-allowlisted) that refuse BEFORE the cfg-None check
-    in ``handle``. Persistence-path tests pass an explicit ``Config(...)``.
+    Plan 15 D8: ``config`` is a required ``Config`` (no default, no Optional
+    union). Refusal-path tests (secret-like, non-allowlisted, wrong-shape
+    domain-override) refuse BEFORE the cfg-None check in ``handle`` and
+    therefore don't depend on the Config's contents — they pass a default
+    ``Config()`` for shape only. The None-config raise behavior is pinned
+    in ``test_errors_raise_if_no_config.py`` (Plan 15 Task 8); this fixture
+    intentionally cannot construct a None-config context.
     """
     return ToolContext(
         vault_root=vault,
@@ -233,7 +238,10 @@ async def test_allows_autonomous_flag(tmp_path: Path) -> None:
 
 async def test_refuses_secret_like_key(tmp_path: Path) -> None:
     with pytest.raises(PermissionError, match="secret-like"):
-        await handle({"key": "llm.api_key", "value": "nope"}, _mk_ctx(tmp_path))
+        await handle(
+            {"key": "llm.api_key", "value": "nope"},
+            _mk_ctx(tmp_path, config=Config()),
+        )
 
 
 async def test_refuses_non_allowlisted_vault_path(tmp_path: Path) -> None:
@@ -244,7 +252,10 @@ async def test_refuses_non_allowlisted_vault_path(tmp_path: Path) -> None:
     permanently-excluded Config field.
     """
     with pytest.raises(PermissionError, match="not settable"):
-        await handle({"key": "vault_path", "value": "/tmp/elsewhere"}, _mk_ctx(tmp_path))
+        await handle(
+            {"key": "vault_path", "value": "/tmp/elsewhere"},
+            _mk_ctx(tmp_path, config=Config()),
+        )
 
 
 async def test_domain_override_keys_pass_allowlist_via_wildcard(tmp_path: Path) -> None:
@@ -280,7 +291,7 @@ async def test_domain_override_rejects_unknown_field(tmp_path: Path) -> None:
     with pytest.raises(PermissionError, match="not settable"):
         await handle(
             {"key": "domain_overrides.hobby.unknown_field", "value": "x"},
-            _mk_ctx(tmp_path),
+            _mk_ctx(tmp_path, config=Config()),
         )
 
 
@@ -290,11 +301,14 @@ async def test_domain_override_rejects_wrong_segment_count(tmp_path: Path) -> No
     check and end up at the static-allowlist gate.
     """
     with pytest.raises(PermissionError, match="not settable"):
-        await handle({"key": "domain_overrides.hobby", "value": {}}, _mk_ctx(tmp_path))
+        await handle(
+            {"key": "domain_overrides.hobby", "value": {}},
+            _mk_ctx(tmp_path, config=Config()),
+        )
     with pytest.raises(PermissionError, match="not settable"):
         await handle(
             {"key": "domain_overrides.hobby.foo.bar", "value": "x"},
-            _mk_ctx(tmp_path),
+            _mk_ctx(tmp_path, config=Config()),
         )
 
 
@@ -316,20 +330,6 @@ async def test_allows_budget_daily_usd(tmp_path: Path) -> None:
     assert result.data["status"] == "updated"
     assert result.data["persisted"] is True
     assert result.data["value"] == 5.0
-
-
-async def test_raises_when_ctx_config_none(tmp_path: Path) -> None:
-    """Plan 13 Task 1 / D1: ``brain_config_set`` raises ``RuntimeError``
-    when ``ctx.config is None`` for persisted keys. Mirrors
-    ``brain_config_get``'s strict policy (Plan 12 Task 3) — a None config
-    is a lifecycle violation, not a fallback case. Pre-Plan-13 this branch
-    no-op'd with ``persisted=False``, which was a unit-test escape hatch
-    from before brain_api + brain_mcp wired Config; production-shape
-    integration tests post-Plan 12 D6 always supply Config.
-    """
-    ctx = _mk_ctx(tmp_path, config=None)
-    with pytest.raises(RuntimeError, match=r"ctx\.config to be a Config"):
-        await handle({"key": "log_llm_payloads", "value": True}, ctx)
 
 
 def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:

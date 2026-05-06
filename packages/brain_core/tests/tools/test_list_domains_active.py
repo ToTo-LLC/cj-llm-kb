@@ -9,21 +9,29 @@ round trip. These tests pin:
   (c) Read-after-write within a session: mutating ``ctx.config.active_domain``
       mid-session is visible on the *next* call (the tool reads
       ``ctx.config`` live, not a cached snapshot).
-  (d) Plan 13 Task 1 / D1: ``ctx.config is None`` raises ``RuntimeError``
-      (lifecycle violation, not a fallback case).
+
+Plan 13 Task 1 / D1's ``ctx.config is None`` raise behavior is pinned in
+``test_errors_raise_if_no_config.py`` (Plan 15 Task 8); the per-tool raise
+test that previously lived here was dropped to avoid duplicate coverage.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from brain_core.config.schema import DEFAULT_DOMAINS, Config
 from brain_core.tools.base import ToolContext
 from brain_core.tools.list_domains import handle
 
 
-def _mk_ctx(vault: Path, *, config: Config | None) -> ToolContext:
+def _mk_ctx(vault: Path, *, config: Config) -> ToolContext:
+    """Build a ToolContext for list_domains active-domain tests.
+
+    Plan 15 D8: ``config`` is a required ``Config`` (no default, no Optional
+    union). The None-config raise is pinned in
+    ``test_errors_raise_if_no_config.py`` (Plan 15 Task 8); this fixture
+    intentionally cannot construct a None-config context.
+    """
     return ToolContext(
         vault_root=vault,
         allowed_domains=("research", "work", "personal"),
@@ -86,16 +94,3 @@ async def test_active_domain_read_after_write_within_session(tmp_path: Path) -> 
     second = await handle({}, ctx)
     assert second.data is not None
     assert second.data["active_domain"] == "work"
-
-
-async def test_no_config_raises_runtime_error(tmp_path: Path) -> None:
-    """Plan 13 Task 1 / D1: ``ctx.config is None`` raises ``RuntimeError``
-    rather than falling back to ``DEFAULT_DOMAINS[0]``. Pre-Plan-13 the
-    silent fallback was tolerable as a unit-test escape hatch, but
-    post-Plan 11 Task 7 (brain_api lifespan wires Config) and Plan 12
-    Task 4 (brain_mcp ``_build_ctx`` wires Config), every production
-    path supplies Config; the lenient branch was dead code in production.
-    Mirrors ``brain_config_get``'s strict policy (Plan 12 Task 3 / D5).
-    """
-    with pytest.raises(RuntimeError, match=r"ctx\.config to be a Config"):
-        await handle({}, _mk_ctx(tmp_path, config=None))
