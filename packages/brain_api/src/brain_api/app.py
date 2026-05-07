@@ -15,7 +15,7 @@ from pathlib import Path
 
 import structlog
 from brain_core.config.hot_reload import ConfigWatcher
-from brain_core.config.loader import invalidate_cache_for, load_config
+from brain_core.config.loader import invalidate_cache_for, resolve_config
 from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
@@ -65,12 +65,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # brain_web → brain_api would land on the ``ctx.config is None`` no-op
     # branch — the toast would say "saved" but the disk write never happens.
     #
-    # ``load_config`` uses Plan 11 D7's fallback chain
-    # (config.json → config.json.bak → ``Config()`` defaults), so first-run
-    # with no config.json on disk boots cleanly. ``vault_path`` is supplied
-    # via ``cli_overrides`` rather than the persisted blob — it's the
-    # chicken-and-egg field the loader's whitelist deliberately excludes.
-    config = load_config(
+    # ``resolve_config`` (Plan 16 T34) wraps ``load_config``'s Plan 11 D7
+    # fallback chain (config.json → config.json.bak → ``Config()``
+    # defaults) with a single-process cache layer. First boot is a cache
+    # miss that calls ``load_config`` and populates the cache; subsequent
+    # in-process callers (e.g. tool dispatchers wired via T34.5+) get
+    # cache hits, and T35's ``ConfigWatcher`` (started below) invalidates
+    # the cache on disk-change so post-edit reads pick up new state.
+    # ``vault_path`` is supplied via ``cli_overrides`` rather than the
+    # persisted blob — it's the chicken-and-egg field the loader's
+    # whitelist deliberately excludes.
+    config = resolve_config(
         config_file=app.state.vault_root / ".brain" / "config.json",
         env=os.environ,
         cli_overrides={"vault_path": app.state.vault_root},

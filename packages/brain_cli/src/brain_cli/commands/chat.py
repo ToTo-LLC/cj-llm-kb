@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from brain_core.chat.types import ChatMode
-from brain_core.config.loader import load_config
+from brain_core.config.loader import resolve_config
 from rich.console import Console
 
 from brain_cli.rendering.stream import StreamRenderer
@@ -51,8 +51,14 @@ def chat(
     # if the vault has no ``config.json`` yet — the loader's fallback chain
     # handles missing/broken config gracefully and the defaults carry no
     # caps or rate limits, preserving legacy CLI behavior on first run.
+    #
+    # T34.5: route through ``resolve_config`` for consistency with the
+    # long-running brain_api / brain_mcp call sites. The CLI is short-
+    # lived so the cache hit benefit is small, but a uniform call shape
+    # avoids future drift if any post-load code path adds another
+    # config read.
     try:
-        app_config = load_config(
+        app_config = resolve_config(
             config_file=vault / ".brain" / "config.json",
             env=os.environ,
             cli_overrides={"vault_path": vault},

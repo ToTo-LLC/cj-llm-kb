@@ -14,7 +14,7 @@ from typing import Any
 import mcp.types as types
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.retrieval import BM25VaultIndex
-from brain_core.config.loader import load_config
+from brain_core.config.loader import resolve_config
 from brain_core.cost.ledger import CostLedger
 from brain_core.llm.fake import FakeLLMProvider
 from brain_core.rate_limit import RateLimitConfig, RateLimiter
@@ -158,23 +158,27 @@ def create_server(
         on the ``ctx.config is None`` no-op branch — the tool would report
         "saved" but the disk write would never happen.
 
-        ``load_config`` uses Plan 11 D7's fallback chain
-        (config.json → config.json.bak → ``Config()`` defaults), so first-run
-        with no config.json on disk boots cleanly. ``vault_path`` is supplied
-        via ``cli_overrides`` rather than the persisted blob — it's the
-        chicken-and-egg field the loader's whitelist deliberately excludes.
+        ``resolve_config`` (Plan 16 T34) wraps ``load_config``'s Plan 11
+        D7 fallback chain (config.json → config.json.bak → ``Config()``
+        defaults), so first-run with no config.json on disk boots cleanly.
+        ``vault_path`` is supplied via ``cli_overrides`` rather than the
+        persisted blob — it's the chicken-and-egg field the loader's
+        whitelist deliberately excludes.
 
         The lazy ``_cached_ctx`` singleton means the load happens once per
         server lifetime — that matches the brain_api eager-on-startup pattern
         in spirit (one load per process), just deferred to first tool call so
-        a session that never invokes a tool pays nothing.
+        a session that never invokes a tool pays nothing. T34.5 routes this
+        call through ``resolve_config`` so any future tool dispatcher that
+        re-reads the config (e.g. to honor a hot-reload event from
+        ``__main__.py``'s ConfigWatcher) hits the same single-process cache.
         """
         nonlocal _cached_ctx
         if _cached_ctx is not None:
             return _cached_ctx
         brain_dir = vault_root / ".brain"
         brain_dir.mkdir(parents=True, exist_ok=True)
-        config = load_config(
+        config = resolve_config(
             config_file=brain_dir / "config.json",
             env=os.environ,
             cli_overrides={"vault_path": vault_root},
