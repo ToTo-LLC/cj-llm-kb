@@ -34,7 +34,8 @@
  * ``Config`` (default ``["personal"]``), so ``personal`` lights up
  * the rail check even though it's not in the allowed-domains env.
  */
-import { expect, test, type Page } from "./fixtures";
+import { type Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 /**
  * Set the persisted ``brain-app`` zustand-persist record so the chat
@@ -47,7 +48,7 @@ import { expect, test, type Page } from "./fixtures";
  * surprises.
  */
 async function seedScope(page: Page, scope: string[]): Promise<void> {
-  await page.addInitScript((s) => {
+  await page.addInitScript((s: string[]) => {
     const payload = {
       state: {
         theme: "dark",
@@ -71,7 +72,7 @@ async function seedScope(page: Page, scope: string[]): Promise<void> {
  *  returns the BRAIN_VAULT_ROOT we know already.
  */
 async function seedScopeInitialized(page: Page, vaultPath: string): Promise<void> {
-  await page.addInitScript((p) => {
+  await page.addInitScript((p: string) => {
     window.localStorage.setItem(`brain.scopeInitialized.${p}`, "true");
   }, vaultPath);
 }
