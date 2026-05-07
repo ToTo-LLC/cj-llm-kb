@@ -351,14 +351,18 @@ def _apply_domain_override(config: Config, key: str, value: Any) -> None:
         raise KeyError(f"{field!r} is not a field of DomainOverride")
 
     # Slug-membership pre-check. The Config-level
-    # ``_check_domain_overrides_keys_in_domains`` validator only runs at
-    # construction time (Pydantic v2 model_validator semantics), not on
-    # in-place dict mutation, and the writer's ``model_dump`` path
-    # doesn't re-trigger it either. Without this guard, an orphan slug
-    # would persist silently and only fail on the *next* ``load_config``
-    # (typically the next process boot) — terrible feedback latency.
-    # Mirror the validator's error message so the Settings UI surfaces
-    # the same wording regardless of which seam catches it.
+    # ``_check_domain_overrides_keys_in_domains`` validator runs at
+    # construction time and (post-Plan-16-Task-36) on every ``setattr``
+    # via ``validate_assignment=True``, but NEITHER seam fires for
+    # IN-PLACE DICT MUTATION (``config.domain_overrides[slug] = ...``):
+    # the dict is the same object Pydantic already validated, so
+    # appending to it doesn't trigger field-level validation. The
+    # writer's ``model_dump`` path also doesn't re-run model validators.
+    # Without this guard, an orphan slug would persist silently and only
+    # fail on the *next* ``load_config`` (typically the next process
+    # boot) — terrible feedback latency. Mirror the validator's error
+    # message so the Settings UI surfaces the same wording regardless
+    # of which seam catches it.
     if slug not in config.domains:
         raise ValueError(
             f"domain_overrides keys {[slug]!r} are not in domains "
@@ -593,13 +597,15 @@ def _check_active_domain_membership(config: Config, value: Any) -> None:
 
     Plan 12 D2 inverted the Plan 07-era exclusion of ``active_domain``
     from ``_SETTABLE_KEYS``. The Plan 10 cross-field validator on
-    Config enforces "must be in ``self.domains``", but it only fires at
-    construction time (``load_config``) — Config does NOT enable
-    ``validate_assignment``, and ``save_config`` serializes via
-    ``persisted_dict`` without re-validating. Without this pre-check, a
-    bad slug would persist silently and only fail on the next process
-    boot. Mirror the validator's error wording so the Settings UI
-    surfaces the same message regardless of which seam catches it.
+    Config enforces "must be in ``self.domains``"; Plan 16 Task 36
+    enabled ``validate_assignment=True`` so the cross-field validator
+    DOES now fire on a single-field ``setattr`` — but with a Pydantic
+    v2 quirk: a ``model_validator(mode="after")`` raise leaves the
+    field mutated to the bad value (only field-level validators roll
+    back). The pre-check below runs BEFORE the assignment so the bad
+    slug never lands on the live ``Config``, and the error wording
+    matches the model validator so the Settings UI surfaces the same
+    message regardless of which seam catches it.
 
     The ``value`` argument intentionally accepts ``Any`` and rejects
     anything non-string before the membership check — passing a list or
@@ -689,13 +695,15 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     raise_if_no_config(ctx, "brain_config_set")
     cfg = ctx.config
 
-    # NOTE on validation: pydantic v2 only validates on assignment when
-    # ``validate_assignment=True``, which Config / its sub-configs do
-    # NOT enable. So an out-of-range or wrong-type value slips through
-    # ``setattr`` and is persisted as-is; the next ``load_config`` is
-    # what ultimately rejects the file. Pinning that behavior in
-    # tests/tools/test_config_set_persists.py so a future tightening
-    # (validate_assignment, or pre-write validation here) is intentional.
+    # NOTE on validation: Plan 16 Task 36 / D29 enabled
+    # ``validate_assignment=True`` UNCONDITIONALLY on :class:`Config`
+    # and every sub-config. An out-of-range or wrong-type value raises
+    # ``pydantic.ValidationError`` on the ``setattr`` line below;
+    # ``persist_config_or_revert`` catches the exception, restores the
+    # snapshot, and re-raises so the caller sees the canonical Pydantic
+    # error voice. The positive validation pin
+    # (``test_validate_assignment_enforcement`` in
+    # ``tests/tools/test_config_set_persists.py``) covers the contract.
     #
     # Plan 11 Task 7: ``domain_overrides.<slug>.<field>`` writes route
     # through ``_apply_domain_override`` (dict-walk on
@@ -712,11 +720,15 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             _apply_rate_limit_per_domain(cfg, key, value)
         else:
             # Plan 12 D2: ``active_domain`` membership is validated here
-            # because Config's cross-field validator only fires at
-            # construction time (validate_assignment=False, persisted_dict
-            # bypasses model_validate). Without this seam an orphan slug
-            # would persist silently and only fail on the next process
-            # boot — terrible feedback latency for the Settings UI.
+            # to short-circuit the bad assignment. Plan 16 Task 36 turned
+            # ``validate_assignment=True`` on, so ``setattr`` itself now
+            # runs the cross-field model_validator — but a Pydantic v2
+            # quirk leaves the field MUTATED to the bad value when a
+            # ``model_validator(mode="after")`` raises (only field-level
+            # validators roll back). The pre-check below runs before the
+            # assignment so an orphan slug never lands on the live Config
+            # in the first place; the snapshot/revert path still covers
+            # the fall-through if anything else raises mid-mutation.
             if key == "active_domain":
                 _check_active_domain_membership(cfg, value)
             parent, leaf = _resolve_parent_and_field(cfg, key)

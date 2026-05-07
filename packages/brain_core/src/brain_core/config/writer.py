@@ -288,6 +288,19 @@ def persist_config_or_revert(config: Config, vault_root: Path) -> Iterator[None]
         yield
         save_config(config, vault_root)
     except Exception:
+        # Plan 16 Task 36: Config now enables ``validate_assignment=True``,
+        # so a vanilla ``setattr(config, field_name, ...)`` per field would
+        # invoke the cross-field model validators on every intermediate
+        # state. Reverting one field at a time can transit through
+        # invalid intermediate states (e.g. setting ``domains`` back to
+        # the snapshot's value while ``active_domain`` is still the
+        # caller's mutated bad value), and the reverting setattr itself
+        # would raise. The snapshot was a fully-validated Config to
+        # begin with, so re-running validation during revert is both
+        # redundant and harmful. Write directly into ``__dict__`` to
+        # bypass ``__setattr__`` validation; the post-revert state
+        # equals the snapshot's, which by construction passed every
+        # validator on its way in.
         for field_name in type(config).model_fields:
-            setattr(config, field_name, getattr(snapshot, field_name))
+            config.__dict__[field_name] = getattr(snapshot, field_name)
         raise

@@ -383,26 +383,32 @@ async def test_privacy_railed_whole_list_persists(tmp_path: Path) -> None:
     assert rehydrated.privacy_railed == ["personal", "journal"]
 
 
-async def test_privacy_railed_removing_personal_load_rejects(tmp_path: Path) -> None:
-    """The Config validator forbids removing ``personal`` from
-    privacy_railed. Because the Config object lacks
-    ``validate_assignment=True``, the in-memory mutation goes through;
-    the next ``load_config`` on the persisted file is what catches it.
-    Pin this behavior so it's an intentional decision when validation
-    tightens.
+async def test_privacy_railed_removing_personal_raises_on_assignment(tmp_path: Path) -> None:
+    """Plan 16 Task 36 / D29: ``validate_assignment=True`` makes
+    removing ``personal`` from ``privacy_railed`` raise
+    ``pydantic.ValidationError`` at assignment time.
+
+    Previously a KNOWN-LIMITATION pin
+    (``test_privacy_railed_removing_personal_load_rejects``) — the
+    in-memory mutation went through silently and only ``load_config``
+    on the persisted file caught it. Flipped here to a positive
+    validation pin alongside ``test_validate_assignment_enforcement``
+    per the locked decision: the field-level validator
+    (:meth:`Config._check_privacy_railed`) now fires on every
+    ``setattr``, so the bad list never reaches the live Config or the
+    on-disk ``config.json``.
     """
     cfg = Config(domains=["research", "personal", "journal"])
+    pre_value = list(cfg.privacy_railed)
     ctx = _mk_ctx(tmp_path, cfg)
 
-    # In-memory and on-disk write both go through.
-    result = await handle({"key": "privacy_railed", "value": ["journal"]}, ctx)
-    assert result.data is not None
-    assert result.data["persisted"] is True
-    assert cfg.privacy_railed == ["journal"]
-
-    # load_config rejects the bad on-disk file.
     with pytest.raises(pydantic.ValidationError):
-        load_config(config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={})
+        await handle({"key": "privacy_railed", "value": ["journal"]}, ctx)
+
+    # Live Config not mutated.
+    assert cfg.privacy_railed == pre_value
+    # No config.json written — save_config never ran.
+    assert not (tmp_path / ".brain" / "config.json").exists()
 
 
 async def test_active_domain_settable_round_trip(tmp_path: Path) -> None:
@@ -455,30 +461,37 @@ async def test_active_domain_must_be_in_domains(tmp_path: Path) -> None:
     assert not (tmp_path / ".brain" / "config.json").exists()
 
 
-async def test_invalid_value_currently_persists_without_validation(tmp_path: Path) -> None:
-    """KNOWN-LIMITATION pin (Plan 11 Task 4): pydantic v2 only validates on
-    assignment when ``validate_assignment=True``, which Config and its
-    sub-configs do NOT enable. So an out-of-range value (e.g.
-    ``budget.daily_usd = -1.0``) currently slips through ``setattr`` and
-    is persisted as-is. The next ``load_config`` would reject the file.
+async def test_validate_assignment_enforcement(tmp_path: Path) -> None:
+    """Plan 16 Task 36 / D29 (locked 1.B + 3.A): ``validate_assignment=True``
+    is now set unconditionally on :class:`Config` and every sub-config,
+    so an out-of-range value raises ``pydantic.ValidationError`` on the
+    assignment ``setattr`` itself instead of silently persisting until
+    the next ``load_config`` rejects the on-disk file.
 
-    This test pins the current behavior so a future change that enables
-    ``validate_assignment`` (or wires explicit pre-write validation in
-    ``brain_config_set``) makes the test fail loudly and the author
-    can decide whether to upgrade the assertion to expect a raise.
+    This test was previously a KNOWN-LIMITATION pin
+    (``test_invalid_value_currently_persists_without_validation`` in
+    Plan 11 Task 4); flipped here to a positive validation pin per the
+    locked decision. ``persist_config_or_revert`` catches the raise,
+    restores the snapshot via the ``__dict__`` fast-path, and re-raises
+    so the caller sees the canonical Pydantic error voice — neither the
+    in-memory ``cfg`` nor on-disk ``config.json`` is mutated.
     """
     cfg = Config()
+    pre_value = cfg.budget.daily_usd  # default 5.0
     ctx = _mk_ctx(tmp_path, cfg)
 
-    # ``daily_usd`` schema requires ``ge=0``; -1.0 should trip but doesn't
-    # (validate_assignment is off). The assignment silently lands.
-    result = await handle({"key": "budget.daily_usd", "value": -1.0}, ctx)
-    assert result.data is not None
-    assert result.data["persisted"] is True
-    assert cfg.budget.daily_usd == -1.0
-    # The bad value was persisted — load_config will reject this file.
-    # Pin to ``pydantic.ValidationError`` specifically so a future
-    # regression that raises a different exception type fails loudly
-    # instead of being swallowed by a bare ``Exception`` match.
+    # ``daily_usd`` schema requires ``ge=0``; -1.0 trips the field-level
+    # validator on assignment (validate_assignment is now ON). The
+    # ``ValidationError`` propagates out of ``handle`` via
+    # ``persist_config_or_revert``'s re-raise.
     with pytest.raises(pydantic.ValidationError):
-        load_config(config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={})
+        await handle({"key": "budget.daily_usd", "value": -1.0}, ctx)
+
+    # Live Config not mutated — field-level validator failures roll back
+    # the assignment in Pydantic v2, and the snapshot revert is a
+    # belt-and-suspenders safeguard.
+    assert cfg.budget.daily_usd == pre_value
+    # No config.json written — save_config never ran because
+    # persist_config_or_revert caught the exception before the yield
+    # could reach the save step.
+    assert not (tmp_path / ".brain" / "config.json").exists()

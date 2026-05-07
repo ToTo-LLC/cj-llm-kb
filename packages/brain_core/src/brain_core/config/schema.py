@@ -82,7 +82,7 @@ def _validate_domain_slug(slug: str) -> str:
 
 
 class LLMConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     provider: Literal["anthropic"] = "anthropic"
     default_model: str = "claude-sonnet-4-6"
     classify_model: str = "claude-haiku-4-5-20251001"
@@ -110,7 +110,7 @@ class RateLimitOverride(BaseModel):
     surfaces at load time instead of being silently dropped.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     requests_per_minute: int | None = None
 
     @field_validator("requests_per_minute")
@@ -144,7 +144,7 @@ class ProviderConfig(BaseModel):
     ``extra="forbid"`` is consistent with every other config sub-model.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     # Plan 16 Task 30 / D27 step 1 of 3: per-domain rate-limit overrides.
     # Keys are domain slugs; values are :class:`RateLimitOverride`.
     # Default ``{}`` so legacy configs that lack the field still load
@@ -178,7 +178,7 @@ class BudgetOverride(BaseModel):
     dropped.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     monthly_cap_usd: float | None = None
     daily_cap_usd: float | None = None
 
@@ -197,7 +197,7 @@ class BudgetOverride(BaseModel):
 
 
 class BudgetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     daily_usd: float = Field(default=5.0, ge=0.0)
     monthly_usd: float = Field(default=80.0, ge=0.0)
     alert_threshold_pct: int = Field(default=80, ge=0, le=100)
@@ -228,7 +228,7 @@ class URLHandlerConfig(BaseModel):
     (and surface an error sooner).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     timeout_seconds: float = Field(
         default=30.0,
         gt=0,
@@ -243,7 +243,7 @@ class TweetHandlerConfig(BaseModel):
     flaky; expose timeout so users can tune.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     timeout_seconds: float = Field(
         default=20.0,
         gt=0,
@@ -260,7 +260,7 @@ class PDFHandlerConfig(BaseModel):
     it to be more aggressive about catching scans.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     min_chars: int = Field(
         default=200,
         ge=0,
@@ -282,7 +282,7 @@ class HandlersConfig(BaseModel):
     :mod:`brain_core.tools.config_set`.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     url: URLHandlerConfig = Field(default_factory=URLHandlerConfig)
     tweet: TweetHandlerConfig = Field(default_factory=TweetHandlerConfig)
     pdf: PDFHandlerConfig = Field(default_factory=PDFHandlerConfig)
@@ -298,7 +298,7 @@ class AutonomousConfig(BaseModel):
     :class:`brain_core.vault.types.PatchCategory` values 1:1.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     ingest: bool = False
     entities: bool = False
     concepts: bool = False
@@ -319,7 +319,7 @@ class DomainOverride(BaseModel):
     write an override that would itself fail global validation.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     classify_model: str | None = None
     default_model: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=1.5)
@@ -359,7 +359,24 @@ _PERSISTED_FIELDS: frozenset[str] = frozenset(
 
 
 class Config(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Plan 16 Task 36 / D29 (locked 1.B + 3.A): ``validate_assignment=True``
+    # is enabled UNCONDITIONALLY across :class:`Config` and every sub-config.
+    # An out-of-range or wrong-type value raises ``ValidationError`` on
+    # assignment instead of silently persisting until the next
+    # ``load_config`` rejects the file. The accompanying perf benchmark
+    # (``tests/config/test_validate_assignment_perf.py``) measures the
+    # overhead; the lessons.md Plan 16 entry captures the cost. Per the
+    # locked decision, the flag ships regardless of the measured cost —
+    # type safety beats a marginal perf delta on a non-hot-path object.
+    #
+    # Pydantic v2 quirk: ``model_validator(mode="after")`` runs on every
+    # ``setattr`` when this flag is set, but a validation failure inside
+    # a model_validator does NOT roll back the field mutation (only
+    # field-level validators do). Cross-field violations (e.g. setting
+    # ``domains=[]`` while ``active_domain="research"``) raise but leave
+    # the field at the bad value. The ``persist_config_or_revert``
+    # context manager covers this with its snapshot-and-revert path.
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     vault_path: Path = Field(default_factory=lambda: Path.home() / "Documents" / "brain")
     # Plan 10 D1: ``domains`` is the user-configurable list of vault
     # top-level dirs. Order in the list is preserved for UI affordances
