@@ -62,6 +62,9 @@ def test_tool_context_field_set(tmp_path: Path) -> None:
     """The field set must match the Plan 04 + Plan 09 contract — brain_mcp
     tests depend on it. ``config`` was added in issue #31 as an optional
     field (default None) so existing call sites stay source-compatible.
+    Plan 16 Task 28 / D26 step 3 of 4 added ``domain`` as an optional
+    per-call narrowed-domain field that :class:`PerDomainBudgetGuard`
+    reads — also default ``None`` for source compat.
     """
     names = {f.name for f in dataclasses.fields(ToolContext)}
     assert names == {
@@ -76,6 +79,7 @@ def test_tool_context_field_set(tmp_path: Path) -> None:
         "rate_limiter",
         "undo_log",
         "config",
+        "domain",
     }
 
 

@@ -44,6 +44,15 @@ class ToolContext:
     # ToolContext construction sites stay source-compatible — tools fall back
     # to their hardcoded defaults when the config is absent.
     config: Any = None  # Config
+    # Plan 16 Task 28 / D26 step 3 of 4: per-call narrowed domain. The legacy
+    # ``allowed_domains`` is a tuple (chat is scoped across multiple); per-call
+    # paths that target a single domain (apply_patch, single-domain ingest,
+    # chat session with a known active domain) thread the resolved domain here
+    # so :class:`brain_core.budget.PerDomainBudgetGuard` can read it. ``None``
+    # means "no per-call domain selected" — the guard no-ops, falling back to
+    # the legacy global ``BudgetEnforcer`` as the only safety net. Optional so
+    # every existing ToolContext construction site stays source-compatible.
+    domain: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
