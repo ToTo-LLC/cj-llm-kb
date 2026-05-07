@@ -83,11 +83,12 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         raise ScopeError(f"patch targets domain {domain!r} not in allowed {ctx.allowed_domains}")
 
     # Autonomy gate — consult config BEFORE the apply so a non-auto patch
-    # still follows the same approval-gated flow (Plan 04 semantics). The
-    # session has no in-flight Config object; ``_resolve_config`` snapshots
-    # defaults and overlays the session vault_root (mirrors
-    # ``brain_config_get``). ``_resolve_config`` is also the extension point
-    # for tests to monkeypatch a specific ``AutonomyCategoryFlags`` map.
+    # still follows the same approval-gated flow (Plan 04 semantics).
+    # ``_resolve_config`` (Plan 16 Task 39.5) returns ``ctx.config`` when set
+    # by the lifespan / session factory; otherwise it falls back to a
+    # safe-defaults snapshot for low-level harness contexts. Tests
+    # monkeypatch this function to override the per-domain
+    # ``AutonomyCategoryFlags`` map.
     #
     # Plan 16 Task 39: the gate is per-domain. The ``domain`` local is
     # already extracted above for the scope-guard check; reuse it here so
@@ -122,24 +123,35 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def _resolve_config(ctx: ToolContext) -> Config:
-    """Snapshot a defaults-backed Config with the session vault_root overlaid.
+    """Resolve the Config the autonomy gate evaluates against.
 
-    Called once per ``brain_apply_patch`` invocation to feed the autonomy
-    gate a Config to evaluate against. Returns a fresh
-    ``Config(vault_path=ctx.vault_root)`` — schema defaults for every field
-    other than ``vault_path``, with no env or config-file read — so the gate
-    runs deterministically under test. This is intentionally NOT a read of
-    ``ctx.config``: ``brain_apply_patch`` runs even in low-level harness
-    contexts that don't supply a Config, and the autonomy gate's defaults
-    (every category opt-in is False) are the safe fallback.
+    Plan 16 Task 39.5 — production wiring sweep. Two tiers:
 
-    Tests (originally added in Plan 07 Task 1; rewritten in Plan 16 Task 39)
-    monkeypatch this function to supply a custom Config with a populated
-    ``autonomous: dict[str, AutonomyCategoryFlags]`` map. Wiring a real
-    config loader that reads ``~/.config/brain/config.json`` and merges env
-    overrides is separate Plan 16+ work — that is a deliberate
-    config-precedence design decision, not a TODO on this function.
+    * **Production path** (``ctx.config is not None``): return ``ctx.config``
+      directly. The brain_api lifespan, brain_mcp ``_build_ctx`` (Plan 12 Task
+      4), and brain_cli ``session_factory`` all thread the live :class:`Config`
+      onto :class:`ToolContext` at session boot, so the HYBRID per-domain x
+      per-category autonomy gate (Plan 16 Task 39) reads the user's actual
+      ``Config.autonomous[domain]`` flags instead of an empty defaults snapshot.
+      Without this, every production ``brain_apply_patch`` evaluated against
+      ``Config(autonomous={})`` → False for everything → no patches ever
+      auto-applied (the original Plan 07 stub was deliberately defaults-only
+      pending a wired config loader; T34/T34.5 + T16-T39.5 wiring delivered
+      that loader, this branch consumes it).
+
+    * **Harness path** (``ctx.config is None``): return
+      ``Config(vault_path=ctx.vault_root)`` — schema defaults for every field
+      other than ``vault_path``, with no env or config-file read — so the
+      low-level harness contexts that construct a bare ``ToolContext`` (e.g.
+      the apply_patch unit tests' ``_mk_real_ctx``) see deterministic
+      "everything stages" behavior. Existing tests that monkeypatch
+      ``_resolve_config`` itself (Plan 16 Task 39 regression tests) override
+      both branches and continue to work unchanged — the monkeypatch swaps
+      this function at the module level, not the body conditional.
     """
+    if ctx.config is not None:
+        cfg: Config = ctx.config
+        return cfg
     return Config(vault_path=ctx.vault_root)
 
 

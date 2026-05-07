@@ -68,6 +68,39 @@ from brain_mcp.tools import set_api_key as _set_api_key_tool
 from brain_mcp.tools import undo_last as _undo_last_tool
 
 # Task 10+ appends more modules here.
+# Plan 16 Task 39.5: lift the per-server-lifetime ToolContext singleton
+# to module level so the ConfigWatcher's ``on_change`` callback (wired in
+# ``__main__._run``) can clear it on a config-file change. Pre-T39.5,
+# ``_cached_ctx`` was a closure local inside :func:`create_server`; the
+# watcher invalidated the loader's cache but ``_build_ctx_lazy`` still
+# returned the cached ToolContext with stale ``.config``. Result: only the
+# FIRST ``_build_ctx_lazy`` call per process benefitted from the watcher.
+#
+# Why module-level (not a lock + closure helper): under CPython's GIL,
+# clearing a module-level attribute is atomic; the worst-case race is one
+# stale read between watcher-clear and the next call's rebuild — and the
+# next call rebuilds, so the user's expectation ("config change triggers a
+# rebuild") holds. A ``threading.Lock`` on the rebuild path was considered
+# and rejected as overkill — the GIL covers the assignment, and the read-
+# old-reference window is unavoidable without making ``_build_ctx_lazy``
+# also acquire the lock (which would serialize every tool-call dispatch).
+_cached_ctx: ToolContext | None = None
+
+
+def _reset_ctx_cache() -> None:
+    """Clear the cached :class:`ToolContext` so the next dispatch rebuilds.
+
+    Plan 16 Task 39.5: invoked by ``__main__._run``'s ConfigWatcher
+    ``on_change`` callback after the loader cache invalidates. Idempotent —
+    multiple consecutive calls (e.g. during rapid config saves) collapse
+    to the same final state. Safe to call from any thread; under the GIL
+    the assignment is atomic and downstream readers see either the prior
+    cached ctx or ``None``, never a torn intermediate.
+    """
+    global _cached_ctx
+    _cached_ctx = None
+
+
 _TOOL_MODULES: list[ToolModule] = [
     _list_domains_tool,
     _get_index_tool,
@@ -144,7 +177,12 @@ def create_server(
     # — read-after-write contract preserved without cache invalidation. This
     # is symmetric to brain_api's ``build_app_context``, where the same Config
     # reference is shared across the app lifespan.
-    _cached_ctx: ToolContext | None = None
+    #
+    # Plan 16 Task 39.5: ``_cached_ctx`` lives at module scope (above) so the
+    # ConfigWatcher's ``on_change`` callback in ``__main__._run`` can clear
+    # it via :func:`_reset_ctx_cache` on a disk-side config change. The
+    # closure inside this factory is intentionally retained for the build
+    # logic; only the storage location moved.
 
     def _build_ctx() -> ToolContext:
         """Return the session's ToolContext, building it lazily on first use.
@@ -165,15 +203,13 @@ def create_server(
         persisted blob — it's the chicken-and-egg field the loader's
         whitelist deliberately excludes.
 
-        The lazy ``_cached_ctx`` singleton means the load happens once per
-        server lifetime — that matches the brain_api eager-on-startup pattern
-        in spirit (one load per process), just deferred to first tool call so
-        a session that never invokes a tool pays nothing. T34.5 routes this
-        call through ``resolve_config`` so any future tool dispatcher that
-        re-reads the config (e.g. to honor a hot-reload event from
-        ``__main__.py``'s ConfigWatcher) hits the same single-process cache.
+        The lazy module-level ``_cached_ctx`` singleton means the load
+        happens once per server lifetime UNLESS the watcher clears it via
+        :func:`_reset_ctx_cache` — Plan 16 T39.5. After a clear, the next
+        call rebuilds with a fresh ``resolve_config`` (which the loader's
+        T34/T35 invalidation now serves from disk).
         """
-        nonlocal _cached_ctx
+        global _cached_ctx
         if _cached_ctx is not None:
             return _cached_ctx
         brain_dir = vault_root / ".brain"

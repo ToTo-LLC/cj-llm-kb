@@ -16,6 +16,7 @@ from pathlib import Path
 import structlog
 from brain_core.config.hot_reload import ConfigWatcher
 from brain_core.config.loader import invalidate_cache_for, resolve_config
+from brain_core.llm.provider import LLMProvider
 from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
@@ -80,11 +81,41 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         env=os.environ,
         cli_overrides={"vault_path": app.state.vault_root},
     )
+
+    # Plan 16 Task 39.5: construct a real :class:`AnthropicProvider` when
+    # an API key is set in the environment. Without this, every brain_api
+    # instance would default to ``FakeLLMProvider`` (the safe-for-tests
+    # fallback baked into ``build_app_context``) and brain_web users would
+    # get scripted fake responses in production.
+    #
+    # ``brain_cli`` reads ``ANTHROPIC_API_KEY`` from the env directly
+    # (see ``brain_cli/session_factory.py::_build_anthropic_provider``);
+    # we follow the same pattern here. ``brain start`` and the install
+    # scripts surface the variable to the launched process; users running
+    # ``uvicorn`` directly export it manually. Tests run without the var
+    # set so they keep getting the FakeLLMProvider via ``llm=None``.
+    #
+    # The provider receives the resolved Config so its T31 per-domain
+    # rate-limit gate (``Config.providers["anthropic"].rate_limit_per_domain``)
+    # fires end-to-end — same wiring shape as
+    # ``session_factory._build_anthropic_provider(config)``.
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    llm: LLMProvider | None
+    if api_key:
+        from brain_core.llm.providers.anthropic import AnthropicProvider
+
+        llm = AnthropicProvider(api_key=api_key, config=config)
+        _lifespan_logger.info("anthropic_provider_initialized")
+    else:
+        llm = None  # build_app_context defaults to FakeLLMProvider
+        _lifespan_logger.info("anthropic_provider_skipped", reason="no_api_key")
+
     ctx = build_app_context(
         vault_root=app.state.vault_root,
         allowed_domains=app.state.allowed_domains,
         token=token,
         config=config,
+        llm=llm,
     )
     app.state.ctx = ctx
 

@@ -25,7 +25,7 @@ import structlog
 from brain_core.config.hot_reload import ConfigWatcher
 from brain_core.config.loader import invalidate_cache_for
 
-from brain_mcp.server import create_server
+from brain_mcp.server import _reset_ctx_cache, create_server
 
 _logger = structlog.get_logger(__name__)
 
@@ -46,12 +46,24 @@ async def _run() -> None:
     # already connected to our stdio at this point and we owe it a
     # response. T34's lazy peek inside ``resolve_config`` is the
     # safety net.
+    #
+    # Plan 16 Task 39.5: chain the loader-cache invalidation with
+    # :func:`_reset_ctx_cache` so the per-server-lifetime ToolContext
+    # singleton is also cleared. Without the second step, the watcher
+    # would invalidate the loader cache but ``_build_ctx`` would still
+    # return the cached ToolContext with stale ``.config`` — the watcher
+    # only benefitted the FIRST tool call per process.
     config_path = vault_root / ".brain" / "config.json"
+
+    def _on_config_change() -> None:
+        invalidate_cache_for(config_path)
+        _reset_ctx_cache()
+
     config_watcher: ConfigWatcher | None = None
     try:
         config_watcher = ConfigWatcher(
             config_path=config_path,
-            on_change=lambda: invalidate_cache_for(config_path),
+            on_change=_on_config_change,
         )
         config_watcher.start()
     except Exception as exc:  # pragma: no cover — defensive

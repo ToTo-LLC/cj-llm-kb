@@ -17,6 +17,13 @@ target domain comes back with ``status="auto_applied"``; an envelope
 whose required flags are missing (or whose category is OTHER) falls
 back to ``status="applied"``. Both paths mutate the vault and record
 an undo entry identically — the distinction is purely for the UI/ledger.
+
+Plan 16 Task 39.5: ``_resolve_config`` now returns ``ctx.config`` when set
+(production path: brain_api / brain_mcp / brain_cli thread Config in via
+T34.5+ wiring). When ``ctx.config is None`` (low-level harness contexts) it
+falls back to the original ``Config(vault_path=ctx.vault_root)`` stub. The
+two ``_resolve_config_*`` unit tests + the end-to-end ``ctx.config``
+auto-apply / staging tests below pin this branch split.
 """
 
 from __future__ import annotations
@@ -68,12 +75,15 @@ def _mk_ctx(vault: Path) -> ToolContext:
     )
 
 
-def _mk_real_ctx(vault: Path) -> ToolContext:
+def _mk_real_ctx(vault: Path, *, config: Config | None = None) -> ToolContext:
     """Construct a ToolContext with real VaultWriter + PendingPatchStore.
 
     Just enough wiring to exercise the auto-apply branch end-to-end — the
     retrieval/llm/cost primitives stay stubbed since apply_patch doesn't
-    touch them.
+    touch them. ``config`` defaults to ``None`` so the legacy stub-fallback
+    path (preserved by Plan 16 Task 39.5) is exercised by tests that
+    monkeypatch ``_resolve_config``. Tests that want the production-shape
+    "ctx.config drives the gate" branch pass an explicit ``Config(...)``.
     """
     brain_dir = vault / ".brain"
     brain_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +98,7 @@ def _mk_real_ctx(vault: Path) -> ToolContext:
         cost_ledger=None,
         rate_limiter=_InfiniteLimiter(),
         undo_log=None,
+        config=config,
     )
 
 
@@ -193,3 +204,134 @@ async def test_auto_apply_skipped_when_member_field_flag_disabled(
     assert result.data is not None
     assert result.data["status"] == "applied"
     assert (vault / "research" / "notes" / "manual.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Plan 16 Task 39.5 — _resolve_config branch split + production-wiring
+# end-to-end pin tests. The function returns ``ctx.config`` when set
+# (production path through brain_api / brain_mcp / brain_cli lifespans);
+# otherwise it falls back to ``Config(vault_path=ctx.vault_root)`` so
+# low-level harness contexts that don't supply a Config keep the original
+# safe-defaults stub behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_config_falls_back_to_defaults_when_ctx_config_none(tmp_path: Path) -> None:
+    """``_resolve_config(ctx)`` with ``ctx.config is None`` returns the stub.
+
+    Pre-T39.5 behavior — preserved for low-level harness contexts. The
+    returned Config has ``vault_path`` overlaid from ``ctx.vault_root`` and
+    schema defaults for everything else (notably ``autonomous == {}``, so
+    the gate is OFF for every domain when no Config is wired).
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    ctx = _mk_real_ctx(vault, config=None)
+    cfg = apply_patch_module._resolve_config(ctx)
+    assert cfg.vault_path == vault
+    assert cfg.autonomous == {}
+
+
+def test_resolve_config_returns_ctx_config_by_identity(tmp_path: Path) -> None:
+    """``_resolve_config(ctx)`` with ``ctx.config`` set returns it BY IDENTITY.
+
+    The autonomy gate must read the user's actual ``Config.autonomous`` map
+    — an upstream defensive ``model_copy`` would silently break the
+    "production lifespan threaded the live Config through" wiring.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    cfg_in = Config(
+        vault_path=vault,
+        autonomous={"research": AutonomyCategoryFlags(new_files=True)},
+    )
+    ctx = _mk_real_ctx(vault, config=cfg_in)
+    cfg_out = apply_patch_module._resolve_config(ctx)
+    # ``is`` not ``==`` is load-bearing: production wiring relies on the
+    # exact same reference flowing through so in-place edits made in other
+    # layers (e.g. config_set / brain_web → save_config) are visible to
+    # subsequent gate evaluations within the same process.
+    assert cfg_out is cfg_in
+
+
+async def test_apply_patch_auto_applies_when_ctx_config_drives_gate(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: ``ctx.config`` populated with the right per-domain flags
+    auto-applies WITHOUT a monkeypatch on ``_resolve_config``.
+
+    Pin test for the wiring half of T39.5. Pre-T39.5, even production callers
+    that threaded Config onto ToolContext would fall through to the stub's
+    empty-autonomous defaults — patches never auto-applied. Post-T39.5, the
+    handler reads ``ctx.config`` directly.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "research").mkdir()
+    cfg = Config(
+        vault_path=vault,
+        autonomous={"research": AutonomyCategoryFlags(new_files=True)},
+    )
+    ctx = _mk_real_ctx(vault, config=cfg)
+    patchset = PatchSet(
+        new_files=[NewFile(path=Path("research/notes/wired.md"), content="# hi\n")],
+        reason="ingest wired",
+        category=PatchCategory.INGEST,
+    )
+    env = ctx.pending_store.put(
+        patchset=patchset,
+        source_thread="t",
+        mode=ChatMode.BRAINSTORM,
+        tool="brain_ingest",
+        target_path=Path("research/notes/wired.md"),
+        reason="ingest wired",
+    )
+
+    result = await handle({"patch_id": env.patch_id}, ctx)
+    assert result.data is not None
+    assert result.data["status"] == "auto_applied"
+    assert (vault / "research" / "notes" / "wired.md").exists()
+
+
+async def test_apply_patch_stages_when_ctx_config_disables_gate(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: ``ctx.config`` with the required member-field flag
+    explicitly ``False`` routes the patch to the standard apply (i.e.
+    ``status="applied"``, NOT ``auto_applied``). Mirrors the
+    monkeypatch-driven cousin above but proves the production-shape wiring.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "research").mkdir()
+    cfg = Config(
+        vault_path=vault,
+        autonomous={
+            "research": AutonomyCategoryFlags(
+                new_files=False,
+                edits=True,
+                index_entries=True,
+                concepts=True,
+                draft=True,
+            )
+        },
+    )
+    ctx = _mk_real_ctx(vault, config=cfg)
+    patchset = PatchSet(
+        new_files=[NewFile(path=Path("research/notes/staged.md"), content="# hi\n")],
+        reason="ingest staged",
+        category=PatchCategory.INGEST,
+    )
+    env = ctx.pending_store.put(
+        patchset=patchset,
+        source_thread="t",
+        mode=ChatMode.BRAINSTORM,
+        tool="brain_ingest",
+        target_path=Path("research/notes/staged.md"),
+        reason="ingest staged",
+    )
+
+    result = await handle({"patch_id": env.patch_id}, ctx)
+    assert result.data is not None
+    assert result.data["status"] == "applied"
+    assert (vault / "research" / "notes" / "staged.md").exists()
