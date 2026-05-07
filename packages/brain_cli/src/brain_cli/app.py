@@ -7,6 +7,7 @@ import typer
 from brain_cli import __version__
 from brain_cli.commands.backup import backup
 from brain_cli.commands.chat import chat
+from brain_cli.commands.config import app as config_app
 from brain_cli.commands.doctor import doctor
 from brain_cli.commands.mcp import mcp_app
 from brain_cli.commands.patches import patches_app
@@ -38,6 +39,10 @@ app.command()(uninstall)
 app.command()(backup)
 app.add_typer(patches_app, name="patches")
 app.add_typer(mcp_app, name="mcp")
+# Plan 16 Task 41 — `brain config migrate <path>` lives under a
+# `config` subcommand group so future config-related ops (`config show`,
+# `config validate`, ...) chain on without growing top-level verbs.
+app.add_typer(config_app, name="config")
 
 
 def _version_callback(value: bool) -> None:
