@@ -87,6 +87,7 @@
 import { type Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
+import { waitForAnimationsToFinish, waitForToolResponse } from "./_helpers";
 
 /** Read the per-run brain_api token from disk. Same pattern as
  *  patch-approval.spec.ts. */
@@ -185,9 +186,14 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /Rename and rewrite references/i }),
     ).toBeVisible();
-    // Wait one extra beat so the modal's autofocus + transition settle
-    // before axe scans (otherwise focus-related rules can flake).
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to reach ``playState=finished`` rather than sleeping a
+    // fixed 200ms. axe-core's color-contrast rule reads computed
+    // opacity; mid-animation the dialog renders through low-opacity
+    // intermediate styles that fail contrast, so the wait is
+    // load-bearing — replacing the timeout with a positive-signal poll
+    // on the Web Animations API.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:rename-domain");
   });
@@ -215,7 +221,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /Delete work\?/i }),
     ).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:delete-domain-typed-confirm");
   });
@@ -261,7 +272,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /Start a fresh thread/i }),
     ).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:fork-thread");
   });
@@ -299,7 +315,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /Restore backup .+\?/i }),
     ).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:backup-restore-typed-confirm");
   });
@@ -331,7 +352,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByTestId("cross-domain-continue-button"),
     ).toBeVisible({ timeout: 5_000 });
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:cross-domain-modal");
   });
@@ -381,7 +407,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("button", { name: /Save .* approve/i }),
     ).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:patch-card-edit-approve");
 
@@ -420,9 +451,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /^Repair config$/i }),
     ).toBeVisible();
-    // Mirror the other dialog cases: settle one extra beat so autofocus +
-    // Radix transition complete before axe scans.
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:repair-config");
 
@@ -457,9 +491,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /^Autonomy mode$/i }),
     ).toBeVisible();
-    // Mirror the other dialog cases: settle one extra beat so autofocus +
-    // Radix transition complete before axe scans.
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:autonomy-modal");
 
@@ -524,9 +561,11 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: targetPath }),
     ).toBeVisible();
-    // Settle one extra beat so the overlay's autofocus + Radix
-    // transition complete before axe scans (mirrors other dialog cases).
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish via the Web Animations API. The file-preview
+    // overlay is a Radix Modal so it carries ``role="dialog"`` once
+    // mounted; the same animation class set as the other modals applies.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "overlay:file-preview");
 
@@ -598,7 +637,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
       "aria-describedby",
       "wikilink-hover-tooltip",
     );
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): the tooltip-visible + role + aria-describedby
+    // assertions above are themselves the deterministic mount signal — the
+    // historical ``waitForTimeout(200)`` was a redundant cushion. No tool
+    // round-trip remains in flight at this point (readNote already
+    // resolved by the time the tooltip's body content renders), so no
+    // ``waitForToolResponse`` substitute is needed.
 
     await checkA11y(page, "tooltip:wikilink-hover");
 
@@ -666,7 +710,12 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(
       page.getByRole("heading", { name: /Start a fresh thread/i }),
     ).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for Radix's fade-in / zoom-in
+    // animations to finish (Web Animations API ``playState=finished``)
+    // instead of sleeping a fixed 200ms. axe-core's color-contrast rule
+    // reads computed opacity, so axe must run AFTER the animation
+    // settles or it can flake on mid-animation low-contrast frames.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:per-message-fork");
 
@@ -709,7 +758,20 @@ test.describe("a11y — populated-state dialog sweep", () => {
     // Popover portals into a sibling DOM node so we can't anchor on a
     // child of the trigger.
     await expect(page.getByText("Visible domains")).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for the popover's open animation to
+    // settle. Radix Popover content uses the same fade-in / zoom-in /
+    // slide-in keyframe set as the Dialog primitive (see
+    // components/ui/popover.tsx: ``data-[state=open]:animate-in
+    // data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95``). axe
+    // can scan transient low-contrast frames mid-animation; waiting on
+    // ``getAnimations({subtree: true}).every(playState=finished)`` is
+    // the deterministic equivalent of the historical 200ms cushion.
+    // Selector targets the popover's open-state content wrapper —
+    // ``aria-haspopup="dialog"`` is a Radix convention for popovers.
+    await waitForAnimationsToFinish(
+      page,
+      '[data-radix-popper-content-wrapper] [data-state="open"]',
+    );
 
     await checkA11y(page, "menu:topbar-scope-picker");
   });
@@ -749,13 +811,44 @@ test.describe("a11y — populated-state dialog sweep", () => {
       "backups",
     ] as const;
 
+    // Plan 16 Task 19 (D19): per-panel deterministic mount signal. Most
+    // settings panels fire ``brain_config_get`` on mount (panel-general,
+    // panel-providers, panel-budget, panel-autonomous, panel-integrations,
+    // panel-domains); panel-backups fires ``brain_backup_list``;
+    // panel-brain-md does no on-mount tool round-trip. The mapping below
+    // tells us which response (if any) marks "panel hydrated" — a strict
+    // upgrade over the historical ``waitForTimeout(200)`` cushion which
+    // would silently pass on slow CI runners that hadn't actually
+    // resolved their fetch yet.
+    const tabFetchMap: Record<(typeof tabs)[number], string | null> = {
+      general: "brain_config_get",
+      providers: "brain_config_get",
+      budget: "brain_config_get",
+      autonomous: "brain_config_get",
+      integrations: "brain_config_get",
+      domains: "brain_config_get",
+      "brain-md": null,
+      backups: "brain_backup_list",
+    };
+
     for (const tab of tabs) {
+      const expectedTool = tabFetchMap[tab];
+      // Race-free: register the response wait BEFORE navigation so the
+      // Promise is in place when the panel mounts and its useEffect
+      // fires the fetch. ``waitForLoadState("networkidle")`` is a fine
+      // backstop for the no-fetch case (panel-brain-md) and for the
+      // post-fetch React reconciliation tail.
+      const fetchWait = expectedTool
+        ? waitForToolResponse(page, expectedTool)
+        : Promise.resolve();
       await page.goto(`/settings/${tab}/`);
+      await fetchWait;
       await page.waitForLoadState("networkidle");
-      // Each panel renders an h2 within the content area; wait one
-      // extra beat so any lazy fetch (configGet, brainBackupList,
-      // etc.) settles before axe scans.
-      await page.waitForTimeout(200);
+      // h2 visibility is the final deterministic "tree hydrated" signal —
+      // every panel renders at least one h2 within ``<main>``.
+      await expect(page.locator("main h2").first()).toBeVisible({
+        timeout: 5_000,
+      });
       await checkA11y(page, `menu:settings-tab:${tab}`);
     }
   });
@@ -788,7 +881,10 @@ test.describe("a11y — populated-state dialog sweep", () => {
     // is the stable mount marker.
     const dialog = page.getByRole("dialog", { name: "Search the vault" });
     await expect(dialog).toBeVisible();
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for the dialog's open animation to
+    // settle (same fade-in / zoom-in keyframes as the other modals).
+    // Replaces the historical ``waitForTimeout(200)`` animation beat.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "overlay:search");
 
@@ -842,7 +938,15 @@ test.describe("a11y — populated-state dialog sweep", () => {
     // (see drop-overlay.tsx docstring).
     const overlay = page.getByTestId("drop-overlay");
     await expect(overlay).toHaveAttribute("aria-hidden", "false");
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): wait for the CSS transition-opacity to
+    // settle. ``drop-overlay.tsx`` uses ``transition-opacity duration-150``
+    // to fade the panel in; mid-transition opacity values cause axe-core
+    // to compute color contrast against a partially-transparent surface
+    // (the overlay stacks on the chat scroller's content, so a 50%-faded
+    // panel reads as a blended fg/bg that fails 4.5:1). CSS transitions
+    // are reported by ``getAnimations()`` on modern Chromium so the same
+    // helper that gates Radix dialog animations applies here.
+    await waitForAnimationsToFinish(page, '[data-testid="drop-overlay"]');
 
     await checkA11y(page, "overlay:drop-zone");
 
@@ -887,7 +991,9 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(page.getByText("Backup created.")).toBeVisible({
       timeout: 15_000,
     });
-    await page.waitForTimeout(200);
+    // Plan 16 Task 19 (D19): the toast-text-visible assertion above is
+    // itself the deterministic mount signal — the historical
+    // ``waitForTimeout(200)`` was a redundant cushion.
 
     await checkA11y(page, "overlay:toast-notifications");
 
