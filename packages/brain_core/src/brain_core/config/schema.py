@@ -90,6 +90,44 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=1.5)
 
 
+class BudgetOverride(BaseModel):
+    """Per-domain budget cap overrides (Plan 16 Task 26 / D26 step 1 of 4).
+
+    Schema-only landing: the field exists and round-trips, but no runtime
+    enforcement is wired yet (Task 28 lands enforcement; Task 29 lands the
+    Settings UI). Each cap is independent — set one, both, or neither.
+
+    A ``None`` cap means "no domain-level override; fall back to the global
+    :class:`BudgetConfig` cap". A positive float overrides the global cap
+    for spend attributed to this domain. Zero and negative caps are
+    rejected because there's no plausible user intent for them: the way
+    to disable a cap is to pass ``None`` (or omit the field), and a
+    negative cap would either silently match no spend or, worse, break
+    enforcement arithmetic downstream once Task 28 lands.
+
+    ``extra="forbid"`` matches every other config sub-model so a typo in
+    ``config.json`` surfaces at load time instead of being silently
+    dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    monthly_cap_usd: float | None = None
+    daily_cap_usd: float | None = None
+
+    @field_validator("monthly_cap_usd", "daily_cap_usd")
+    @classmethod
+    def _validate_positive(cls, v: float | None) -> float | None:
+        # ``None`` means "no override" and is the documented way to clear
+        # a cap; only reject zero / negative numerics. Pydantic v2 dispatches
+        # ``None`` to validators by default for ``Optional`` fields, hence
+        # the explicit guard.
+        if v is not None and v <= 0:
+            raise ValueError(
+                "budget cap must be positive (use None / omit to disable)"
+            )
+        return v
+
+
 class BudgetConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     daily_usd: float = Field(default=5.0, ge=0.0)
@@ -104,6 +142,14 @@ class BudgetConfig(BaseModel):
     # ``brain_config_set`` allowlist path so a UI surface can wipe them too.
     override_until: datetime | None = None
     override_delta_usd: float = Field(default=0.0, ge=0.0)
+    # Plan 16 Task 26 / D26 step 1 of 4: per-domain cap overrides. Keys are
+    # domain slugs; values are :class:`BudgetOverride`. Default ``{}`` so
+    # legacy configs that lack the field still load (backward compat).
+    # No cross-field "key must be in Config.domains" check yet — that
+    # arrives with Task 28 alongside enforcement; landing it now would
+    # require the validator to reach across into the parent ``Config``,
+    # which Pydantic v2 doesn't expose at the sub-model layer cleanly.
+    per_domain: dict[str, BudgetOverride] = Field(default_factory=dict)
 
 
 class URLHandlerConfig(BaseModel):
