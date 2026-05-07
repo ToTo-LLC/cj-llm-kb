@@ -8,10 +8,14 @@ etc.) lands in one place.
 
 Plan 12 Task 2 deleted the sibling ``resolve_autonomous_mode`` resolver:
 Plan 11 lesson 351 confirmed it shipped without a consumer (autonomy is
-governed by per-category flags on :class:`AutonomousConfig`, not the
-coarse ``Config.autonomous_mode`` bool). D1 chose DELETE over WIRE; if a
-future plan needs per-domain autonomy it should reintroduce the seam
-alongside its first real consumer rather than land speculative dead code.
+governed by per-category flags on
+:class:`brain_core.config.schema.AutonomyCategoryFlags` keyed by domain
+under ``Config.autonomous: dict[str, AutonomyCategoryFlags]`` — Plan 16
+Task 38 reshape; pre-T38 this was a flat ``AutonomousConfig`` BaseModel),
+not the coarse ``Config.autonomous_mode`` bool. D1 chose DELETE over
+WIRE; if a future plan needs per-domain autonomy resolution it should
+reintroduce the seam alongside its first real consumer rather than land
+speculative dead code.
 
 Chicken-and-egg around classify (documented per-call site too):
 ``classify_model`` is a per-domain overridable field, but classification

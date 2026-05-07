@@ -81,17 +81,19 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         "active_domain",
         "budget.daily_usd",
         "log_llm_payloads",
-        # Plan 07 Task 1: per-category autonomy flags. Each maps 1:1 to a
-        # field on ``AutonomousConfig`` and a value in ``PatchCategory``.
-        # Setting any of these to True opts that category into auto-apply
-        # via ``should_auto_apply``. Persisted to ``<vault>/.brain/config.json``
-        # via the ``persist_config_or_revert`` path in :func:`handle` below
-        # (Plan 11 Task 4 wired the disk round-trip).
-        "autonomous.ingest",
-        "autonomous.entities",
-        "autonomous.concepts",
-        "autonomous.index_rewrites",
-        "autonomous.draft",
+        # Plan 07 Task 1 (DROPPED in Plan 16 Task 39): the legacy flat
+        # ``autonomous.<flag>`` keys (``autonomous.ingest`` /
+        # ``autonomous.entities`` / ``autonomous.concepts`` /
+        # ``autonomous.index_rewrites`` / ``autonomous.draft``) are GONE
+        # from the static allowlist because Plan 16 Task 38 reshaped
+        # ``Config.autonomous`` from a flat ``AutonomousConfig`` BaseModel
+        # to ``dict[str, AutonomyCategoryFlags]`` — the dotted keys no
+        # longer resolve against pydantic ``model_fields`` (the walker
+        # can't descend through a ``dict[...]`` annotation). Plan 16 Task 40
+        # is responsible for landing the replacement
+        # ``autonomous.<slug>.<field>`` wildcard pattern alongside the
+        # Settings UI panel; this comment is the marker so a reviewer
+        # tracing wire-shape history can find the breadcrumb.
         # Plan 07 Task 2: per-mode chat-model overrides. Each maps to the
         # matching ``ChatSessionConfig.{mode}_model`` field; None falls
         # back to the global ``llm.model`` default. These are session-scoped

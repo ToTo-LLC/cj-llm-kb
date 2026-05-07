@@ -9,13 +9,14 @@ brain_api's global handler converts to HTTP 429. brain_mcp's
 through the shim so the transport wrapper + domain-scope + writer apply are
 still exhaustively tested.
 
-Plan 07 Task 1: autonomy-gate regressions pin that a staged envelope whose
-``patchset.category`` matches an enabled flag in
-:class:`~brain_core.config.schema.AutonomousConfig` comes back with
-``status="auto_applied"``; an envelope whose flag is disabled (or whose
-category is OTHER) falls back to ``status="applied"``. Both paths mutate
-the vault and record an undo entry identically — the distinction is purely
-for the UI/ledger.
+Plan 07 Task 1 / Plan 16 Task 39: autonomy-gate regressions pin that a
+staged envelope whose populated member fields and category are fully
+covered by flags in
+``Config.autonomous[domain]: AutonomyCategoryFlags`` for the patch's
+target domain comes back with ``status="auto_applied"``; an envelope
+whose required flags are missing (or whose category is OTHER) falls
+back to ``status="applied"``. Both paths mutate the vault and record
+an undo entry identically — the distinction is purely for the UI/ledger.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pathlib import Path
 import pytest
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.types import ChatMode
-from brain_core.config.schema import Config
+from brain_core.config.schema import AutonomyCategoryFlags, Config
 from brain_core.rate_limit import RateLimitError
 from brain_core.state.db import StateDB
 from brain_core.tools import apply_patch as apply_patch_module
@@ -101,24 +102,13 @@ async def test_rate_limit_refusal_propagates(tmp_path: Path) -> None:
     assert exc_info.value.retry_after_seconds == 60
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Plan 16 Task 38 reshaped Config.autonomous to dict[str, "
-        "AutonomyCategoryFlags] and deleted AutonomousConfig; T39 "
-        "rewrites should_auto_apply to consume the new per-domain x "
-        "per-category shape (with a domain= kwarg on the gate). Until "
-        "T39 lands, the legacy AutonomousConfig(ingest=True) fixture "
-        "below cannot construct."
-    ),
-    strict=True,
-    raises=Exception,
-)
-async def test_auto_apply_fires_when_category_flag_enabled(
+async def test_auto_apply_fires_when_member_field_flag_enabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PatchCategory.INGEST + autonomous.ingest=True → status="auto_applied"."""
-    from brain_core.config.schema import AutonomousConfig  # type: ignore[attr-defined]
-
+    """INGEST patch + ``research`` flags include ``new_files=True`` →
+    ``status="auto_applied"``. Plan 16 Task 39 HYBRID: INGEST has no
+    category-level flag requirement, so member-field coverage alone
+    drives auto-apply."""
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "research").mkdir()
@@ -137,9 +127,14 @@ async def test_auto_apply_fires_when_category_flag_enabled(
         reason="ingest auto",
     )
 
-    # Override _resolve_config so the autonomy gate sees ingest=True.
+    # Override _resolve_config so the autonomy gate sees the per-domain
+    # entry. Under HYBRID, an INGEST patch with new_files populated needs
+    # ``flags.new_files=True`` for the target domain (here ``research``).
     def _cfg(_ctx: ToolContext) -> Config:
-        return Config(vault_path=vault, autonomous=AutonomousConfig(ingest=True))
+        return Config(
+            vault_path=vault,
+            autonomous={"research": AutonomyCategoryFlags(new_files=True)},
+        )
 
     monkeypatch.setattr(apply_patch_module, "_resolve_config", _cfg)
 
@@ -150,23 +145,13 @@ async def test_auto_apply_fires_when_category_flag_enabled(
     assert (vault / "research" / "notes" / "auto.md").exists()
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Plan 16 Task 38 reshaped Config.autonomous to dict[str, "
-        "AutonomyCategoryFlags] and deleted AutonomousConfig; T39 "
-        "rewrites should_auto_apply to consume the new per-domain x "
-        "per-category shape. Until T39 lands, the legacy "
-        "AutonomousConfig(ingest=False) fixture below cannot construct."
-    ),
-    strict=True,
-    raises=Exception,
-)
-async def test_auto_apply_skipped_when_category_flag_disabled(
+async def test_auto_apply_skipped_when_member_field_flag_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PatchCategory.INGEST + autonomous.ingest=False → status="applied" (fallback path)."""
-    from brain_core.config.schema import AutonomousConfig  # type: ignore[attr-defined]
-
+    """INGEST patch + per-domain flags with ``new_files=False`` →
+    ``status="applied"`` (fallback path through the standard apply).
+    Plan 16 Task 39 HYBRID intersection: any False flag on a populated
+    member field stages the whole patch."""
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "research").mkdir()
@@ -185,10 +170,22 @@ async def test_auto_apply_skipped_when_category_flag_disabled(
         reason="ingest manual",
     )
 
-    # Explicitly disabled — plus an OTHER-category flag that should not
-    # cross-enable.
+    # Per-domain entry exists but the required member-field flag is
+    # explicitly False — the gate stages the patch. Other flags being
+    # True must NOT cross-enable.
     def _cfg(_ctx: ToolContext) -> Config:
-        return Config(vault_path=vault, autonomous=AutonomousConfig(ingest=False))
+        return Config(
+            vault_path=vault,
+            autonomous={
+                "research": AutonomyCategoryFlags(
+                    new_files=False,
+                    edits=True,
+                    index_entries=True,
+                    concepts=True,
+                    draft=True,
+                )
+            },
+        )
 
     monkeypatch.setattr(apply_patch_module, "_resolve_config", _cfg)
 

@@ -17,14 +17,19 @@ Rate limiter consumes from the ``patches`` bucket (cost=1) BEFORE any other
 work so a refused call is cheap and deterministic (matches the pattern in
 ``brain_propose_note``).
 
-Plan 07 Task 1: the autonomy gate (:func:`brain_core.autonomy.should_auto_apply`)
-is consulted AFTER the scope check. A patch whose category is opted into
-auto-apply in :class:`~brain_core.config.schema.AutonomousConfig` returns
-``status="auto_applied"`` instead of ``"applied"`` so the UI can distinguish
-policy-applied patches from human-approved ones. Both paths call
-``writer.apply`` and ``mark_applied`` identically and record to the undo log,
-so ``brain_undo_last`` can revert either. ``PatchCategory.OTHER`` — the
-default for any PatchSet that doesn't explicitly opt in — never auto-applies.
+Plan 07 Task 1 / Plan 16 Task 39: the autonomy gate
+(:func:`brain_core.autonomy.should_auto_apply`) is consulted AFTER the scope
+check. A patch whose populated member fields and category are fully covered
+by enabled flags in :class:`~brain_core.config.schema.AutonomyCategoryFlags`
+for the patch's target domain returns ``status="auto_applied"`` instead of
+``"applied"`` so the UI can distinguish policy-applied patches from
+human-approved ones. The gate is per-domain: ``Config.autonomous`` is a
+``dict[str, AutonomyCategoryFlags]`` keyed by domain slug, and the same
+``domain = target_parts[0]`` local that drove the scope check feeds the gate.
+Both paths call ``writer.apply`` and ``mark_applied`` identically and record
+to the undo log, so ``brain_undo_last`` can revert either.
+``PatchCategory.OTHER`` — the default for any PatchSet that doesn't
+explicitly opt in — never auto-applies.
 """
 
 from __future__ import annotations
@@ -82,9 +87,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # session has no in-flight Config object; ``_resolve_config`` snapshots
     # defaults and overlays the session vault_root (mirrors
     # ``brain_config_get``). ``_resolve_config`` is also the extension point
-    # for tests to monkeypatch a specific ``AutonomousConfig``.
+    # for tests to monkeypatch a specific ``AutonomyCategoryFlags`` map.
+    #
+    # Plan 16 Task 39: the gate is per-domain. The ``domain`` local is
+    # already extracted above for the scope-guard check; reuse it here so
+    # the gate evaluates against ``config.autonomous[domain]`` rather than
+    # a global flat map.
     config = _resolve_config(ctx)
-    auto_applied = should_auto_apply(envelope.patchset, config)
+    auto_applied = should_auto_apply(envelope.patchset, config, domain=domain)
 
     # Staging tools (brain_propose_note) record vault-relative paths in the
     # envelope for portability. Plan 04 Task 25 fix: VaultWriter.apply now
@@ -123,11 +133,12 @@ def _resolve_config(ctx: ToolContext) -> Config:
     contexts that don't supply a Config, and the autonomy gate's defaults
     (every category opt-in is False) are the safe fallback.
 
-    Tests (originally added in Plan 07 Task 1) monkeypatch this function to
-    supply a custom :class:`AutonomousConfig`. Wiring a real config loader
-    that reads ``~/.config/brain/config.json`` and merges env overrides is
-    separate Plan 16+ work — that is a deliberate config-precedence design
-    decision, not a TODO on this function.
+    Tests (originally added in Plan 07 Task 1; rewritten in Plan 16 Task 39)
+    monkeypatch this function to supply a custom Config with a populated
+    ``autonomous: dict[str, AutonomyCategoryFlags]`` map. Wiring a real
+    config loader that reads ``~/.config/brain/config.json`` and merges env
+    overrides is separate Plan 16+ work — that is a deliberate
+    config-precedence design decision, not a TODO on this function.
     """
     return Config(vault_path=ctx.vault_root)
 
