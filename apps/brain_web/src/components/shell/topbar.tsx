@@ -324,11 +324,13 @@ export function Topbar() {
                           though the click handler bails. */}
                       {isDefault ? (
                         <span
-                          aria-hidden
                           className="text-[var(--brand-ember)]"
                           title="Default domain"
                         >
-                          <Star className="h-3.5 w-3.5 fill-current" />
+                          <Star
+                            aria-hidden
+                            className="h-3.5 w-3.5 fill-current"
+                          />
                           <span className="sr-only">Default</span>
                         </span>
                       ) : (
