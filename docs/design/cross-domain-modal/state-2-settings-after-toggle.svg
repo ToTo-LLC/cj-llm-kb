@@ -159,7 +159,7 @@
 
       <!-- Helper text (OFF copy) -->
       <text x="66" y="80" font-size="12" fill="#6F6E68">
-        <tspan>The confirmation is off. Mixed-scope chats including private domains will</tspan>
+        <tspan>The confirmation is off. Mixed-scope chats including Privacy-railed domains will</tspan>
       </text>
       <text x="66" y="96" font-size="12" fill="#6F6E68">
         <tspan>start without a prompt. Turn this back on if you want the check back.</tspan>

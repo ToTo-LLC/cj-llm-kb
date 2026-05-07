@@ -154,7 +154,7 @@
     <g transform="translate(28,28)">
       <text x="0" y="0" class="micro" fill="#6F6E68">CONFIRM SCOPE</text>
       <text x="0" y="28" font-size="20" fill="#111" font-weight="600" letter-spacing="-0.01em">
-        Including a private domain in this chat
+        Including a Privacy-railed domain in this chat
       </text>
     </g>
 
@@ -165,7 +165,7 @@
         <tspan>You picked </tspan><tspan font-weight="600">personal</tspan><tspan> alongside </tspan><tspan font-weight="600">research</tspan><tspan> for this</tspan>
       </text>
       <text x="0" y="20">
-        <tspan>chat&#8217;s scope. </tspan><tspan font-weight="600">personal</tspan><tspan> is kept private by default — notes</tspan>
+        <tspan>chat&#8217;s scope. </tspan><tspan font-weight="600">personal</tspan><tspan> is Privacy-railed — notes</tspan>
       </text>
       <text x="0" y="40">
         <tspan>there only show up when you explicitly include it, like you</tspan>
@@ -182,11 +182,13 @@
         <tspan>adjust the scope. Otherwise continue, and brain will treat</tspan>
       </text>
       <text x="0" y="138">
-        <tspan>the included private notes as in-scope for this chat. See </tspan>
-        <tspan font-weight="600" fill="#C64B2E" text-decoration="underline">BRAIN.md</tspan>
+        <tspan>the included Privacy-railed notes as in-scope for this</tspan>
       </text>
       <text x="0" y="158">
-        <tspan>for how scope and privacy work in your vault.</tspan>
+        <tspan>chat. See </tspan><tspan font-weight="600" fill="#C64B2E" text-decoration="underline">BRAIN.md</tspan><tspan> for how scope and privacy work in</tspan>
+      </text>
+      <text x="0" y="178">
+        <tspan>your vault.</tspan>
       </text>
     </g>
 
