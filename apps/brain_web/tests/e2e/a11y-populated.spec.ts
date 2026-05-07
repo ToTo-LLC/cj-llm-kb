@@ -4,6 +4,23 @@
  * Plan 16 Task 11 — populated-state additions (D11): file-preview
  * overlay, WikilinkHover tooltip, per-message Fork dialog.
  *
+ * **State-cleanup contract (Plan 16 Task 20 / D20).** Every test in this
+ * file MUST leave the vault in the same state it found it. Playwright runs
+ * ``workers: 1`` + ``fullyParallel: false`` against a single shared
+ * ``BRAIN_VAULT_ROOT`` (see ``playwright.config.ts``); any seeded patch,
+ * created backup, persisted thread, or hand-written file would otherwise
+ * leak into sibling specs (``a11y.spec.ts``, ``patch-approval.spec.ts``,
+ * ``persistence.spec.ts``, etc.) that observe the vault inventory.
+ *
+ * Convention: state-mutating tests register a cleanup callback via
+ * ``registerCleanup(...)`` immediately after the mutation succeeds.
+ * The suite-level ``test.afterEach`` drains the queue in reverse order
+ * (LIFO) and runs each callback even if the test body's assertions
+ * failed — this is the load-bearing property the historical
+ * "cleanup-at-end-of-test-body" idiom (e.g., the original Case 6
+ * ``brain_reject_patch`` tail) silently failed to provide. Non-mutating
+ * tests register nothing and pay zero cost.
+ *
  * The empty-state ``a11y.spec.ts`` only loads top-level routes against a
  * vault seeded with BRAIN.md and a welcome note; axe-core only flags
  * what's actually rendered, so dialogs (which mount conditionally) never
@@ -160,8 +177,35 @@ async function seedScopeInitialized(page: Page, vaultPath: string): Promise<void
 }
 
 test.describe("a11y — populated-state dialog sweep", () => {
+  // Plan 16 Task 20 (D20): per-test cleanup queue. Mutating tests push a
+  // callback here immediately after the mutation succeeds; afterEach
+  // drains it in LIFO order so cleanup runs even if a later assertion
+  // throws. The list is reset per test by afterEach itself; beforeEach
+  // does not need to clear it because afterEach has the last word.
+  let cleanupTasks: Array<() => Promise<void>> = [];
+  const registerCleanup = (fn: () => Promise<void>): void => {
+    cleanupTasks.push(fn);
+  };
+
   test.beforeEach(async ({ seedPath }) => {
     await seedBrainMd(seedPath);
+  });
+
+  test.afterEach(async () => {
+    // LIFO drain — cleans up the last mutation first. Errors are caught
+    // and logged so one cleanup failure doesn't mask others or mark the
+    // test as failed (the test's own assertions are the source of
+    // truth; cleanup is best-effort housekeeping).
+    const tasks = cleanupTasks.slice().reverse();
+    cleanupTasks = [];
+    for (const task of tasks) {
+      try {
+        await task();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[a11y-populated cleanup] task failed:", err);
+      }
+    }
   });
 
   // ----------------------------------------------------------------
@@ -239,7 +283,11 @@ test.describe("a11y — populated-state dialog sweep", () => {
   // populated by the /chat/<id> URL effect, so the Fork button is
   // enabled even before the FakeLLM round-trip completes.
   // ----------------------------------------------------------------
-  test("fork-thread dialog has 0 violations", async ({ page, checkA11y }) => {
+  test("fork-thread dialog has 0 violations", async ({
+    page,
+    seedPath,
+    checkA11y,
+  }) => {
     const threadId = `e2e-a11y-fork-${Date.now()}`;
     await page.goto(`/chat/${threadId}`);
     await page.waitForLoadState("networkidle");
@@ -256,6 +304,21 @@ test.describe("a11y — populated-state dialog sweep", () => {
       "Hello from FakeLLM",
       { timeout: 20_000 },
     );
+    // Plan 16 Task 20 (D20): the chat send persists ``<active-domain>/chats/
+    // <threadId>.md`` to the shared vault. Register cleanup now (before
+    // the dialog open, so any later assertion failure still runs it).
+    // ``brain_core.chat.persistence`` writes under ``config.domains[0]``;
+    // the e2e backend's default scope places this under ``research/chats/``
+    // (see persistence.write -> thread_path). Glob across the seeded
+    // domain dirs to be robust to scope drift.
+    registerCleanup(async () => {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      for (const domain of ["research", "work", "personal", "writing"]) {
+        const file = path.join(seedPath, domain, "chats", `${threadId}.md`);
+        await fs.rm(file, { force: true });
+      }
+    });
 
     // Now open the Fork dialog from the sub-header. Plan 16 Task 11 set
     // the per-message Fork button's aria-label to "Fork from this
@@ -300,6 +363,22 @@ test.describe("a11y — populated-state dialog sweep", () => {
     })) as { data?: { backup_id?: string } };
     const backupId = created.data?.backup_id;
     expect(backupId).toBeTruthy();
+    // Plan 16 Task 20 (D20): there's no ``brain_backup_delete`` tool, so
+    // we rm the tarball directly. ``brain_core.backup`` writes to
+    // ``<vault>/.brain/backups/<backup_id>.tar.gz``; the listing tool
+    // skips malformed/missing files so removing the file is enough — no
+    // SQLite row to clean.
+    registerCleanup(async () => {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const tarball = path.join(
+        seedPath,
+        ".brain",
+        "backups",
+        `${backupId}.tar.gz`,
+      );
+      await fs.rm(tarball, { force: true });
+    });
 
     await page.goto("/settings/backups/");
     await page.waitForLoadState("networkidle");
@@ -386,6 +465,21 @@ test.describe("a11y — populated-state dialog sweep", () => {
     })) as { data?: { patch_id?: string } };
     const patchId = seed.data?.patch_id;
     expect(patchId).toBeTruthy();
+    // Plan 16 Task 20 (D20): reject the seeded patch so it doesn't
+    // pollute /pending for the empty-state ``a11y.spec.ts`` cases (which
+    // run after this file alphabetically and would otherwise see leftover
+    // patch-card markup with the nested-interactive Approve/Edit/Reject
+    // buttons). Plan 14 D9 task review noted: "Anti-regression. Confirm
+    // all existing a11y.spec.ts cases still pass (no shared-state
+    // pollution)." Lifting this into the afterEach queue means the
+    // cleanup runs even if a later assertion fails — the original
+    // end-of-body call had a silent leak path.
+    registerCleanup(async () => {
+      await callTool(page, token, "brain_reject_patch", {
+        patch_id: patchId,
+        reason: "a11y populated-state spec cleanup",
+      });
+    });
 
     await page.goto("/pending");
     await page.waitForLoadState("networkidle");
@@ -415,17 +509,8 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await waitForAnimationsToFinish(page, "[role=dialog]");
 
     await checkA11y(page, "dialog:patch-card-edit-approve");
-
-    // Cleanup: reject the seeded patch so it doesn't pollute /pending
-    // for the empty-state ``a11y.spec.ts`` cases (which run after this
-    // file alphabetically and would otherwise see leftover patch-card
-    // markup with the nested-interactive Approve/Edit/Reject buttons).
-    // Plan 14 D9 task review: "Anti-regression. Confirm all existing
-    // a11y.spec.ts cases still pass (no shared-state pollution)."
-    await callTool(page, token, "brain_reject_patch", {
-      patch_id: patchId,
-      reason: "a11y populated-state spec cleanup",
-    });
+    // Cleanup is registered above, before the dialog open — so it runs
+    // even if a checkA11y assertion fails.
   });
 
   // ----------------------------------------------------------------
@@ -543,6 +628,11 @@ test.describe("a11y — populated-state dialog sweep", () => {
       `# A11y file-preview overlay\n\nSeeded at ${stamp}.\n`,
       "utf-8",
     );
+    // Plan 16 Task 20 (D20): rm the seeded file so /browse listings in
+    // sibling specs don't see it (FileTree walks the disk on mount).
+    registerCleanup(async () => {
+      await fs.rm(onDisk, { force: true });
+    });
 
     await page.goto("/browse/");
     await page.waitForLoadState("networkidle");
@@ -602,18 +692,26 @@ test.describe("a11y — populated-state dialog sweep", () => {
     const notesDir = path.join(seedPath, "research", "notes");
 
     await fs.mkdir(notesDir, { recursive: true });
+    const targetOnDisk = path.join(notesDir, `${targetSlug}.md`);
+    const sourceOnDisk = path.join(notesDir, `${sourceSlug}.md`);
     // Target note (so the wikilink resolves to a real file).
     await fs.writeFile(
-      path.join(notesDir, `${targetSlug}.md`),
+      targetOnDisk,
       `# Target\n\nA short body.\n`,
       "utf-8",
     );
     // Source note contains a wikilink to the target.
     await fs.writeFile(
-      path.join(notesDir, `${sourceSlug}.md`),
+      sourceOnDisk,
       `# Source\n\nLink to [[${targetSlug}]] in this note.\n`,
       "utf-8",
     );
+    // Plan 16 Task 20 (D20): rm both seeded notes so sibling specs
+    // don't see them on /browse.
+    registerCleanup(async () => {
+      await fs.rm(sourceOnDisk, { force: true });
+      await fs.rm(targetOnDisk, { force: true });
+    });
 
     await page.goto(`/browse/${sourcePath}`);
     await page.waitForLoadState("networkidle");
@@ -672,6 +770,7 @@ test.describe("a11y — populated-state dialog sweep", () => {
   // ----------------------------------------------------------------
   test("per-message Fork dialog has 0 violations", async ({
     page,
+    seedPath,
     checkA11y,
   }) => {
     const threadId = `e2e-a11y-msg-fork-${Date.now()}`;
@@ -688,6 +787,17 @@ test.describe("a11y — populated-state dialog sweep", () => {
       "Hello from FakeLLM",
       { timeout: 20_000 },
     );
+    // Plan 16 Task 20 (D20): same persisted-thread cleanup as Case 3.
+    // The send writes ``<active-domain>/chats/<threadId>.md``; rm it
+    // across the candidate domain dirs.
+    registerCleanup(async () => {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      for (const domain of ["research", "work", "personal", "writing"]) {
+        const file = path.join(seedPath, domain, "chats", `${threadId}.md`);
+        await fs.rm(file, { force: true });
+      }
+    });
 
     // Hover the assistant bubble to surface the action row (the row
     // uses ``opacity-0`` + ``group-hover:opacity-100`` — also visible
@@ -981,7 +1091,30 @@ test.describe("a11y — populated-state dialog sweep", () => {
   // success toast via ``pushToast()``. Production-shape: same code
   // path any toast in the app goes through.
   // ----------------------------------------------------------------
-  test("toast notifications have 0 violations", async ({ page, checkA11y }) => {
+  test("toast notifications have 0 violations", async ({
+    page,
+    seedPath,
+    checkA11y,
+  }) => {
+    // Plan 16 Task 20 (D20): snapshot the backups directory before the
+    // click so we can rm only the tarballs created by THIS test (rather
+    // than nuking the whole directory and breaking other suites that
+    // may have seeded their own).
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const backupsDir = path.join(seedPath, ".brain", "backups");
+    const before = new Set<string>(
+      await fs.readdir(backupsDir).catch(() => [] as string[]),
+    );
+    registerCleanup(async () => {
+      const after = await fs.readdir(backupsDir).catch(() => [] as string[]);
+      for (const name of after) {
+        if (!before.has(name)) {
+          await fs.rm(path.join(backupsDir, name), { force: true });
+        }
+      }
+    });
+
     await page.goto("/settings/backups/");
     await page.waitForLoadState("networkidle");
 

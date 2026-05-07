@@ -114,7 +114,7 @@ export function PatchCard({
           title="Proposed just now"
           className={cn(
             "patch-bell absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full",
-            "bg-[var(--accent)] text-[10px] font-semibold text-[var(--bg)]",
+            "bg-[var(--accent)] text-[10px] font-semibold text-[var(--accent-foreground)]",
             "animate-pulse",
           )}
         >
