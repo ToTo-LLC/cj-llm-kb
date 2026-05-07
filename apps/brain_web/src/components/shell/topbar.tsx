@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as React from "react";
-import { Sun, Moon, PanelRight, Settings as SettingsIcon } from "lucide-react";
+import { Sun, Moon, PanelRight, Settings as SettingsIcon, Star } from "lucide-react";
 
 import {
   useAppStore,
@@ -11,6 +11,9 @@ import {
   type ChatMode,
 } from "@/lib/state/app-store";
 import { useDomains } from "@/lib/hooks/use-domains";
+import { useDomainsStore } from "@/lib/state/domains-store";
+import { useSystemStore } from "@/lib/state/system-store";
+import { setActiveDomain } from "@/lib/api/tools";
 import { useBootstrap } from "@/lib/bootstrap/bootstrap-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -174,6 +177,43 @@ export function Topbar() {
     else setScope([...scope, slug]);
   }
 
+  // Plan 16 Task 42 — "Set as default" per-row action.
+  //
+  // Mirrors the optimistic-update + revert-on-failure shape from
+  // ``settings/panel-domains-active.tsx``: the topbar surfaces the
+  // same ``Config.active_domain`` mutation, just from the chrome
+  // instead of the Settings panel. Calling
+  // ``useDomainsStore.setActiveDomainOptimistic`` ensures peer
+  // consumers (the Settings dropdown, future surfaces) re-render
+  // immediately rather than waiting for a ``refresh()``.
+  //
+  // Errors revert to the previous slug + emit a danger toast. We
+  // don't classify the error here (validator vs. transport) the
+  // way panel-domains-active does — the topbar's available
+  // domains are exactly what the dropdown shows, so a 400 from
+  // the cross-field validator is a near-impossible cross-tab race
+  // and the simpler copy ("Could not set default") suffices.
+  async function handleSetDefault(slug: string): Promise<void> {
+    if (slug === activeDomain) return;
+    const previous = activeDomain;
+    useDomainsStore.getState().setActiveDomainOptimistic(slug);
+    try {
+      await setActiveDomain(slug);
+      useSystemStore.getState().pushToast({
+        lead: "Default updated.",
+        msg: `Default domain set to ${slug}.`,
+        variant: "success",
+      });
+    } catch {
+      useDomainsStore.getState().setActiveDomainOptimistic(previous);
+      useSystemStore.getState().pushToast({
+        lead: "Couldn't update default.",
+        msg: `Could not set default to ${slug}. Try again.`,
+        variant: "danger",
+      });
+    }
+  }
+
   return (
     <header
       className="topbar flex items-center gap-3 border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 text-[var(--text)]"
@@ -256,9 +296,10 @@ export function Topbar() {
             <ul className="flex flex-col">
               {liveDomains.map((d) => {
                 const checked = scope.includes(d.slug);
+                const isDefault = d.slug === activeDomain;
                 return (
                   <li key={d.slug}>
-                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-[var(--surface-3)]">
+                    <label className="group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-[var(--surface-3)]">
                       <Checkbox
                         aria-label={d.label}
                         checked={checked}
@@ -269,7 +310,43 @@ export function Topbar() {
                         className="h-2 w-2 rounded-full"
                         style={{ background: d.accent }}
                       />
-                      <span>{d.label}</span>
+                      <span className="flex-1">{d.label}</span>
+                      {/* Plan 16 Task 42 — per-row "Set as default"
+                          action. The active row shows a static filled
+                          star + "Default" SR-only label. Other rows
+                          show a hover-revealed outline-star button that
+                          promotes the domain to ``Config.active_domain``.
+                          The wrapping <span> stops both
+                          ``onClick`` and ``onPointerDown`` from
+                          reaching the parent <label>; without
+                          ``onPointerDown`` Radix's checkbox would
+                          still toggle on the pointer-down phase even
+                          though the click handler bails. */}
+                      {isDefault ? (
+                        <span
+                          aria-hidden
+                          className="text-[var(--brand-ember)]"
+                          title="Default domain"
+                        >
+                          <Star className="h-3.5 w-3.5 fill-current" />
+                          <span className="sr-only">Default</span>
+                        </span>
+                      ) : (
+                        <span
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            aria-label={`Set ${d.label} as default`}
+                            title={`Set ${d.label} as default`}
+                            onClick={() => void handleSetDefault(d.slug)}
+                            className="rounded-sm p-0.5 text-[var(--text-muted)] opacity-0 transition-opacity hover:text-[var(--brand-ember)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring,_currentColor)] group-hover:opacity-100"
+                          >
+                            <Star className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      )}
                     </label>
                   </li>
                 );
