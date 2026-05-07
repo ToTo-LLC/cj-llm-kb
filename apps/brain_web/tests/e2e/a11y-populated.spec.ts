@@ -815,11 +815,15 @@ test.describe("a11y — populated-state dialog sweep", () => {
     // settings panels fire ``brain_config_get`` on mount (panel-general,
     // panel-providers, panel-budget, panel-autonomous, panel-integrations,
     // panel-domains); panel-backups fires ``brain_backup_list``;
-    // panel-brain-md does no on-mount tool round-trip. The mapping below
-    // tells us which response (if any) marks "panel hydrated" — a strict
-    // upgrade over the historical ``waitForTimeout(200)`` cushion which
-    // would silently pass on slow CI runners that hadn't actually
-    // resolved their fetch yet.
+    // panel-brain-md DOES fire ``readNote("BRAIN.md")`` on mount but
+    // does not block render on it (Monaco renders an empty editor and
+    // hydrates the content asynchronously), so ``networkidle`` plus h2
+    // visibility is a sufficient hydration signal for the brain-md tab —
+    // we deliberately omit it from the strict tool-response map. The
+    // mapping below tells us which response (if any) marks "panel
+    // hydrated" — a strict upgrade over the historical
+    // ``waitForTimeout(200)`` cushion which would silently pass on slow
+    // CI runners that hadn't actually resolved their fetch yet.
     const tabFetchMap: Record<(typeof tabs)[number], string | null> = {
       general: "brain_config_get",
       providers: "brain_config_get",
@@ -827,7 +831,7 @@ test.describe("a11y — populated-state dialog sweep", () => {
       autonomous: "brain_config_get",
       integrations: "brain_config_get",
       domains: "brain_config_get",
-      "brain-md": null,
+      "brain-md": null, // see comment above — readNote fires but is non-blocking
       backups: "brain_backup_list",
     };
 
