@@ -319,3 +319,51 @@ def _reset_cache_for_tests() -> None:
     from an autouse fixture without threading state through.
     """
     _cached.clear()
+
+
+def invalidate_cache_for(config_file: Path | None) -> None:
+    """Drop the cached :class:`Config` for ``config_file``.
+
+    Plan 16 Task 35 / D28 step 3 of 3: the production-callable
+    invalidation entry. :class:`brain_core.config.hot_reload.ConfigWatcher`
+    invokes this from its filesystem-event callback so long-running
+    consumers (brain_api request handlers, brain_mcp tool dispatchers)
+    holding a ``Config`` reference between :func:`resolve_config`
+    calls see the new disk state on their NEXT call without waiting
+    for T34's lazy-peek path to fire.
+
+    The next :func:`resolve_config` for this path will fall through
+    to the cache-miss branch and re-load from disk. T34's peek
+    remains the safety net — if a watchdog event is dropped (rare,
+    but FSEvents has been observed to coalesce events under load),
+    the next ``resolve_config`` peek catches it.
+
+    ``None`` argument is a deliberate no-op rather than a key error:
+    the watcher's ``on_change`` does not always know the
+    canonicalized path that maps to the cache key, and the symmetric
+    case (one watcher per config file) means there is at most one
+    relevant entry to drop. Callers wanting a global flush use
+    :func:`invalidate_all_caches`.
+
+    Mirrors :func:`_reset_cache_for_tests` in shape — both converge
+    on the same module-level ``_cached`` dict — but the public name
+    + production semantics keep the test escape hatch and the
+    production invalidation API distinct.
+    """
+    if config_file is None:
+        return
+    cache_key = config_file.resolve()
+    _cached.pop(cache_key, None)
+
+
+def invalidate_all_caches() -> None:
+    """Drop every cached :class:`Config`.
+
+    The no-arg sibling of :func:`invalidate_cache_for`. Used when the
+    watcher's event payload doesn't carry the full path or when a
+    test fixture wants a hard reset without coupling to a specific
+    cache-key shape. Equivalent to :func:`_reset_cache_for_tests` but
+    public — call this from production code; call the underscore
+    variant from test fixtures so the intent is legible at a glance.
+    """
+    _cached.clear()

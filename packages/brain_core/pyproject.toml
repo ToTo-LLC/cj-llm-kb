@@ -16,6 +16,15 @@ dependencies = [
     "webvtt-py>=0.5",
     "python-docx>=1.1",
     "rank-bm25>=0.2.2",
+    # Plan 16 Task 35 — cross-process config hot-reload via filesystem watcher.
+    # Used by ``brain_core.config.hot_reload.ConfigWatcher``; both brain_api
+    # and brain_mcp start their own ConfigWatcher at lifespan startup so
+    # ``loader.resolve_config``'s in-memory cache is invalidated as soon as
+    # ``<vault>/.brain/config.json`` is rewritten by any process. Symmetric
+    # watchdog (no IPC, no signal handlers) — the platform diffs (FSEvents
+    # on Mac, ReadDirectoryChangesW on Windows, inotify on Linux) live
+    # inside this library, not our code.
+    "watchdog>=4.0",
 ]
 
 [build-system]

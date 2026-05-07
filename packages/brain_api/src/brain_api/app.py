@@ -13,7 +13,9 @@ from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from brain_core.config.loader import load_config
+import structlog
+from brain_core.config.hot_reload import ConfigWatcher
+from brain_core.config.loader import invalidate_cache_for, load_config
 from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
@@ -32,6 +34,8 @@ try:
     _VERSION = version("brain_api")
 except PackageNotFoundError:  # pragma: no cover — fallback for source tree w/o metadata
     _VERSION = "0.0.0"
+
+_lifespan_logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -88,12 +92,39 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         for name, module in ctx.tool_by_name.items()
     }
 
+    # Plan 16 Task 35 / D28 step 3 of 3: cross-process config hot-reload.
+    # Watch ``<vault>/.brain/config.json`` and invalidate the loader's
+    # in-memory cache on filesystem event so the NEXT ``resolve_config``
+    # call (e.g. from a tool dispatcher holding a stale ``ctx.config``)
+    # re-loads from disk. Symmetric architecture: brain_mcp runs the same
+    # watcher independently — there is no IPC between the two processes.
+    #
+    # Wrap in try/except: a watcher failure must NOT block app startup.
+    # T34's lazy peek inside ``resolve_config`` remains the safety net,
+    # so the app keeps functioning even if the watcher silently dies.
+    config_path = app.state.vault_root / ".brain" / "config.json"
+    config_watcher: ConfigWatcher | None = None
+    try:
+        config_watcher = ConfigWatcher(
+            config_path=config_path,
+            on_change=lambda: invalidate_cache_for(config_path),
+        )
+        config_watcher.start()
+    except Exception as exc:  # pragma: no cover — defensive
+        _lifespan_logger.warning(
+            "hot_reload_unavailable",
+            error=str(exc),
+            config_path=str(config_path),
+        )
+        config_watcher = None
+
     try:
         yield
     finally:
-        # Close any resources needing explicit teardown (future-proof hook —
-        # current primitives all clean up via GC).
-        pass
+        # Stop the watcher BEFORE other teardown so its observer thread
+        # joins cleanly. ``stop()`` is idempotent and never raises out.
+        if config_watcher is not None:
+            config_watcher.stop()
 
 
 def create_app(
