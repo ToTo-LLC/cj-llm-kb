@@ -4,11 +4,15 @@ import * as React from "react";
 import Link from "next/link";
 import { AlertTriangle, GitCompare } from "lucide-react";
 
-import { configGet } from "@/lib/api/tools";
+import { AUTONOMY_CATEGORIES, configGet } from "@/lib/api/tools";
 import {
   usePendingStore,
   type PatchEnvelope,
 } from "@/lib/state/pending-store";
+import {
+  type AutonomyDomainFlags,
+  useSettingsStore,
+} from "@/lib/state/settings-store";
 import { cn } from "@/lib/utils";
 
 import { PatchCard, type PatchCardPatch } from "./patch-card";
@@ -49,18 +53,20 @@ function envelopeToCardPatch(envelope: PatchEnvelope): PatchCardPatch {
   };
 }
 
-const AUTONOMOUS_KEYS = [
-  "autonomous.ingest",
-  "autonomous.entities",
-  "autonomous.concepts",
-  "autonomous.index_rewrites",
-  "autonomous.draft",
-] as const;
-
 export function PendingRail(): React.ReactElement {
   const patches = usePendingStore((s) => s.patches);
   const loadPending = usePendingStore((s) => s.loadPending);
-  const [autonomousOn, setAutonomousOn] = React.useState(false);
+  const hydrateAutonomous = useSettingsStore((s) => s.hydrateAutonomous);
+  // Plan 16 T40 fix-up: derive from the per-domain settings-store map.
+  // Banner shows iff ANY domain has ANY of the 5 category flags set true.
+  // Pre-T40 read 5 flat ``autonomous.<flag>`` keys via configGet, but
+  // T38 reshaped Config.autonomous to dict[str, AutonomyCategoryFlags];
+  // those flat keys no longer resolve and silently failed.
+  const autonomousOn = useSettingsStore((s) =>
+    Object.values(s.autonomous).some((flags) =>
+      Object.values(flags).some((v) => v === true),
+    ),
+  );
   const [highlightId, setHighlightId] = React.useState<string | null>(null);
 
   // Load pending on mount so the rail shows a warm list.
@@ -71,29 +77,39 @@ export function PendingRail(): React.ReactElement {
     });
   }, [loadPending]);
 
-  // Check each autonomous.* flag once on mount. Any ``true`` value
-  // paints the banner. A Task 25 sweep item could promote this into a
-  // shared config store; for v1 we just ask once.
+  // Mount-time hydrate of the autonomous snapshot from the backend so
+  // the banner is correct even when the user hasn't visited the
+  // Settings → Autonomy panel this session. One ``configGet({key:"autonomous"})``
+  // call returns the full per-domain × per-category dict; same shape as
+  // ``readAutonomousSnapshot`` in panel-autonomous.tsx.
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const key of AUTONOMOUS_KEYS) {
-        try {
-          const res = await configGet({ key });
-          const val = (res.data as { value?: unknown } | null)?.value;
-          if (val === true) {
-            if (!cancelled) setAutonomousOn(true);
-            return;
-          }
-        } catch {
-          // Skip — config-get failures shouldn't crash the rail.
+      try {
+        const res = await configGet({ key: "autonomous" });
+        const raw = (res.data as { value?: unknown } | null)?.value;
+        if (cancelled || !raw || typeof raw !== "object" || Array.isArray(raw)) {
+          return;
         }
+        const snapshot: Record<string, AutonomyDomainFlags> = {};
+        for (const [slug, rawFlags] of Object.entries(raw as Record<string, unknown>)) {
+          if (!rawFlags || typeof rawFlags !== "object") continue;
+          const flags: AutonomyDomainFlags = {};
+          for (const cat of AUTONOMY_CATEGORIES) {
+            const val = (rawFlags as Record<string, unknown>)[cat];
+            if (typeof val === "boolean") flags[cat] = val;
+          }
+          snapshot[slug] = flags;
+        }
+        if (!cancelled) hydrateAutonomous(snapshot);
+      } catch {
+        // Silent — config-get failures shouldn't crash the rail.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hydrateAutonomous]);
 
   // Listen for inline-patch-card's "Review in panel →" event. Scroll
   // the matching card into view and flash a highlight.

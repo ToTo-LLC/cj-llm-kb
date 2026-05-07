@@ -2,7 +2,6 @@
 
 import * as React from "react";
 
-import { AutonomousIngestToggle } from "./autonomous-ingest-toggle";
 import { DropZone } from "./drop-zone";
 import { SourceRow } from "./source-row";
 import { InboxTabs } from "./tabs";
@@ -83,7 +82,6 @@ export function InboxScreen(): React.ReactElement {
           </div>
           <h1 className="text-xl font-semibold text-[var(--text)]">Inbox</h1>
         </div>
-        <AutonomousIngestToggle />
       </header>
 
       <div className="inbox-body flex flex-1 flex-col gap-4 overflow-auto p-4">
