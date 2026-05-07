@@ -60,10 +60,23 @@ vi.mock("@/components/settings/domain-override-form", () => ({
 // can assert the exact (slug, cap) payload the row emits on blur.
 // ``configGet`` powers the lazy hydrate-on-mount fetch; default it to
 // "no entry" so the inputs start empty unless a test overrides.
-const { setDomainBudgetMock, configGetMock } = vi.hoisted(() => ({
-  setDomainBudgetMock: vi.fn(),
-  configGetMock: vi.fn(),
-}));
+//
+// Plan 16 Task 32 / D27 step 3 of 3: add the rate-limit binding mock so
+// the rate-limit subsection can be exercised the same way. The
+// rate-limit subsection reads ``providers`` (not ``budget.per_domain``)
+// for hydration, but the budget subsection always mounts alongside it
+// — both fire ``configGet`` on first mount, with different keys. The
+// default mock returns the SAME shape regardless of ``key`` (an empty
+// object) so each subsection's hydration sees "no entry"; tests that
+// need a populated state use ``mockResolvedValueOnce`` per call site
+// or differentiate by key.
+const { setDomainBudgetMock, setDomainRateLimitMock, configGetMock } = vi.hoisted(
+  () => ({
+    setDomainBudgetMock: vi.fn(),
+    setDomainRateLimitMock: vi.fn(),
+    configGetMock: vi.fn(),
+  }),
+);
 
 vi.mock("@/lib/api/tools", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/tools")>(
@@ -72,6 +85,7 @@ vi.mock("@/lib/api/tools", async () => {
   return {
     ...actual,
     setDomainBudget: (...args: unknown[]) => setDomainBudgetMock(...args),
+    setDomainRateLimit: (...args: unknown[]) => setDomainRateLimitMock(...args),
     configGet: (...args: unknown[]) => configGetMock(...args),
   };
 });
@@ -158,9 +172,14 @@ beforeEach(() => {
   domainOverrideFormMock.mockReset();
   setDomainBudgetMock.mockReset();
   setDomainBudgetMock.mockResolvedValue(undefined);
+  setDomainRateLimitMock.mockReset();
+  setDomainRateLimitMock.mockResolvedValue(undefined);
   configGetMock.mockReset();
-  // Default: no per-domain budget entry exists. Tests that need a
-  // populated slug override this per-test before render.
+  // Default: no per-domain budget OR rate-limit entry exists. Tests
+  // that need a populated slug override this per-test before render.
+  // Both subsections hydrate from this mock with different keys
+  // (``budget.per_domain`` vs. ``providers``); the empty ``{}`` shape
+  // is correct for both.
   configGetMock.mockResolvedValue({ data: { value: {} } });
   pushToastMock.mockReset();
 });
@@ -217,11 +236,12 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     const onOverrideChanged = vi.fn();
     renderRow({ isExpanded: true, onOverrideChanged });
 
-    // Plan 16 Task 29: wait for the budget subsection's lazy hydrate
-    // fetch to settle before exercising the override-form save, so
-    // the unrelated state update doesn't leak an act warning into
-    // this test's run.
+    // Plan 16 Task 29 + Task 32: wait for the budget AND rate-limit
+    // subsections' lazy hydrate fetches to settle before exercising
+    // the override-form save, so the unrelated state updates don't
+    // leak act warnings into this test's run.
     await screen.findByTestId("budget-caps-subsection-work");
+    await screen.findByTestId("rate-limit-subsection-work");
 
     // The mocked override form exposes a button that fires its
     // ``onChanged`` prop. Clicking it simulates a successful save.
@@ -465,6 +485,228 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     });
   });
 
+  describe("rate limit subsection (Plan 16 Task 32 / D27 step 3 of 3)", () => {
+    test("not rendered when row collapsed", () => {
+      renderRow({ isExpanded: false });
+      expect(
+        screen.queryByTestId("rate-limit-subsection-work"),
+      ).not.toBeInTheDocument();
+    });
+
+    test("rendered when row expanded; input hydrates empty for a slug with no entry", async () => {
+      renderRow({ isExpanded: true });
+
+      expect(
+        await screen.findByTestId("rate-limit-subsection-work"),
+      ).toBeInTheDocument();
+      const rpm = screen.getByTestId("rate-limit-rpm-work") as HTMLInputElement;
+      // configGet's default mock returns ``{}`` so no override exists.
+      expect(rpm.value).toBe("");
+      // The hydrate fetch reads the providers map (not budget.per_domain) —
+      // pin the exact key so a future refactor that breaks the wire shape
+      // shows up here.
+      expect(configGetMock).toHaveBeenCalledWith({ key: "providers" });
+    });
+
+    test("hydrates input from the persisted providers entry for this slug", async () => {
+      // configGet is called twice on mount (budget + rate-limit
+      // subsections). Differentiate by key so the rate-limit hydrate
+      // sees a populated payload while the budget hydrate sees the
+      // default empty entry.
+      configGetMock.mockImplementation(async (args: { key: string }) => {
+        if (args.key === "providers") {
+          return {
+            data: {
+              value: {
+                anthropic: {
+                  rate_limit_per_domain: {
+                    work: { requests_per_minute: 45 },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return { data: { value: {} } };
+      });
+      renderRow({ isExpanded: true });
+
+      const rpm = (await screen.findByTestId(
+        "rate-limit-rpm-work",
+      )) as HTMLInputElement;
+      // useEffect hydration runs after the first commit; wait for
+      // the value to flip on the subsequent commit.
+      await vi.waitFor(() => expect(rpm.value).toBe("45"));
+    });
+
+    test("typing an rpm then blurring calls setDomainRateLimit with the whole payload", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = await screen.findByTestId("rate-limit-rpm-work");
+      await user.type(rpm, "30");
+      await user.tab(); // blur
+
+      expect(setDomainRateLimitMock).toHaveBeenCalledTimes(1);
+      expect(setDomainRateLimitMock).toHaveBeenCalledWith("work", {
+        requests_per_minute: 30,
+      });
+    });
+
+    test("typing zero shows red border and blocks the save", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = (await screen.findByTestId(
+        "rate-limit-rpm-work",
+      )) as HTMLInputElement;
+      await user.type(rpm, "0");
+      await user.tab();
+
+      expect(rpm).toHaveAttribute("aria-invalid", "true");
+      expect(setDomainRateLimitMock).not.toHaveBeenCalled();
+      // The hint text mentions the validation rule.
+      expect(
+        screen.getByText(/positive integer/i),
+      ).toBeInTheDocument();
+    });
+
+    test("typing a negative rpm shows red border and blocks the save", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = (await screen.findByTestId(
+        "rate-limit-rpm-work",
+      )) as HTMLInputElement;
+      await user.type(rpm, "-5");
+      await user.tab();
+
+      expect(rpm).toHaveAttribute("aria-invalid", "true");
+      expect(setDomainRateLimitMock).not.toHaveBeenCalled();
+    });
+
+    test("typing a non-integer rpm shows red border and blocks the save", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = (await screen.findByTestId(
+        "rate-limit-rpm-work",
+      )) as HTMLInputElement;
+      // 1.5 requests/minute is meaningless — RateLimitOverride enforces
+      // ``int`` and Pydantic would reject this on the wire. Catch it
+      // client-side before the round trip.
+      await user.type(rpm, "1.5");
+      await user.tab();
+
+      expect(rpm).toHaveAttribute("aria-invalid", "true");
+      expect(setDomainRateLimitMock).not.toHaveBeenCalled();
+    });
+
+    test("clearing a previously-set rpm saves with requests_per_minute=null", async () => {
+      configGetMock.mockImplementation(async (args: { key: string }) => {
+        if (args.key === "providers") {
+          return {
+            data: {
+              value: {
+                anthropic: {
+                  rate_limit_per_domain: {
+                    work: { requests_per_minute: 60 },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return { data: { value: {} } };
+      });
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = (await screen.findByTestId(
+        "rate-limit-rpm-work",
+      )) as HTMLInputElement;
+      await vi.waitFor(() => expect(rpm.value).toBe("60"));
+
+      await user.clear(rpm);
+      await user.tab();
+
+      expect(setDomainRateLimitMock).toHaveBeenCalledTimes(1);
+      expect(setDomainRateLimitMock).toHaveBeenCalledWith("work", {
+        requests_per_minute: null,
+      });
+    });
+
+    test("blur with unchanged value does NOT trigger a save", async () => {
+      configGetMock.mockImplementation(async (args: { key: string }) => {
+        if (args.key === "providers") {
+          return {
+            data: {
+              value: {
+                anthropic: {
+                  rate_limit_per_domain: {
+                    work: { requests_per_minute: 30 },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return { data: { value: {} } };
+      });
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = (await screen.findByTestId(
+        "rate-limit-rpm-work",
+      )) as HTMLInputElement;
+      await vi.waitFor(() => expect(rpm.value).toBe("30"));
+
+      // Blur without changing the value.
+      await user.click(rpm);
+      await user.tab();
+
+      expect(setDomainRateLimitMock).not.toHaveBeenCalled();
+    });
+
+    test("successful save fires a success toast", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = await screen.findByTestId("rate-limit-rpm-work");
+      await user.type(rpm, "30");
+      await user.tab();
+
+      await vi.waitFor(() =>
+        expect(pushToastMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: "success",
+            lead: expect.stringMatching(/rate limit saved/i),
+          }),
+        ),
+      );
+    });
+
+    test("failed save fires a danger toast", async () => {
+      setDomainRateLimitMock.mockRejectedValueOnce(new Error("kaboom"));
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const rpm = await screen.findByTestId("rate-limit-rpm-work");
+      await user.type(rpm, "45");
+      await user.tab();
+
+      await vi.waitFor(() =>
+        expect(pushToastMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: "danger",
+            lead: expect.stringMatching(/couldn['']t save/i),
+            msg: expect.stringContaining("kaboom"),
+          }),
+        ),
+      );
+    });
+  });
+
   test("expand button has aria-expanded that mirrors isExpanded prop", async () => {
     const { rerender } = renderRow({ isExpanded: false });
 
@@ -506,10 +748,12 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     });
     expect(expandBtn).toHaveAttribute("aria-expanded", "true");
 
-    // Plan 16 Task 29: re-rendering the row expanded mounts the
-    // ``BudgetCapsSubsection`` which fires a lazy ``configGet``. Wait
-    // for that fetch to settle so the test doesn't leak an act warning
-    // into the next test's run via the unsettled state update.
+    // Plan 16 Task 29 + Task 32: re-rendering the row expanded mounts
+    // the ``BudgetCapsSubsection`` AND the ``RateLimitSubsection``,
+    // both of which fire lazy ``configGet`` calls. Wait for both
+    // fetches to settle so this test doesn't leak an act warning into
+    // the next test's run via an unsettled state update.
     await screen.findByTestId("budget-caps-subsection-work");
+    await screen.findByTestId("rate-limit-subsection-work");
   });
 });

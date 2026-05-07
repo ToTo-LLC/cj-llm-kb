@@ -15,7 +15,7 @@ import {
   DomainOverrideForm,
   type DomainOverrideValues,
 } from "@/components/settings/domain-override-form";
-import { configGet, setDomainBudget } from "@/lib/api/tools";
+import { configGet, setDomainBudget, setDomainRateLimit } from "@/lib/api/tools";
 import type { DomainEntry } from "@/lib/state/domains-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
@@ -225,6 +225,13 @@ export function PanelDomainsRow({
               fetch + save (like ``DomainOverrideForm``) — the row
               itself stays a thin coordinator. */}
           <BudgetCapsSubsection slug={slug} />
+          {/* Plan 16 Task 32 / D27 step 3 of 3: per-domain rate-limit
+              editor. Mirrors ``BudgetCapsSubsection`` — same lazy
+              hydrate + on-blur save + toast pattern, same role/aria
+              shape. Lives below the budget caps so all per-domain
+              spending controls (budget caps + rate limit) cluster
+              together inside the expanded panel. */}
+          <RateLimitSubsection slug={slug} />
         </div>
       )}
     </li>
@@ -446,6 +453,184 @@ export function BudgetCapsSubsection({
             className="mt-1 text-[11px] text-red-400"
           >
             Must be a positive number (or empty for no cap).
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------- Rate limit subsection ---------------------- */
+
+/**
+ * Per-domain rate-limit editor (Plan 16 Task 32 / D27 step 3 of 3).
+ *
+ * One optional input: requests-per-minute. Empty = no override (= ``null``
+ * on the wire = "the provider bypasses rate-limit gating for this
+ * domain"). Save fires on blur — the field compares current input
+ * against the last-known persisted value and skips the API round-trip
+ * if nothing changed (mirrors :func:`BudgetCapsSubsection`).
+ *
+ * Validation: positive integers only. Zero / negative / non-integer
+ * values are rejected client-side with a red border + a hint, AND
+ * server-side by the
+ * :class:`RateLimitOverride._validate_positive` validator (defense in
+ * depth — the UI catches it first so the user never hits the round
+ * trip). An empty input is valid (= null = "no override").
+ *
+ * The component reads its own initial state from
+ * ``brain_config_get`` because the parent orchestrator already does
+ * the same dance for ``domain_overrides`` and budget caps; threading a
+ * parallel cache for rate limits would add surface area for no win.
+ *
+ * Wire contract: each save posts the WHOLE current payload (one field
+ * today; whole-payload contract future-proofs the shape) to
+ * ``setDomainRateLimit``. The backend prunes the entry when every leaf
+ * is null.
+ *
+ * Provider is hard-coded to ``"anthropic"`` because that's the only LLM
+ * provider implementation today; the wire shape supports more
+ * providers without a frontend change (see :func:`setDomainRateLimit`).
+ */
+interface RateLimitSubsectionProps {
+  slug: string;
+}
+
+interface RateLimitState {
+  requests_per_minute: number | null;
+}
+
+const EMPTY_RATE_LIMIT: RateLimitState = {
+  requests_per_minute: null,
+};
+
+/** Empty input = null = no override; positive integer = cap. Reject
+ *  zero, negative, and non-integer values.
+ */
+function isValidRateLimit(s: string): boolean {
+  if (s.trim() === "") return true;
+  const n = Number(s);
+  return Number.isFinite(n) && Number.isInteger(n) && n > 0;
+}
+
+async function readRateLimitFor(slug: string): Promise<RateLimitState> {
+  try {
+    // Read the whole providers map and pick the anthropic entry — the
+    // hydrate fetch is one-shot per mount, so the extra payload cost
+    // (vs. a deep-keyed read) is negligible and we don't have to invent
+    // a per-(provider,slug) configGet shape.
+    const r = await configGet({ key: "providers" });
+    const providers = (r.data?.value ?? {}) as Record<
+      string,
+      { rate_limit_per_domain?: Record<string, Partial<RateLimitState>> }
+    >;
+    const entry = providers.anthropic?.rate_limit_per_domain?.[slug] ?? {};
+    return {
+      requests_per_minute: entry.requests_per_minute ?? null,
+    };
+  } catch {
+    return EMPTY_RATE_LIMIT;
+  }
+}
+
+export function RateLimitSubsection({
+  slug,
+}: RateLimitSubsectionProps): React.ReactElement {
+  const pushToast = useSystemStore((s) => s.pushToast);
+
+  const [persisted, setPersisted] =
+    React.useState<RateLimitState>(EMPTY_RATE_LIMIT);
+  const [rpmInput, setRpmInput] = React.useState<string>("");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const rl = await readRateLimitFor(slug);
+      if (cancelled) return;
+      setPersisted(rl);
+      setRpmInput(
+        rl.requests_per_minute !== null ? String(rl.requests_per_minute) : "",
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  const rpmValid = isValidRateLimit(rpmInput);
+
+  const saveRateLimit = async (next: RateLimitState) => {
+    try {
+      await setDomainRateLimit(slug, next);
+      setPersisted(next);
+      pushToast({
+        lead: "Rate limit saved.",
+        msg: `Updated rate limit for ${slug}.`,
+        variant: "success",
+      });
+    } catch (err) {
+      pushToast({
+        lead: "Couldn't save rate limit.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    }
+  };
+
+  const onBlurRpm = () => {
+    if (!rpmValid) return;
+    const trimmed = rpmInput.trim();
+    const nextRpm = trimmed === "" ? null : Number(trimmed);
+    if (nextRpm === persisted.requests_per_minute) return;
+    void saveRateLimit({ requests_per_minute: nextRpm });
+  };
+
+  const rpmId = `rate-limit-rpm-${slug}`;
+
+  return (
+    <div
+      className="flex flex-col gap-3 rounded-md border border-[var(--hairline)] bg-[var(--surface-2)] p-3"
+      data-testid={`rate-limit-subsection-${slug}`}
+      role="group"
+      aria-label={`Rate limit for ${slug}`}
+    >
+      <div className="flex flex-col gap-1">
+        <h3 className="text-xs font-semibold text-[var(--text)]">
+          Rate limit
+        </h3>
+        <p className="text-[11px] text-[var(--text-muted)]">
+          Optional per-domain request rate (per minute). Empty = no override;
+          the provider bypasses rate-limit gating for this domain.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={rpmId}
+          className="block text-[11px] uppercase tracking-wider text-[var(--text-dim)]"
+        >
+          Requests per minute
+        </label>
+        <Input
+          id={rpmId}
+          data-testid={`rate-limit-rpm-${slug}`}
+          type="number"
+          min={1}
+          step={1}
+          value={rpmInput}
+          onChange={(e) => setRpmInput(e.target.value)}
+          onBlur={onBlurRpm}
+          placeholder="no override"
+          aria-invalid={!rpmValid}
+          aria-describedby={`${rpmId}-hint`}
+          inputMode="numeric"
+        />
+        {!rpmValid && (
+          <p
+            id={`${rpmId}-hint`}
+            className="mt-1 text-[11px] text-red-400"
+          >
+            Must be a positive integer (or empty for no override).
           </p>
         )}
       </div>

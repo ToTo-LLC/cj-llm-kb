@@ -18,7 +18,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from brain_core.config.schema import BudgetOverride, Config
+from brain_core.config.schema import (
+    BudgetOverride,
+    Config,
+    ProviderConfig,
+    RateLimitOverride,
+)
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.config_set import _SETTABLE_KEYS, NAME, handle
 
@@ -413,6 +418,219 @@ async def test_budget_per_domain_rejects_non_dict_value(tmp_path: Path) -> None:
             {"key": "budget.per_domain.hobby", "value": "not a dict"},
             ctx,
         )
+
+
+async def test_rate_limit_per_domain_keys_pass_allowlist_via_wildcard(
+    tmp_path: Path,
+) -> None:
+    """Plan 16 Task 32 / D27 step 3 of 3:
+    ``providers.<provider>.rate_limit_per_domain.<slug>`` is a 4-segment
+    wildcard pattern, not a static ``_SETTABLE_KEYS`` entry. A
+    whole-payload write (``RateLimitOverride`` dict) should flow through
+    the allowlist gate without raising and land on
+    ``Config.providers[<provider>].rate_limit_per_domain[slug]`` — with
+    the parent ``ProviderConfig`` auto-created on first set."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    result = await handle(
+        {
+            "key": "providers.anthropic.rate_limit_per_domain.hobby",
+            "value": {"requests_per_minute": 30},
+        },
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    assert result.data["persisted"] is True
+    assert "anthropic" in cfg.providers
+    assert "hobby" in cfg.providers["anthropic"].rate_limit_per_domain
+    assert (
+        cfg.providers["anthropic"].rate_limit_per_domain["hobby"].requests_per_minute
+        == 30
+    )
+
+
+async def test_rate_limit_per_domain_clear_with_none_drops_entry(
+    tmp_path: Path,
+) -> None:
+    """``None`` is the documented "no override" sentinel — posting it
+    drops the slug entry from
+    ``Config.providers[<provider>].rate_limit_per_domain`` entirely.
+    Mirrors :func:`test_budget_per_domain_clear_with_none_drops_entry`."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.providers["anthropic"] = ProviderConfig(
+        rate_limit_per_domain={
+            "hobby": RateLimitOverride(requests_per_minute=20),
+            "research": RateLimitOverride(requests_per_minute=60),
+        }
+    )
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    result = await handle(
+        {
+            "key": "providers.anthropic.rate_limit_per_domain.hobby",
+            "value": None,
+        },
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    assert "hobby" not in cfg.providers["anthropic"].rate_limit_per_domain
+    # The provider entry is still around because ``research`` still
+    # has a rate-limit override — the parent prune is gated on
+    # "default state".
+    assert "anthropic" in cfg.providers
+
+
+async def test_rate_limit_per_domain_prunes_empty_provider_after_clear(
+    tmp_path: Path,
+) -> None:
+    """Clearing the LAST per-domain rate-limit entry under a provider
+    drops the now-default ``ProviderConfig`` from ``Config.providers``
+    entirely so a "set then clear" round-trip leaves the persisted
+    shape minimal."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.providers["anthropic"] = ProviderConfig(
+        rate_limit_per_domain={"hobby": RateLimitOverride(requests_per_minute=20)}
+    )
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    await handle(
+        {
+            "key": "providers.anthropic.rate_limit_per_domain.hobby",
+            "value": None,
+        },
+        ctx,
+    )
+    # Last slug entry gone -> the parent provider entry is also pruned
+    # because the post-mutation ``ProviderConfig`` equals
+    # ``ProviderConfig()`` (default state).
+    assert "anthropic" not in cfg.providers
+
+
+async def test_rate_limit_per_domain_prunes_all_none_payload(tmp_path: Path) -> None:
+    """A payload where the only leaf is ``None`` (i.e.,
+    ``{"requests_per_minute": None}``) is semantically a no-op (same as
+    "no entry") — the apply helper prunes it rather than writing an
+    empty ``RateLimitOverride()`` to disk. Mirrors the
+    ``_apply_budget_per_domain`` prune-empty behaviour."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.providers["anthropic"] = ProviderConfig(
+        rate_limit_per_domain={"hobby": RateLimitOverride(requests_per_minute=20)}
+    )
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    await handle(
+        {
+            "key": "providers.anthropic.rate_limit_per_domain.hobby",
+            "value": {"requests_per_minute": None},
+        },
+        ctx,
+    )
+    # Slug pruned -> parent provider also pruned (default-state check).
+    assert "anthropic" not in cfg.providers
+
+
+async def test_rate_limit_per_domain_rejects_orphan_slug(tmp_path: Path) -> None:
+    """Slug must be in ``Config.domains``. Mirrors the
+    ``_apply_budget_per_domain`` orphan-slug guard so the Settings UI
+    surfaces a consistent error voice for both per-domain override
+    paths."""
+    cfg = Config(domains=["research", "personal"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle(
+            {
+                "key": "providers.anthropic.rate_limit_per_domain.ghost",
+                "value": {"requests_per_minute": 60},
+            },
+            ctx,
+        )
+
+
+async def test_rate_limit_per_domain_rejects_zero_or_negative_rpm(
+    tmp_path: Path,
+) -> None:
+    """The schema-level ``RateLimitOverride._validate_positive`` rejects
+    zero / negative ``requests_per_minute``. Construction inside
+    ``_apply_rate_limit_per_domain`` raises ``ValidationError`` which
+    propagates as-is — the Settings UI surfaces the canonical Pydantic
+    voice."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(Exception, match="positive"):
+        await handle(
+            {
+                "key": "providers.anthropic.rate_limit_per_domain.hobby",
+                "value": {"requests_per_minute": 0},
+            },
+            ctx,
+        )
+
+
+async def test_rate_limit_per_domain_rejects_wrong_segment_count(
+    tmp_path: Path,
+) -> None:
+    """Three-segment ``providers.anthropic.rate_limit_per_domain`` (would
+    shadow the dict itself) and five-segment
+    ``providers.anthropic.rate_limit_per_domain.hobby.requests_per_minute``
+    (would suggest a per-leaf path the wildcard does NOT support) both
+    fail the wildcard shape check and hit the static-allowlist gate."""
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {
+                "key": "providers.anthropic.rate_limit_per_domain",
+                "value": {},
+            },
+            _mk_ctx(tmp_path, config=Config()),
+        )
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {
+                "key": (
+                    "providers.anthropic.rate_limit_per_domain.hobby."
+                    "requests_per_minute"
+                ),
+                "value": 60,
+            },
+            _mk_ctx(tmp_path, config=Config()),
+        )
+
+
+async def test_rate_limit_per_domain_rejects_non_dict_value(tmp_path: Path) -> None:
+    """A stray string / number / list value (the wire could carry
+    anything) raises a clear ``ValueError`` rather than a confusing
+    Pydantic validation error."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(ValueError, match="must be a dict"):
+        await handle(
+            {
+                "key": "providers.anthropic.rate_limit_per_domain.hobby",
+                "value": "not a dict",
+            },
+            ctx,
+        )
+
+
+async def test_rate_limit_per_domain_auto_creates_new_provider_entry(
+    tmp_path: Path,
+) -> None:
+    """Setting an override under a never-before-seen provider key
+    auto-creates the parent ``ProviderConfig``. Mirrors the per-slug
+    auto-create in :func:`_apply_domain_override`."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    assert cfg.providers == {}
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    await handle(
+        {
+            "key": "providers.anthropic.rate_limit_per_domain.hobby",
+            "value": {"requests_per_minute": 45},
+        },
+        ctx,
+    )
+    assert set(cfg.providers.keys()) == {"anthropic"}
+    assert (
+        cfg.providers["anthropic"].rate_limit_per_domain["hobby"].requests_per_minute
+        == 45
+    )
 
 
 async def test_domain_override_rejects_wrong_segment_count(tmp_path: Path) -> None:

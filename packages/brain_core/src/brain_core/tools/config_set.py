@@ -37,7 +37,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from brain_core.config.schema import BudgetOverride, Config, DomainOverride
+from brain_core.config.schema import (
+    BudgetOverride,
+    Config,
+    DomainOverride,
+    ProviderConfig,
+    RateLimitOverride,
+)
 from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
@@ -150,6 +156,23 @@ _DOMAIN_OVERRIDE_FIELDS: frozenset[str] = frozenset(DomainOverride.model_fields.
 # ``domain_overrides.<slug>.<field>``.
 _BUDGET_OVERRIDE_FIELDS: frozenset[str] = frozenset(BudgetOverride.model_fields.keys())
 
+# Plan 16 Task 32 / D27 step 3 of 3:
+# ``providers.<provider>.rate_limit_per_domain.<slug>`` is settable for any
+# user-defined domain slug under any provider key. Mirrors the
+# ``budget.per_domain.<slug>`` wildcard pattern (Task 29) — whole-payload
+# write of a :class:`RateLimitOverride` dict (or ``None`` to clear), with
+# the slug as the trailing variable segment. The 4-segment shape is
+# necessary because the rate-limit map lives one level deeper than the
+# budget map: ``Config.providers["anthropic"].rate_limit_per_domain[slug]``
+# vs. ``Config.budget.per_domain[slug]``. Per-leaf paths weren't chosen
+# because :class:`RateLimitOverride` only has one leaf today
+# (``requests_per_minute``); whole-payload semantics future-proof the
+# shape if the override grows additional fields and matches the budget
+# pattern users now know.
+_RATE_LIMIT_OVERRIDE_FIELDS: frozenset[str] = frozenset(
+    RateLimitOverride.model_fields.keys()
+)
+
 
 def _is_settable_domain_override_key(key: str) -> bool:
     """Return True if ``key`` matches ``domain_overrides.<slug>.<field>``.
@@ -195,6 +218,37 @@ def _is_settable_budget_per_domain_key(key: str) -> bool:
         and parts[0] == "budget"
         and parts[1] == "per_domain"
         and bool(parts[2])
+    )
+
+
+def _is_settable_rate_limit_per_domain_key(key: str) -> bool:
+    """Return True if ``key`` matches ``providers.<provider>.rate_limit_per_domain.<slug>``.
+
+    Plan 16 Task 32 / D27 step 3 of 3. Four-segment wildcard pattern.
+    Both the provider name AND the trailing slug are open-set portions
+    (the provider-name set is intentionally NOT validated against any
+    Literal — adding a new LLM provider should not require a schema
+    migration of every user's persisted config; the schema comment on
+    ``Config.providers`` pins this). Slug membership in
+    ``Config.domains`` is enforced at apply time inside
+    :func:`_apply_rate_limit_per_domain`, mirroring the
+    ``_apply_budget_per_domain`` orphan-slug guard so the Settings UI
+    surfaces a consistent error voice regardless of which seam catches
+    it.
+
+    Whole-payload write of a :class:`RateLimitOverride` dict (or
+    ``None`` to clear). RateLimitOverride only has a single leaf
+    (``requests_per_minute``) today, but the whole-payload shape
+    future-proofs the wire contract — if the override grows more
+    fields, the wire shape and apply-helper don't need to change.
+    """
+    parts = key.split(".")
+    return (
+        len(parts) == 4
+        and parts[0] == "providers"
+        and parts[2] == "rate_limit_per_domain"
+        and bool(parts[1])
+        and bool(parts[3])
     )
 
 
@@ -413,6 +467,127 @@ def _apply_budget_per_domain(config: Config, key: str, value: Any) -> None:
     per_domain[slug] = override
 
 
+def _apply_rate_limit_per_domain(config: Config, key: str, value: Any) -> None:
+    """Apply a ``providers.<provider>.rate_limit_per_domain.<slug>`` mutation in place.
+
+    Plan 16 Task 32 / D27 step 3 of 3. Mirrors
+    :func:`_apply_budget_per_domain` for the
+    ``Config.providers[<provider>].rate_limit_per_domain: dict[str,
+    RateLimitOverride]`` shape, with one extra wrinkle: the parent
+    ``ProviderConfig`` may not exist yet (a fresh Config has
+    ``providers={}`` because the per-provider config is a backward-compat
+    addition). Auto-create on first set so the user doesn't have to
+    pre-seed an empty provider entry via a separate write.
+
+    Semantics:
+
+    1. Parse ``providers.<provider>.rate_limit_per_domain.<slug>``. The
+       caller has already validated the shape via
+       :func:`_is_settable_rate_limit_per_domain_key`.
+    2. Slug-membership pre-check: ``slug`` must be in
+       ``config.domains``. Mirrors the
+       :func:`_apply_budget_per_domain` orphan-slug guard. The
+       ``ProviderConfig.rate_limit_per_domain`` schema landed without a
+       cross-field validator (Task 30 schema comment pins this — the
+       cross-field reference would have to reach across into the parent
+       ``Config``, which Pydantic v2 doesn't expose at the sub-model
+       layer cleanly), so the disk-write path is the only seam that
+       catches orphan slugs today.
+    3. Auto-create the parent ``ProviderConfig`` if missing — the
+       provider-name set is open per the schema comment, so any string
+       is a valid key. The auto-created ``ProviderConfig`` has
+       ``rate_limit_per_domain={}`` by default; the next step writes
+       into it.
+    4. Coerce ``value``:
+         - ``None`` → delete the slug entry entirely (the documented
+           way to clear a per-domain rate limit — equivalent to "no
+           override; the provider bypasses rate-limit gating for this
+           domain").
+         - ``dict`` → construct a ``RateLimitOverride(**value)``;
+           Pydantic's positive-RPM validator
+           (:meth:`RateLimitOverride._validate_positive`) catches zero
+           / negative caps before the mutation lands.
+         - anything else → ``ValueError`` (a stray string from the wire
+           shouldn't fail with a confusing Pydantic error).
+    5. Prune empty overrides — if every leaf is ``None`` the entry is
+       semantically a no-op and shouldn't pollute ``config.json``.
+       Mirrors the ``_apply_budget_per_domain`` prune step.
+    6. After pruning the slug, if the parent ``ProviderConfig`` is now
+       at default state (empty ``rate_limit_per_domain``) AND was
+       auto-created by this call (i.e., it didn't exist before), drop
+       the empty parent entry too. We approximate "was auto-created"
+       by checking whether the post-mutation ``ProviderConfig`` is
+       value-equal to a default ``ProviderConfig()`` — defensive
+       cleanup so a "set then clear" round-trip leaves the persisted
+       shape minimal.
+
+    The function mutates ``config`` IN PLACE — no ``model_copy``, no new
+    Config instance.
+    """
+    parts = key.split(".")
+    assert (
+        len(parts) == 4
+        and parts[0] == "providers"
+        and parts[2] == "rate_limit_per_domain"
+    ), (
+        f"_apply_rate_limit_per_domain called with non-rate-limit-per-domain key {key!r}"
+    )
+    provider_name = parts[1]
+    slug = parts[3]
+
+    if slug not in config.domains:
+        raise ValueError(
+            f"providers.{provider_name}.rate_limit_per_domain keys {[slug]!r} "
+            f"are not in domains {config.domains!r}; remove the override or "
+            f"add the domain first."
+        )
+
+    providers = config.providers
+    provider = providers.get(provider_name)
+    if provider is None:
+        # Auto-create the parent ``ProviderConfig`` on first set —
+        # mirrors the per-slug ``DomainOverride`` auto-create in
+        # :func:`_apply_domain_override`. The default ``ProviderConfig``
+        # has ``rate_limit_per_domain={}``; the next step writes into
+        # it.
+        provider = ProviderConfig()
+        providers[provider_name] = provider
+
+    rate_limit_map = provider.rate_limit_per_domain
+
+    if value is None:
+        # Clear the per-domain rate limit entirely — equivalent to "no
+        # override; the provider bypasses rate-limit gating for this
+        # domain".
+        rate_limit_map.pop(slug, None)
+    elif isinstance(value, dict):
+        # ``RateLimitOverride(**value)`` raises ``ValidationError`` on a
+        # zero / negative RPM (the schema-level positive validator) and
+        # on any extra fields (``extra="forbid"``). We let those bubble
+        # up as-is so the Settings UI surfaces the canonical Pydantic
+        # error voice.
+        override = RateLimitOverride(**value)
+        if all(getattr(override, f) is None for f in _RATE_LIMIT_OVERRIDE_FIELDS):
+            # Prune empty entries — every leaf None is a no-op and
+            # shouldn't land in ``config.json``. Mirrors the
+            # ``_apply_budget_per_domain`` prune.
+            rate_limit_map.pop(slug, None)
+        else:
+            rate_limit_map[slug] = override
+    else:
+        raise ValueError(
+            f"providers.{provider_name}.rate_limit_per_domain value must be a "
+            f"dict (RateLimitOverride payload) or None, got {type(value).__name__}"
+        )
+
+    # Drop a now-default parent ``ProviderConfig`` so a "set then clear"
+    # round-trip leaves the persisted shape minimal. We compare against
+    # a fresh ``ProviderConfig()`` rather than tracking "was auto-created"
+    # state — pydantic equality is structural so this is precise.
+    if provider == ProviderConfig():
+        providers.pop(provider_name, None)
+
+
 def _check_active_domain_membership(config: Config, value: Any) -> None:
     """Mirror ``Config._check_active_domain_in_domains`` at write time.
 
@@ -459,14 +634,25 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # plain numerics — so the substring check stays as a redundant
     # safety net).
     is_budget_per_domain = _is_settable_budget_per_domain_key(key)
-    if not (is_domain_override or is_budget_per_domain):
+    # Plan 16 Task 32 / D27 step 3 of 3:
+    # ``providers.<provider>.rate_limit_per_domain.<slug>`` is the
+    # third open-set wildcard pattern (mirroring ``budget.per_domain``).
+    # The 4-segment shape is explicit enough that the secret-substring
+    # check below would still false-negative cleanly: no leaf field
+    # contains ``api_key`` / ``secret`` / ``token`` / ``password``
+    # (``requests_per_minute`` is a plain integer), so the substring
+    # check stays as a redundant safety net for unknown keys but is
+    # bypassed (along with the static allowlist) for this wildcard.
+    is_rate_limit_per_domain = _is_settable_rate_limit_per_domain_key(key)
+    if not (is_domain_override or is_budget_per_domain or is_rate_limit_per_domain):
         if any(s in key.lower() for s in _SECRET_SUBSTRINGS):
             raise PermissionError(f"refusing to set secret-like key {key!r}")
         if key not in _SETTABLE_KEYS:
             raise PermissionError(
                 f"key {key!r} is not settable via MCP — settable keys: "
-                f"{sorted(_SETTABLE_KEYS)} (plus domain_overrides.<slug>.<field> "
-                f"and budget.per_domain.<slug>)"
+                f"{sorted(_SETTABLE_KEYS)} (plus domain_overrides.<slug>.<field>, "
+                f"budget.per_domain.<slug>, and "
+                f"providers.<provider>.rate_limit_per_domain.<slug>)"
             )
 
     value = arguments["value"]
@@ -522,6 +708,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             _apply_domain_override(cfg, key, value)
         elif is_budget_per_domain:
             _apply_budget_per_domain(cfg, key, value)
+        elif is_rate_limit_per_domain:
+            _apply_rate_limit_per_domain(cfg, key, value)
         else:
             # Plan 12 D2: ``active_domain`` membership is validated here
             # because Config's cross-field validator only fires at

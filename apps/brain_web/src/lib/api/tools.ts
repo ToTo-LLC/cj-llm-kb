@@ -431,6 +431,49 @@ export const setDomainBudget = (
   });
 
 /**
+ * Per-domain rate-limit override payload — mirrors
+ * :class:`brain_core.config.schema.RateLimitOverride`. ``requests_per_minute``
+ * may be omitted or set to ``null`` (= "no override; the provider bypasses
+ * rate-limit gating for this domain"); a positive integer caps the per-minute
+ * request rate for spend attributed to this domain. Zero / negative values
+ * are rejected at the schema level — the documented way to clear an
+ * override is ``null`` (or omitting the field).
+ */
+export interface RateLimitOverride {
+  requests_per_minute?: number | null;
+}
+
+/**
+ * Persist a per-domain rate-limit entry (Plan 16 Task 32 / D27 step 3 of 3).
+ * Routes through ``brain_config_set`` with the dotted key
+ * ``providers.anthropic.rate_limit_per_domain.<slug>`` — the backend's
+ * wildcard handler (``_apply_rate_limit_per_domain``) writes the whole
+ * RateLimitOverride payload at once, auto-creating the parent
+ * ``ProviderConfig`` on first set. Posting ``null`` for the value drops the
+ * slug entry entirely (equivalent to "no override; provider bypasses
+ * rate-limit gating for this domain"); posting a payload where
+ * ``requests_per_minute`` is ``null`` is also pruned to "no entry" by the
+ * backend.
+ *
+ * The ``provider`` argument defaults to ``"anthropic"`` because that's
+ * the only LLM provider implementation today; the wire shape supports
+ * additional providers without a frontend change.
+ *
+ * Whole-payload semantics mirror :func:`setDomainBudget` — even though
+ * RateLimitOverride only has one leaf field today, the contract
+ * future-proofs the wire shape if the override grows additional fields.
+ */
+export const setDomainRateLimit = (
+  slug: string,
+  override: RateLimitOverride | null,
+  provider: string = "anthropic",
+): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({
+    key: `providers.${provider}.rate_limit_per_domain.${slug}`,
+    value: override,
+  });
+
+/**
  * Persist a new ``active_domain`` slug (Plan 12 D2 / Task 6).
  *
  * Self-documenting wrapper around ``configSet({key:"active_domain",
