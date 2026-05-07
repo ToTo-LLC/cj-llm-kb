@@ -9,6 +9,17 @@ Plan 12 Task 3 / D5: ``brain_config_get`` now reads the LIVE ``ctx.config``
 (not a defaults-backed ``Config()`` snapshot), so the fixture below attaches
 a real ``Config`` instance — without it, the tool now raises ``RuntimeError``
 to surface the lifecycle violation rather than silently returning defaults.
+
+Plan 16 Task 24 / D24: ``_mk_ctx`` requires an explicit ``Config`` (no
+default, no ``Config | None`` Optional union) — matches Plan 15 Task 9 D8
+Path A applied to ``test_config_set.py``. The secret-refusal test still
+passes a default ``Config()`` for shape only because ``handle`` checks
+``_looks_like_secret`` BEFORE the cfg-None guard in ``_snapshot_config``,
+so the refusal-path tests don't depend on the Config's contents. The
+None-config raise behavior is pinned exclusively in
+``test_errors_raise_if_no_config.py::test_config_get_uses_helper`` (Plan
+15 Task 8); the previous local ``test_raises_runtime_error_when_ctx_config_is_none``
+duplicate has been dropped.
 """
 
 from __future__ import annotations
@@ -21,12 +32,16 @@ from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.config_get import NAME, handle
 
 
-def _mk_ctx(vault: Path, config: Config | None) -> ToolContext:
+def _mk_ctx(vault: Path, *, config: Config) -> ToolContext:
     """Build a minimal ToolContext for direct-handle tests.
 
-    ``config`` is a required argument (no implicit default-Config fallback)
-    so test authors don't accidentally exercise the ``ctx.config is None``
-    raise path or the live-Config path without explicit intent.
+    Plan 16 Task 24 / D24: ``config`` is a required ``Config`` (no default,
+    no Optional union). The None-config raise behavior is pinned in
+    ``test_errors_raise_if_no_config.py::test_config_get_uses_helper`` (Plan
+    15 Task 8); this fixture intentionally cannot construct a None-config
+    context so test authors don't accidentally exercise the
+    ``ctx.config is None`` path or the live-Config path without explicit
+    intent.
     """
     return ToolContext(
         vault_root=vault,
@@ -48,12 +63,12 @@ def test_name() -> None:
 
 
 async def test_refuses_secret_like_key(tmp_path: Path) -> None:
-    """The secret-substring check fires before any Config traversal — and
-    crucially before the ``ctx.config is None`` check, so a bad key on a
-    misconfigured ctx still raises ``PermissionError`` (not ``RuntimeError``).
+    """The secret-substring check fires in ``handle`` before
+    ``_snapshot_config`` is invoked, so the refusal does not depend on the
+    Config's contents — a default ``Config()`` is passed for shape only.
     """
     with pytest.raises(PermissionError, match="secret-like"):
-        await handle({"key": "llm.api_key"}, _mk_ctx(tmp_path, config=None))
+        await handle({"key": "llm.api_key"}, _mk_ctx(tmp_path, config=Config()))
 
 
 async def test_returns_vault_path_from_ctx(tmp_path: Path) -> None:
@@ -61,21 +76,9 @@ async def test_returns_vault_path_from_ctx(tmp_path: Path) -> None:
     dump — the loader's allowlist excludes ``vault_path`` from the
     persisted blob so the tool injects it explicitly.
     """
-    result = await handle({"key": "vault_path"}, _mk_ctx(tmp_path, Config()))
+    result = await handle({"key": "vault_path"}, _mk_ctx(tmp_path, config=Config()))
 
     assert isinstance(result, ToolResult)
     assert result.data is not None
     assert result.data["key"] == "vault_path"
     assert result.data["value"] == str(tmp_path)
-
-
-async def test_raises_runtime_error_when_ctx_config_is_none(tmp_path: Path) -> None:
-    """Plan 12 Task 3 / D5: a ``None`` config is a lifecycle violation —
-    the wrapper (brain_api lifespan / brain_mcp _build_ctx) is responsible
-    for threading the loaded Config through. Silently returning ``Config()``
-    defaults would make Settings reads lie about the resolved config
-    (Plan 11 lesson 343 anti-pattern).
-    """
-    ctx = _mk_ctx(tmp_path, config=None)
-    with pytest.raises(RuntimeError, match=r"ctx\.config"):
-        await handle({"key": "active_domain"}, ctx)
