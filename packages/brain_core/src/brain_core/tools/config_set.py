@@ -78,7 +78,9 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         # Plan 07 Task 1: per-category autonomy flags. Each maps 1:1 to a
         # field on ``AutonomousConfig`` and a value in ``PatchCategory``.
         # Setting any of these to True opts that category into auto-apply
-        # via ``should_auto_apply``. Persistence lands in Plan 07 Task 5.
+        # via ``should_auto_apply``. Persisted to ``<vault>/.brain/config.json``
+        # via the ``persist_config_or_revert`` path in :func:`handle` below
+        # (Plan 11 Task 4 wired the disk round-trip).
         "autonomous.ingest",
         "autonomous.entities",
         "autonomous.concepts",
@@ -86,8 +88,10 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         "autonomous.draft",
         # Plan 07 Task 2: per-mode chat-model overrides. Each maps to the
         # matching ``ChatSessionConfig.{mode}_model`` field; None falls
-        # back to the global ``llm.model`` default. Persistence lands in
-        # Plan 07 Task 5 alongside the autonomy flags above.
+        # back to the global ``llm.model`` default. These are session-scoped
+        # (``_NON_PERSISTED_KEYS`` below) — applied per-session at chat
+        # construction by the Settings UI, never written to disk; the
+        # Plan 11 Task 4 split made this an explicit design choice.
         "ask_model",
         "brainstorm_model",
         "draft_model",

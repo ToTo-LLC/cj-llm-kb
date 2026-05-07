@@ -97,10 +97,11 @@ class BudgetConfig(BaseModel):
     alert_threshold_pct: int = Field(default=80, ge=0, le=100)
     # Plan 07 Task 4: ephemeral budget override. ``override_until`` is a UTC
     # timestamp; while ``now() < override_until`` the effective daily cap is
-    # ``daily_usd + override_delta_usd``. Both fields are read-only on the
-    # config object for now (Plan 07 Task 5 wires real persistence) — the
-    # ``brain_budget_override`` tool sets them in-process via Pydantic
-    # ``model_copy`` or settings-shim.
+    # ``daily_usd + override_delta_usd``. Persisted on the Config object and
+    # round-tripped to ``<vault>/.brain/config.json`` like every other
+    # ``BudgetConfig`` field (Plan 11 Task 4 disk persistence); the
+    # ``brain_budget_override`` tool writes them via the standard
+    # ``brain_config_set`` allowlist path so a UI surface can wipe them too.
     override_until: datetime | None = None
     override_delta_usd: float = Field(default=0.0, ge=0.0)
 

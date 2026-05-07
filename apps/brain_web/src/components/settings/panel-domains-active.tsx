@@ -102,9 +102,15 @@ export function PanelDomainsActive(): React.ReactElement {
       const cta = isValidatorError
         ? "Pick a different domain."
         : "Try again.";
+      // Plan 16 Task 25: ``ApiError.message`` may not end in punctuation
+      // (validator errors render as a flat sentence fragment, e.g.
+      // "active_domain 'foo' is not in domains [..]"), which would
+      // run together with the CTA — "[..] Pick a different domain."
+      // Normalize so the joined sentence reads as two sentences.
+      const detailWithStop = /[.!?]$/.test(detail) ? detail : `${detail}.`;
       pendingToast = {
         lead: "Couldn't update active domain.",
-        msg: `${detail} ${cta}`,
+        msg: `${detailWithStop} ${cta}`,
         variant: "danger",
       };
     }

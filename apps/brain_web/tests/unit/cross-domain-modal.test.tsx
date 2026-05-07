@@ -23,10 +23,12 @@ import "@testing-library/jest-dom/vitest";
 
 import {
   CrossDomainModal,
+  PrivacyRailedGlossaryTooltip,
   computeRailedSlugsInScope,
   joinSlugs,
   shouldFireCrossDomainModal,
 } from "@/components/dialogs/cross-domain-modal";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 describe("shouldFireCrossDomainModal — Plan 12 D7 trigger logic table", () => {
   const railed = ["personal", "journal"];
@@ -88,6 +90,28 @@ describe("joinSlugs — Plan 12 Task 7 microcopy join rule", () => {
   test("≥3 slugs join with comma + ' and ' (no Oxford comma)", () => {
     expect(joinSlugs(["personal", "journal", "finance"])).toBe(
       "personal, journal and finance",
+    );
+  });
+});
+
+// ---------- PrivacyRailedGlossaryTooltip ----------
+
+describe("PrivacyRailedGlossaryTooltip — Plan 15 Task 5 glossary surface", () => {
+  test("exposes accessible name + canonical 85-char tooltip text on hover", async () => {
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <PrivacyRailedGlossaryTooltip />
+      </TooltipProvider>,
+    );
+    const trigger = screen.getByRole("button", {
+      name: "What does Privacy-railed mean?",
+    });
+    await user.hover(trigger);
+    // Radix portals tooltip content; ``findByRole("tooltip")`` waits for it.
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent(
+      "Domains marked Privacy-railed never appear in chats unless you include them yourself.",
     );
   });
 });
