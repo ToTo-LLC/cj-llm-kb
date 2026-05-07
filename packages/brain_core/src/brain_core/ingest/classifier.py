@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from brain_core.config.schema import DEFAULT_DOMAINS
+from brain_core.budget import PerDomainBudgetGuard
+from brain_core.config.schema import DEFAULT_DOMAINS, Config
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
 from brain_core.prompts.loader import load_prompt
@@ -28,6 +29,9 @@ async def classify(
     snippet: str,
     confidence_threshold: float = 0.7,
     allowed_domains: tuple[str, ...] = DEFAULT_DOMAINS,
+    guard: PerDomainBudgetGuard | None = None,
+    config: Config | None = None,
+    domain: str | None = None,
 ) -> ClassifyResult:
     """Classify a source by title + snippet. Returns a typed result with a user-pick flag.
 
@@ -53,6 +57,13 @@ async def classify(
     domains_text = ", ".join(f"`{d}`" for d in allowed_domains)
     system = prompt.render_system(domains=domains_text)
     user_content = prompt.render(title=title, snippet=snippet)
+    # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+    # round-trip. ``domain`` is typically ``None`` here (the auto-detect
+    # path doesn't know the domain — that's what classify is determining)
+    # and the guard no-ops. Callers that pre-supply ``domain`` (e.g. a
+    # forced classify against a known domain) get enforcement.
+    if guard is not None:
+        guard.check_for(domain=domain, config=config)
     response = await llm.complete(
         LLMRequest(
             model=model,

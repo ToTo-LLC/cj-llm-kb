@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.ingest.bulk import BulkImporter
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestStatus
@@ -112,6 +113,14 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
     summarize_model = getattr(cfg_llm, "default_model", None) or _SUMMARIZE_MODEL_FALLBACK
     integrate_model = getattr(cfg_llm, "default_model", None) or _INTEGRATE_MODEL_FALLBACK
     handlers = _default_handlers(cfg_handlers) if cfg_handlers is not None else None
+    # Plan 16 Task 28.5: per-domain budget guard. Bulk import classifies
+    # each file individually before knowing its domain, so the classify
+    # call sees ``domain=None`` and the guard no-ops. Summarize and
+    # integrate run per-item with the resolved domain → cap is enforced
+    # mid-batch if any single domain breaches its cap.
+    guard = (
+        PerDomainBudgetGuard(ctx.cost_ledger) if ctx.cost_ledger is not None else None
+    )
     return IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
@@ -121,6 +130,8 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
         classify_model=classify_model,
         state_db=ctx.state_db,
         handlers=handlers,
+        guard=guard,
+        config=cfg,
     )
 
 

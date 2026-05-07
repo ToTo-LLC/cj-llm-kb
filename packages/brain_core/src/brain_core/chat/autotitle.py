@@ -12,7 +12,9 @@ import json
 import re
 from dataclasses import dataclass
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.types import ChatTurn
+from brain_core.config.schema import Config
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
 from brain_core.prompts.loader import Prompt, load_prompt
@@ -37,10 +39,21 @@ class AutoTitler:
         *,
         prompt: Prompt | None = None,
         model: str = "claude-haiku-4-5",
+        guard: PerDomainBudgetGuard | None = None,
+        config: Config | None = None,
+        domain: str | None = None,
     ) -> None:
         self.llm = llm
         self.prompt = prompt if prompt is not None else load_prompt("chat_autotitle")
         self.model = model
+        # Plan 16 Task 28.5: per-domain budget guard. Autotitle is mode-
+        # independent and runs against the same thread as the chat session,
+        # so the caller threads the active domain. ``None`` keeps every
+        # legacy construction site working; the guard no-ops without a
+        # threaded domain anyway.
+        self.guard = guard
+        self.config = config
+        self.domain = domain
 
     async def run(self, turns: list[ChatTurn]) -> AutoTitleResult:
         """Run the auto-titler against the first two turns of a thread."""
@@ -55,6 +68,10 @@ class AutoTitler:
             max_tokens=64,
             temperature=0.2,
         )
+        # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+        # round-trip.
+        if self.guard is not None:
+            self.guard.check_for(domain=self.domain, config=self.config)
         response = await self.llm.complete(request)
         return self._parse(response.content)
 

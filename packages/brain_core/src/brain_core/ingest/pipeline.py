@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from brain_core.budget import PerDomainBudgetGuard
+from brain_core.config.schema import Config
 from brain_core.cost.budget import BudgetEnforcer
 from brain_core.ingest.archive import archive_dir_for
 from brain_core.ingest.classifier import ClassifyResult
@@ -53,6 +55,21 @@ class IngestPipeline:
     # ``_default_handlers()`` with hardcoded defaults — keeps Plan 02 call
     # sites working unchanged.
     handlers: list[SourceHandler] | None = None
+    # Plan 16 Task 28.5: optional per-domain budget guard, called BEFORE
+    # every LLM round-trip (classify, summarize, integrate). When ``None``,
+    # no per-domain enforcement runs — every Plan 02 call site that
+    # constructed an ``IngestPipeline`` without a guard keeps compiling
+    # unchanged. The classify call uses ``domain_override`` (when supplied)
+    # as the per-call domain — the auto-detect path can't know the domain
+    # before classify runs, so the guard no-ops there. Summarize and
+    # integrate use the resolved domain.
+    guard: PerDomainBudgetGuard | None = None
+    # Plan 16 Task 28.5: optional Config so the per-domain guard can read
+    # ``config.budget.per_domain[domain]``. The pipeline doesn't read any
+    # other Config fields — model selection still flows in via the
+    # ``classify_model`` / ``summarize_model`` / ``integrate_model``
+    # dataclass fields, populated by the caller.
+    config: Config | None = None
 
     async def ingest(
         self,
@@ -147,6 +164,7 @@ class IngestPipeline:
                     title=extracted.title or slug,
                     snippet=extracted.body_text[:1000],
                     allowed_domains=allowed_domains,
+                    domain=domain_override,
                 )
                 run_cost += classify_cost
             domain = cls_result.domain
@@ -168,7 +186,7 @@ class IngestPipeline:
                 )
 
             # Stage 6: Summarize
-            summary, summarize_cost = await self._summarize(extracted)
+            summary, summarize_cost = await self._summarize(extracted, domain=domain)
             run_cost += summarize_cost
 
             # Stage 7: Build source note — recompute slug with summary title
@@ -255,6 +273,7 @@ class IngestPipeline:
         title: str,
         snippet: str,
         allowed_domains: tuple[str, ...],
+        domain: str | None = None,
     ) -> tuple[ClassifyResult, float]:
         """Run the classify prompt inline and return (result, cost_usd).
 
@@ -275,6 +294,14 @@ class IngestPipeline:
         domains_text = ", ".join(f"`{d}`" for d in allowed_domains)
         system = prompt.render_system(domains=domains_text)
         user_content = prompt.render(title=title, snippet=snippet)
+        # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+        # round-trip. ``domain`` here is ``domain_override`` (when supplied)
+        # — the auto-detect path passes ``None`` and the guard no-ops,
+        # which is the correct shape: we cannot enforce a per-domain cap
+        # against an unknown domain (the very call we're about to make is
+        # what classifies it).
+        if self.guard is not None:
+            self.guard.check_for(domain=domain, config=self.config)
         response = await self.llm.complete(
             LLMRequest(
                 model=self.classify_model,
@@ -294,7 +321,12 @@ class IngestPipeline:
         )
         return result, _estimate_call_cost(self.classify_model, response)
 
-    async def _summarize(self, extracted: ExtractedSource) -> tuple[SummarizeOutput, float]:
+    async def _summarize(
+        self,
+        extracted: ExtractedSource,
+        *,
+        domain: str,
+    ) -> tuple[SummarizeOutput, float]:
         """Call the summarize prompt and parse the response as SummarizeOutput.
 
         Returns ``(parsed, cost_usd)`` so the pipeline can accumulate spend
@@ -306,6 +338,10 @@ class IngestPipeline:
             source_type=extracted.source_type.value,
             body=extracted.body_text,
         )
+        # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+        # round-trip. ``domain`` is the resolved post-classify domain.
+        if self.guard is not None:
+            self.guard.check_for(domain=domain, config=self.config)
         response = await self.llm.complete(
             LLMRequest(
                 model=self.summarize_model,
@@ -345,6 +381,10 @@ class IngestPipeline:
             domain=domain,
             related_notes="",
         )
+        # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+        # round-trip. ``domain`` is the resolved post-classify domain.
+        if self.guard is not None:
+            self.guard.check_for(domain=domain, config=self.config)
         response = await self.llm.complete(
             LLMRequest(
                 model=self.integrate_model,

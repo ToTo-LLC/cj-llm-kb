@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.autotitle import AutoTitler
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.modes import MODES, tool_to_tooldef
@@ -34,6 +35,7 @@ from brain_core.chat.types import (
     ChatTurn,
     TurnRole,
 )
+from brain_core.config.schema import Config
 from brain_core.cost.ledger import CostEntry, CostLedger
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import (
@@ -80,6 +82,8 @@ class ChatSession:
         vault_writer: VaultWriter | None = None,
         initial_turns: list[ChatTurn] | None = None,
         cost_ledger: CostLedger | None = None,
+        guard: PerDomainBudgetGuard | None = None,
+        app_config: Config | None = None,
     ) -> None:
         if autotitler is not None and vault_writer is None:
             raise ValueError("autotitler requires vault_writer")
@@ -101,6 +105,15 @@ class ChatSession:
         # down by chat surface. ``None`` preserves Plan 03 semantics
         # (session loop does not write to the ledger).
         self.cost_ledger = cost_ledger
+        # Plan 16 Task 28.5: per-domain budget guard. The session reads
+        # ``config.domains`` to derive the per-call domain (single-domain
+        # chats get enforcement; multi-domain chats no-op the guard since
+        # there's no canonical per-call domain). ``app_config`` carries
+        # ``Config.budget.per_domain`` overrides — distinct from
+        # ``ChatSessionConfig`` which is the chat-thread shape, not the
+        # app-wide config.
+        self.guard = guard
+        self.app_config = app_config
         # ``initial_turns`` rehydrates an existing thread — the list is
         # copied so mutations during subsequent turns don't leak back to
         # the caller. Plan 05 Task 21 uses this to reconstruct a chat
@@ -241,6 +254,18 @@ class ChatSession:
                     tools=[tool_to_tooldef(t) for t in self._effective_registry.all()],
                     max_tokens=4096,
                 )
+
+                # Plan 16 Task 28.5: per-domain budget guard fires BEFORE
+                # the LLM round-trip. Single-domain chats (the common
+                # case for caps) get enforcement; multi-domain chats pass
+                # ``None`` and the guard no-ops, preserving the existing
+                # cost-ledger best-effort tagging shape (``config.domains[0]``
+                # below) without forcing a single domain to absorb the cap.
+                if self.guard is not None:
+                    chat_call_domain = (
+                        self.config.domains[0] if len(self.config.domains) == 1 else None
+                    )
+                    self.guard.check_for(domain=chat_call_domain, config=self.app_config)
 
                 pending_tool_uses: list[dict[str, Any]] = []
                 current_text_parts: list[str] = []

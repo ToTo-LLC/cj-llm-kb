@@ -22,6 +22,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Literal, cast
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.fork import fork_from
 from brain_core.chat.modes import MODES
@@ -135,6 +136,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     title_hint = arguments.get("title_hint")
     title_hint_str = str(title_hint) if title_hint else None
 
+    # Plan 16 Task 28.5: per-domain budget guard. Only the 'summary' carry
+    # mode hits the LLM, but we always thread the guard so the wiring is
+    # uniform — no-op carry modes never invoke ``check_for`` (no LLM call,
+    # no guard call).
+    guard = (
+        PerDomainBudgetGuard(ctx.cost_ledger) if ctx.cost_ledger is not None else None
+    )
+
     session = await fork_from(
         source_thread_id=str(arguments["source_thread_id"]),
         turn_index=int(arguments["turn_index"]),
@@ -148,6 +157,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         state_db=ctx.state_db,
         vault_writer=ctx.writer,
         cost_ledger=ctx.cost_ledger,
+        guard=guard,
+        config=ctx.config,
         carry=carry,
         mode=mode,
         title_hint=title_hint_str,

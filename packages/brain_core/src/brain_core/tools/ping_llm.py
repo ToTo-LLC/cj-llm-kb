@@ -18,6 +18,7 @@ import sys
 import time
 from typing import Any
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.llm.types import LLMMessage, LLMRequest
 from brain_core.tools.base import ToolContext, ToolResult
 
@@ -61,6 +62,28 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         temperature=0.0,
     )
     provider_name = getattr(ctx.llm, "name", "unknown")
+
+    # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+    # round-trip. ping_llm probes are typically domain-agnostic (the user
+    # is testing the provider, not a specific domain), so ``ctx.domain``
+    # is usually ``None`` and the guard no-ops. When a caller does set
+    # ``ctx.domain`` (e.g. an automated probe inside an active chat), the
+    # cap is enforced.
+    if ctx.cost_ledger is not None:
+        guard = PerDomainBudgetGuard(ctx.cost_ledger)
+        try:
+            guard.check(ctx)
+        except Exception as exc:
+            return ToolResult(
+                text=f"ping_llm failed: {exc}",
+                data={
+                    "ok": False,
+                    "error": str(exc),
+                    "provider": provider_name,
+                    "model": model,
+                    "latency_ms": 0,
+                },
+            )
 
     start = time.monotonic()
     try:

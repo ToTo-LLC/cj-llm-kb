@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.persistence import ThreadPersistence
@@ -30,6 +31,7 @@ from brain_core.chat.retrieval import BM25VaultIndex
 from brain_core.chat.session import ChatSession
 from brain_core.chat.tools.base import ToolRegistry
 from brain_core.chat.types import ChatMode, ChatSessionConfig, ChatTurn, TurnRole
+from brain_core.config.schema import Config
 from brain_core.cost.ledger import CostLedger
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
@@ -74,14 +76,26 @@ async def summarize_turns(
     llm: LLMProvider,
     *,
     model: str = _SUMMARY_MODEL,
+    guard: PerDomainBudgetGuard | None = None,
+    config: Config | None = None,
+    domain: str | None = None,
 ) -> str:
     """Haiku-cheap prose summary of the given chat turns.
 
     Returns the raw LLM text (typically ~4 sentences). Caller decides
     how to wrap it — ``fork_from`` prepends it as a single ``SYSTEM``
     turn in the new session's initial history.
+
+    Plan 16 Task 28.5: ``guard`` / ``config`` / ``domain`` are optional
+    per-domain budget enforcement parameters. The fork is intrinsically
+    tied to a source thread that already has a single active domain, so
+    the caller threads it here.
     """
     transcript = "\n\n".join(f"{t.role.value}: {t.content}" for t in turns)
+    # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
+    # round-trip.
+    if guard is not None:
+        guard.check_for(domain=domain, config=config)
     response = await llm.complete(
         LLMRequest(
             model=model,
@@ -108,6 +122,8 @@ async def fork_from(
     state_db: StateDB | None = None,
     vault_writer: VaultWriter | None = None,
     cost_ledger: CostLedger | None = None,
+    guard: PerDomainBudgetGuard | None = None,
+    config: Config | None = None,
     carry: Literal["full", "none", "summary"] = "full",
     mode: ChatMode | None = None,
     title_hint: str | None = None,
@@ -162,7 +178,21 @@ async def fork_from(
     elif carry == "full":
         initial_turns = turns_to_carry
     elif carry == "summary":
-        summary_text = await summarize_turns(turns_to_carry, llm)
+        # Plan 16 Task 28.5: thread the per-domain guard through. The
+        # source thread's domain is read from its loaded config; when the
+        # source has multiple allowed_domains there is no single per-call
+        # domain — pass ``None`` and the guard no-ops, falling back to the
+        # global enforcement layer (Plan 16's legacy ``BudgetEnforcer``).
+        fork_domain = (
+            loaded.config.domains[0] if len(loaded.config.domains) == 1 else None
+        )
+        summary_text = await summarize_turns(
+            turns_to_carry,
+            llm,
+            guard=guard,
+            config=config,
+            domain=fork_domain,
+        )
         initial_turns = [
             ChatTurn(
                 role=TurnRole.SYSTEM,

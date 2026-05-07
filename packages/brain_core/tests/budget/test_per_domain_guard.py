@@ -291,3 +291,56 @@ def test_ctx_domain_none_is_noop(tmp_path: Path) -> None:
     )
 
     guard.check(ctx)
+
+
+# ---------------------------------------------------------------------------
+# Plan 16 Task 28.5 — :meth:`check_for` convenience wrapper
+# ---------------------------------------------------------------------------
+
+
+def test_check_for_under_cap_is_noop(tmp_path: Path) -> None:
+    """``check_for(domain, config)`` no-ops below the cap, same as ``check``."""
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    _seed(ledger, domain="research", cost_usd=0.50, hours_ago=2)
+    guard = PerDomainBudgetGuard(ledger)
+    config = Config(vault_path=tmp_path)
+    config.budget.per_domain = {"research": BudgetOverride(daily_cap_usd=1.00)}
+
+    guard.check_for(domain="research", config=config)
+
+
+def test_check_for_over_cap_raises(tmp_path: Path) -> None:
+    """``check_for`` raises :class:`BudgetCapExceeded` with the same message
+    shape as :meth:`check` when the cap is exceeded."""
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    _seed(ledger, domain="research", cost_usd=1.50, hours_ago=2)
+    guard = PerDomainBudgetGuard(ledger)
+    config = Config(vault_path=tmp_path)
+    config.budget.per_domain = {"research": BudgetOverride(daily_cap_usd=1.00)}
+
+    with pytest.raises(BudgetCapExceeded) as exc:
+        guard.check_for(domain="research", config=config)
+
+    msg = str(exc.value)
+    assert "domain=research" in msg
+    assert "window=daily" in msg
+
+
+def test_check_for_none_domain_is_noop(tmp_path: Path) -> None:
+    """``domain=None`` falls through (auto-detect / multi-domain shape)."""
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    _seed(ledger, domain="research", cost_usd=999.0, hours_ago=1)
+    guard = PerDomainBudgetGuard(ledger)
+    config = Config(vault_path=tmp_path)
+    config.budget.per_domain = {"research": BudgetOverride(daily_cap_usd=1.00)}
+
+    guard.check_for(domain=None, config=config)
+
+
+def test_check_for_none_config_is_noop(tmp_path: Path) -> None:
+    """``config=None`` falls through (low-level harness without app config)."""
+    ledger = CostLedger(db_path=tmp_path / "costs.sqlite")
+    _seed(ledger, domain="research", cost_usd=999.0, hours_ago=1)
+    guard = PerDomainBudgetGuard(ledger)
+
+    guard.check_for(domain="research", config=None)

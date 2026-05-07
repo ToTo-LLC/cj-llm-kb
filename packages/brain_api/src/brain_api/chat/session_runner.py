@@ -39,6 +39,7 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, cast
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.modes import MODES
 from brain_core.chat.persistence import ThreadPersistence
@@ -245,6 +246,17 @@ class SessionRunner:
                         self.thread_id,
                     )
 
+        # Plan 16 Task 28.5: per-domain budget guard. Build from the
+        # AppContext's cost ledger so the chat session can enforce
+        # per-domain caps before each LLM stream. ``app_config`` carries
+        # ``Config.budget.per_domain`` overrides — distinct from the
+        # chat-thread ``ChatSessionConfig`` shape above.
+        guard = (
+            PerDomainBudgetGuard(self.ctx.tool_ctx.cost_ledger)
+            if self.ctx.tool_ctx.cost_ledger is not None
+            else None
+        )
+
         self._session = ChatSession(
             config=config,
             llm=self.ctx.tool_ctx.llm,
@@ -257,6 +269,8 @@ class SessionRunner:
             thread_id=self.thread_id,
             persistence=persistence,
             initial_turns=initial_turns,
+            guard=guard,
+            app_config=self.ctx.tool_ctx.config,
             # autotitler / vault_writer: deferred — autotitle is a
             # draft-mode concern that Plan 07 wires end-to-end (requires
             # a rename + WS thread_id update protocol).

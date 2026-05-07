@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.ingest.classifier import classify
 from brain_core.llm import resolve_llm_config
 from brain_core.tools.base import ToolContext, ToolResult
@@ -89,6 +90,15 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     hint_arg = arguments.get("hint")
     title = str(hint_arg) if hint_arg is not None else ""
 
+    # Plan 16 Task 28.5: per-domain budget guard. Classification is the
+    # auto-detect step — we don't know the domain yet, so the guard
+    # always no-ops here on ``domain=None``. We still wire it for shape
+    # consistency: if a future caller pre-supplies a domain hint, the
+    # cap will be enforced without any further wiring change.
+    guard = (
+        PerDomainBudgetGuard(ctx.cost_ledger) if ctx.cost_ledger is not None else None
+    )
+
     result = await classify(
         llm=ctx.llm,
         model=_classify_model_for(ctx),
@@ -100,6 +110,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         # default {research, work, personal} regardless of whether the
         # user added or removed domains via Settings → Domains.
         allowed_domains=ctx.allowed_domains,
+        guard=guard,
+        config=ctx.config,
+        domain=None,
     )
 
     # Sanitize: if the classifier returned an out-of-scope domain, don't leak

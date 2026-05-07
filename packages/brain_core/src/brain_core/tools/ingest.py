@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.types import ChatMode
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestStatus
@@ -98,6 +99,13 @@ def _build_pipeline_from_ctx(ctx: ToolContext, *, domain: str | None) -> IngestP
     # otherwise leave it None so the pipeline falls back to the hardcoded
     # defaults (which is what the no-config tests expect).
     handlers = _default_handlers(cfg_handlers) if cfg_handlers is not None else None
+    # Plan 16 Task 28.5: build a PerDomainBudgetGuard from the ctx's
+    # cost ledger when available so the pipeline's per-stage guards have
+    # a concrete instance to call. ``None`` ledger (low-level test
+    # harnesses) → no guard → pipeline no-ops on per-domain enforcement.
+    guard = (
+        PerDomainBudgetGuard(ctx.cost_ledger) if ctx.cost_ledger is not None else None
+    )
     return IngestPipeline(
         vault_root=ctx.vault_root,
         writer=ctx.writer,
@@ -107,6 +115,8 @@ def _build_pipeline_from_ctx(ctx: ToolContext, *, domain: str | None) -> IngestP
         classify_model=classify_model,
         state_db=ctx.state_db,
         handlers=handlers,
+        guard=guard,
+        config=cfg,
     )
 
 
