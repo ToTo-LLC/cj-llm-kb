@@ -38,6 +38,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from brain_core.config.schema import (
+    AutonomyCategoryFlags,
     BudgetOverride,
     Config,
     DomainOverride,
@@ -90,10 +91,10 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
         # to ``dict[str, AutonomyCategoryFlags]`` — the dotted keys no
         # longer resolve against pydantic ``model_fields`` (the walker
         # can't descend through a ``dict[...]`` annotation). Plan 16 Task 40
-        # is responsible for landing the replacement
-        # ``autonomous.<slug>.<field>`` wildcard pattern alongside the
-        # Settings UI panel; this comment is the marker so a reviewer
-        # tracing wire-shape history can find the breadcrumb.
+        # landed the replacement ``autonomous.<slug>.<field>`` wildcard
+        # alongside the Settings UI panel — see
+        # :func:`_is_settable_autonomous_per_domain_key` and
+        # :func:`_apply_autonomous_per_domain` below.
         # Plan 07 Task 2: per-mode chat-model overrides. Each maps to the
         # matching ``ChatSessionConfig.{mode}_model`` field; None falls
         # back to the global ``llm.model`` default. These are session-scoped
@@ -175,6 +176,20 @@ _RATE_LIMIT_OVERRIDE_FIELDS: frozenset[str] = frozenset(
     RateLimitOverride.model_fields.keys()
 )
 
+# Plan 16 Task 40 / D30 step 4 of 4: ``autonomous.<slug>.<field>`` is the
+# fourth open-set wildcard pattern (mirroring ``domain_overrides``,
+# ``budget.per_domain``, and ``providers.<provider>.rate_limit_per_domain``).
+# Plan 16 Task 38 reshaped ``Config.autonomous`` from the legacy flat
+# :class:`AutonomousConfig` BaseModel (5 booleans) to
+# ``dict[str, AutonomyCategoryFlags]`` keyed by domain slug. Task 39
+# DROPPED the legacy ``autonomous.<flag>`` keys from the static
+# ``_SETTABLE_KEYS`` allowlist; this wildcard is the replacement path the
+# Settings → Autonomy panel writes through. The leaf-field set is derived
+# from :class:`AutonomyCategoryFlags.model_fields` so a future schema
+# addition (e.g. a new patch category) lights up automatically without a
+# config_set change.
+_AUTONOMY_FIELDS: frozenset[str] = frozenset(AutonomyCategoryFlags.model_fields.keys())
+
 
 def _is_settable_domain_override_key(key: str) -> bool:
     """Return True if ``key`` matches ``domain_overrides.<slug>.<field>``.
@@ -220,6 +235,32 @@ def _is_settable_budget_per_domain_key(key: str) -> bool:
         and parts[0] == "budget"
         and parts[1] == "per_domain"
         and bool(parts[2])
+    )
+
+
+def _is_settable_autonomous_per_domain_key(key: str) -> bool:
+    """Return True if ``key`` matches ``autonomous.<slug>.<field>``.
+
+    Plan 16 Task 40 / D30 step 4 of 4. Three-segment wildcard pattern
+    where the trailing slug is the open-set portion and ``<field>`` is
+    one of :class:`AutonomyCategoryFlags`'s leaf fields (``new_files``,
+    ``edits``, ``index_entries``, ``concepts``, ``draft``). Mirrors
+    :func:`_is_settable_domain_override_key` in shape — the leaf-field
+    allowlist is the real security gate, and slug membership in
+    ``Config.domains`` is enforced at apply time inside
+    :func:`_apply_autonomous_per_domain` so the Settings UI surfaces a
+    consistent error voice regardless of which seam catches it.
+
+    Each value is a plain :class:`bool` (no whole-payload write) — every
+    flag toggles independently in the per-domain x per-category grid the
+    Settings -> Autonomy panel renders.
+    """
+    parts = key.split(".")
+    return (
+        len(parts) == 3
+        and parts[0] == "autonomous"
+        and parts[2] in _AUTONOMY_FIELDS
+        and bool(parts[1])
     )
 
 
@@ -594,6 +635,110 @@ def _apply_rate_limit_per_domain(config: Config, key: str, value: Any) -> None:
         providers.pop(provider_name, None)
 
 
+def _apply_autonomous_per_domain(config: Config, key: str, value: Any) -> None:
+    """Apply an ``autonomous.<slug>.<field>`` mutation in place.
+
+    Plan 16 Task 40 / D30 step 4 of 4. Mirrors
+    :func:`_apply_domain_override` for the
+    ``Config.autonomous: dict[str, AutonomyCategoryFlags]`` shape. The
+    standard :func:`_resolve_parent_and_field` walker can't descend
+    through ``Config.autonomous`` because the value is a
+    ``dict[str, AutonomyCategoryFlags]``, not a pydantic model.
+
+    Semantics:
+
+    1. Parse ``autonomous.<slug>.<field>``. The caller has already
+       validated the shape via
+       :func:`_is_settable_autonomous_per_domain_key` (3 segments, valid
+       leaf field, non-empty slug).
+    2. Slug-membership pre-check: ``slug`` must be in ``config.domains``.
+       The Plan 16 Task 38 cross-field validator (
+       ``_check_autonomous_keys_in_domains``) on Config also fires on
+       persist, but mirroring the
+       :func:`_apply_domain_override` / :func:`_apply_budget_per_domain`
+       guards here gives the Settings UI an immediate, consistent error
+       voice (and stays consistent with the Plan 13 lesson about not
+       relying on disk-write seams to catch orphan slugs — the Settings
+       UI would otherwise see a misleading Pydantic ``ValidationError``
+       from the writer instead of the per-helper "not in domains" voice).
+    3. Coerce ``value`` to ``bool`` semantics — the wire is JSON, so
+       ``True`` / ``False`` arrive as Python booleans. Anything else is
+       rejected with a clear ``ValueError`` so a stray string / number
+       from the wire doesn't fail with a confusing Pydantic error.
+    4. Auto-create or mutate the per-slug
+       :class:`AutonomyCategoryFlags`:
+
+         - If ``slug`` not in ``config.autonomous``: construct
+           ``AutonomyCategoryFlags(**{field: value})`` (every other
+           field defaults to ``False`` per the schema). Insert via dict
+           assignment.
+         - If ``slug`` IS in ``config.autonomous``:
+           ``setattr(existing, field, value)`` — Plan 16 Task 36's
+           ``validate_assignment=True`` runs the field-level validator
+           (bool type check) on assignment, mirroring the
+           ``_apply_domain_override`` setattr path.
+
+    5. Prune empty entries — if EVERY field on the resulting flags
+       object is ``False`` (the default), drop the slug from
+       ``config.autonomous`` to keep the persisted shape minimal.
+       Mirrors the prune step in :func:`_apply_domain_override` and
+       :func:`_apply_budget_per_domain`. The gate
+       (:func:`brain_core.autonomy.should_auto_apply`) treats a missing
+       slug entry the same as an explicit all-False entry, so the prune
+       is semantically a no-op (CLAUDE.md principle #3: out-of-the-box
+       every flag is off).
+
+    The function mutates ``config`` IN PLACE — no ``model_copy``, no new
+    Config instance.
+    """
+    parts = key.split(".")
+    assert len(parts) == 3 and parts[0] == "autonomous", (
+        f"_apply_autonomous_per_domain called with non-autonomous key {key!r}"
+    )
+    slug = parts[1]
+    field = parts[2]
+    # Defense-in-depth — caller is _is_settable_autonomous_per_domain_key
+    # gated, but a future refactor that calls the apply helper directly
+    # without the wildcard check would otherwise skip the field-allowlist
+    # check entirely.
+    if field not in _AUTONOMY_FIELDS:
+        raise KeyError(f"{field!r} is not a field of AutonomyCategoryFlags")
+
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"autonomous.{slug}.{field} value must be bool, "
+            f"got {type(value).__name__}"
+        )
+
+    if slug not in config.domains:
+        raise ValueError(
+            f"autonomous keys {[slug]!r} are not in domains "
+            f"{config.domains!r}; remove the entry or add the domain first."
+        )
+
+    autonomous = config.autonomous
+    existing = autonomous.get(slug)
+    if existing is None:
+        # Auto-create on first set for this slug — mirrors the per-slug
+        # ``DomainOverride`` auto-create in :func:`_apply_domain_override`.
+        # Other fields default to ``False`` per the schema (CLAUDE.md
+        # principle #3).
+        existing = AutonomyCategoryFlags(**{field: value})
+        autonomous[slug] = existing
+    else:
+        # Plan 16 Task 36 validate_assignment=True runs the field-level
+        # bool-type validator on this setattr.
+        setattr(existing, field, value)
+
+    # Prune empty entries — every flag False is semantically identical
+    # to "no entry" (the gate treats them the same; see schema docstring).
+    # Without this prune a "set then reset every flag to False" round-
+    # trip would leave an empty {new_files: false, edits: false, ...}
+    # object in the persisted dict.
+    if all(getattr(existing, f) is False for f in _AUTONOMY_FIELDS):
+        del autonomous[slug]
+
+
 def _check_active_domain_membership(config: Config, value: Any) -> None:
     """Mirror ``Config._check_active_domain_in_domains`` at write time.
 
@@ -652,15 +797,30 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # check stays as a redundant safety net for unknown keys but is
     # bypassed (along with the static allowlist) for this wildcard.
     is_rate_limit_per_domain = _is_settable_rate_limit_per_domain_key(key)
-    if not (is_domain_override or is_budget_per_domain or is_rate_limit_per_domain):
+    # Plan 16 Task 40 / D30 step 4 of 4: ``autonomous.<slug>.<field>`` is
+    # the fourth open-set wildcard pattern. Same shape as
+    # ``domain_overrides.<slug>.<field>`` (3 segments, leaf-allowlisted)
+    # so the same secret-substring + static-allowlist bypass logic
+    # applies. No leaf field on :class:`AutonomyCategoryFlags` contains
+    # ``api_key`` / ``secret`` / ``token`` / ``password`` (they're plain
+    # booleans named after PatchSet member fields and PatchCategory
+    # values), so the substring check stays as a redundant safety net.
+    is_autonomous_per_domain = _is_settable_autonomous_per_domain_key(key)
+    if not (
+        is_domain_override
+        or is_budget_per_domain
+        or is_rate_limit_per_domain
+        or is_autonomous_per_domain
+    ):
         if any(s in key.lower() for s in _SECRET_SUBSTRINGS):
             raise PermissionError(f"refusing to set secret-like key {key!r}")
         if key not in _SETTABLE_KEYS:
             raise PermissionError(
                 f"key {key!r} is not settable via MCP — settable keys: "
                 f"{sorted(_SETTABLE_KEYS)} (plus domain_overrides.<slug>.<field>, "
-                f"budget.per_domain.<slug>, and "
-                f"providers.<provider>.rate_limit_per_domain.<slug>)"
+                f"budget.per_domain.<slug>, "
+                f"providers.<provider>.rate_limit_per_domain.<slug>, and "
+                f"autonomous.<slug>.<field>)"
             )
 
     value = arguments["value"]
@@ -720,6 +880,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             _apply_budget_per_domain(cfg, key, value)
         elif is_rate_limit_per_domain:
             _apply_rate_limit_per_domain(cfg, key, value)
+        elif is_autonomous_per_domain:
+            _apply_autonomous_per_domain(cfg, key, value)
         else:
             # Plan 12 D2: ``active_domain`` membership is validated here
             # to short-circuit the bad assignment. Plan 16 Task 36 turned

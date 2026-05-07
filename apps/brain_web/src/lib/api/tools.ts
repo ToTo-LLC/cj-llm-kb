@@ -540,6 +540,62 @@ export const setDomainRateLimit = (
   });
 
 /**
+ * Per-domain × per-category autonomy flag categories (Plan 16 Task 40 /
+ * D30 step 4 of 4). HYBRID surface (T37 §1): three are
+ * :class:`brain_core.vault.types.PatchSet` member-field names
+ * (``new_files``, ``edits``, ``index_entries``); two are
+ * :class:`brain_core.vault.types.PatchCategory` values (``concepts``,
+ * ``draft``). Mirrors the Python schema's
+ * :class:`brain_core.config.schema.AutonomyCategoryFlags` field set
+ * exactly — drift would silently make a new flag non-settable from the
+ * Settings UI.
+ */
+export type AutonomyCategory =
+  | "new_files"
+  | "edits"
+  | "index_entries"
+  | "concepts"
+  | "draft";
+
+/** Iteration-friendly readonly tuple of every autonomy category in the
+ *  canonical UI order (matches ``Config.autonomous`` row layout). */
+export const AUTONOMY_CATEGORIES = [
+  "new_files",
+  "edits",
+  "index_entries",
+  "concepts",
+  "draft",
+] as const satisfies readonly AutonomyCategory[];
+
+/**
+ * Persist a single per-domain × per-category autonomy flag (Plan 16
+ * Task 40 / D30 step 4 of 4). Routes through ``brain_config_set`` with
+ * the dotted key ``autonomous.<slug>.<category>`` — the backend's
+ * wildcard handler (``_apply_autonomous_per_domain``) auto-creates the
+ * per-slug :class:`AutonomyCategoryFlags` entry on first set; mutates
+ * the existing entry's leaf field via ``setattr`` on subsequent sets.
+ *
+ * Per-leaf semantics (unlike :func:`setDomainBudget` which writes a
+ * whole :class:`BudgetOverride` payload at once) — every Switch in the
+ * Settings → Autonomy grid toggles independently, so a single-leaf
+ * write is the natural shape.
+ *
+ * Setting every flag in the entry to ``false`` causes the backend to
+ * prune the slug entry entirely (the gate treats a missing slug the
+ * same as an explicit all-False entry; CLAUDE.md principle #3 keeps
+ * out-of-the-box every flag off).
+ */
+export const setDomainAutonomy = (
+  slug: string,
+  category: AutonomyCategory,
+  value: boolean,
+): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({
+    key: `autonomous.${slug}.${category}`,
+    value,
+  });
+
+/**
  * Persist a new ``active_domain`` slug (Plan 12 D2 / Task 6).
  *
  * Self-documenting wrapper around ``configSet({key:"active_domain",

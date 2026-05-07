@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 from brain_core.config.schema import (
+    AutonomyCategoryFlags,
     BudgetOverride,
     Config,
     ProviderConfig,
@@ -646,6 +647,187 @@ async def test_allows_budget_daily_usd(tmp_path: Path) -> None:
     assert result.data["status"] == "updated"
     assert result.data["persisted"] is True
     assert result.data["value"] == 5.0
+
+
+# ----------------------------------------------------------------
+# Plan 16 Task 40 / D30 step 4 of 4 — autonomous.<slug>.<field> wildcard
+# ----------------------------------------------------------------
+
+
+async def test_autonomous_per_domain_keys_pass_allowlist_via_wildcard(
+    tmp_path: Path,
+) -> None:
+    """Plan 16 Task 40 / D30 step 4 of 4: ``autonomous.<slug>.<field>`` is
+    a wildcard pattern, not a static ``_SETTABLE_KEYS`` entry. Setting a
+    leaf flag on a never-before-seen slug auto-creates the per-slug
+    :class:`AutonomyCategoryFlags` and lands the requested value (other
+    fields default to ``False`` per the schema — CLAUDE.md principle #3).
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    result = await handle(
+        {"key": "autonomous.research.new_files", "value": True},
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    assert result.data["persisted"] is True
+    assert "research" in cfg.autonomous
+    flags = cfg.autonomous["research"]
+    assert flags.new_files is True
+    # Other fields stay at their schema defaults (False).
+    assert flags.edits is False
+    assert flags.index_entries is False
+    assert flags.concepts is False
+    assert flags.draft is False
+
+
+async def test_autonomous_per_domain_mutates_existing_entry(tmp_path: Path) -> None:
+    """A second set on the same slug mutates the existing
+    :class:`AutonomyCategoryFlags` rather than constructing a new one
+    that overwrites prior flags. Plan 16 Task 36's
+    ``validate_assignment=True`` runs the field-level bool validator on
+    the setattr.
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.autonomous["research"] = AutonomyCategoryFlags(new_files=True)
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    result = await handle(
+        {"key": "autonomous.research.edits", "value": True},
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    flags = cfg.autonomous["research"]
+    # Both prior and new flags are True — the second set didn't blow
+    # away ``new_files`` by reconstructing a fresh AutonomyCategoryFlags.
+    assert flags.new_files is True
+    assert flags.edits is True
+    # Untouched fields stay at default.
+    assert flags.index_entries is False
+
+
+async def test_autonomous_per_domain_rejects_orphan_slug(tmp_path: Path) -> None:
+    """Slug must be in ``Config.domains``. Mirrors the
+    ``_apply_domain_override`` / ``_apply_budget_per_domain`` orphan-slug
+    guards so the Settings UI surfaces a consistent error voice across
+    every per-domain wildcard. The Plan 16 Task 38 cross-field validator
+    (``_check_autonomous_keys_in_domains``) on Config catches the same
+    case at persist time, but the apply-helper guard fires first so the
+    user gets the canonical "not in domains" wording rather than a
+    Pydantic ``ValidationError`` from the writer.
+    """
+    cfg = Config(domains=["research", "personal"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle(
+            {"key": "autonomous.ghost-domain.new_files", "value": True},
+            ctx,
+        )
+
+
+async def test_autonomous_per_domain_rejects_unknown_field(tmp_path: Path) -> None:
+    """An unknown leaf field doesn't match the wildcard's third-segment
+    allowlist (``_AUTONOMY_FIELDS``) and falls through to the static
+    ``_SETTABLE_KEYS`` gate, which raises ``PermissionError``. Mirrors
+    :func:`test_domain_override_rejects_unknown_field` — the field
+    allowlist is the real defense for this open-set wildcard.
+    """
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "autonomous.research.bogus_field", "value": True},
+            _mk_ctx(tmp_path, config=Config()),
+        )
+
+
+async def test_autonomous_per_domain_set_false_persists(tmp_path: Path) -> None:
+    """Posting ``False`` for a flag explicitly clears it. The mutation
+    path uses ``setattr`` on the existing entry so the assignment is
+    applied even when the flag was already False (a no-op assignment is
+    safe — ``validate_assignment=True`` re-runs the bool validator
+    cheaply).
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.autonomous["research"] = AutonomyCategoryFlags(new_files=True, edits=True)
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    await handle(
+        {"key": "autonomous.research.new_files", "value": False},
+        ctx,
+    )
+    # ``new_files`` was True, now False; ``edits`` (untouched) stays True
+    # so the entry is NOT pruned (see prune-empty test below).
+    flags = cfg.autonomous["research"]
+    assert flags.new_files is False
+    assert flags.edits is True
+
+
+async def test_autonomous_per_domain_prunes_all_false_entry(tmp_path: Path) -> None:
+    """When the post-mutation entry has every field at ``False`` (the
+    schema default), the slug is dropped from ``Config.autonomous`` so
+    a "set then reset every flag" round-trip leaves the persisted shape
+    minimal. Mirrors the prune step in
+    :func:`_apply_domain_override` and :func:`_apply_budget_per_domain`.
+    The gate (:func:`brain_core.autonomy.should_auto_apply`) treats a
+    missing slug entry the same as an explicit all-False entry, so the
+    prune is semantically a no-op.
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.autonomous["research"] = AutonomyCategoryFlags(new_files=True)
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    await handle(
+        {"key": "autonomous.research.new_files", "value": False},
+        ctx,
+    )
+    # Post-mutation every field is False -> entry pruned.
+    assert "research" not in cfg.autonomous
+
+
+async def test_autonomous_per_domain_rejects_non_bool_value(tmp_path: Path) -> None:
+    """A stray string / number / None value (the wire could carry
+    anything) raises a clear ``ValueError`` rather than letting an
+    awkward Pydantic error surface to the Settings UI.
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(ValueError, match="must be bool"):
+        await handle(
+            {"key": "autonomous.research.new_files", "value": "yes"},
+            ctx,
+        )
+
+
+async def test_autonomous_per_domain_rejects_wrong_segment_count(
+    tmp_path: Path,
+) -> None:
+    """Two-segment ``autonomous.research`` (would shadow the dict) and
+    four-segment ``autonomous.research.new_files.extra`` (would suggest a
+    nested path that doesn't exist) both fail the wildcard shape check
+    and hit the static-allowlist gate.
+    """
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "autonomous.research", "value": {}},
+            _mk_ctx(tmp_path, config=Config()),
+        )
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "autonomous.research.new_files.extra", "value": True},
+            _mk_ctx(tmp_path, config=Config()),
+        )
+
+
+async def test_autonomous_per_domain_field_allowlist_matches_schema() -> None:
+    """The wildcard's leaf-field allowlist must equal
+    :class:`AutonomyCategoryFlags.model_fields` exactly — drift watchdog.
+    Adding a new flag to the schema without updating the wildcard would
+    silently make the new flag NON-settable from the Settings UI; adding
+    a flag to the wildcard without a matching schema field would let an
+    invalid setattr land at apply time and fail with a confusing error.
+    """
+    from brain_core.config.schema import AutonomyCategoryFlags
+    from brain_core.tools.config_set import _AUTONOMY_FIELDS
+
+    assert frozenset(AutonomyCategoryFlags.model_fields.keys()) == _AUTONOMY_FIELDS
 
 
 def test_non_persisted_keys_match_known_not_on_config_watchdog() -> None:

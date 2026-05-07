@@ -622,6 +622,87 @@ test.describe("a11y — populated-state dialog sweep", () => {
   });
 
   // ----------------------------------------------------------------
+  // Case 6c-bis: Settings → Autonomy panel (populated) — Plan 16 Task 40
+  //
+  // Plan 16 Task 40 / D30 step 4 of 4: Settings → Autonomy gets the
+  // per-domain × per-category grid surface (replaces the Plan 07
+  // 5-row flat scaffold whose backing keys were dropped in Task 39).
+  // The Settings tabs walk (Case 8 below) covers the EMPTY autonomy
+  // grid; this case covers the POPULATED state (one slug with mixed-
+  // value flags) so the Switch's ``data-state=checked`` color-contrast
+  // path runs under axe-core's computed-style scan.
+  //
+  // The e2e backend's seeded scope is ``[research, work, personal]``
+  // (BRAIN_ALLOWED_DOMAINS), all three are persisted in Config.domains,
+  // so the panel renders 3 rows × 5 columns + 3 Reset buttons + 1
+  // "Disable all autonomy" footer. We seed one slug's autonomy via the
+  // per-run-token API path (mirrors Cases 4 + 6) so axe scans both
+  // checked and unchecked Switch states + the populated row's accent
+  // dot + the destructive footer button.
+  // ----------------------------------------------------------------
+  test("Settings → Autonomy panel (populated) has 0 violations", async ({
+    page,
+    seedPath,
+    checkA11y,
+  }) => {
+    const token = await readApiToken(seedPath);
+    // Seed two flags on ``research`` so the panel's populated row
+    // exercises both checked + unchecked Switch states. The backend's
+    // ``_apply_autonomous_per_domain`` apply-helper auto-creates the
+    // per-slug entry on first set; subsequent sets mutate it via
+    // ``setattr``.
+    await callTool(page, token, "brain_config_set", {
+      key: "autonomous.research.new_files",
+      value: true,
+    });
+    await callTool(page, token, "brain_config_set", {
+      key: "autonomous.research.edits",
+      value: true,
+    });
+    // Plan 16 Task 20 (D20): clear the seeded autonomy flags so sibling
+    // specs see a clean Config.autonomous snapshot. The backend prunes
+    // the slug entry when every flag is False — set both back to False
+    // and the entry vanishes from the persisted dict.
+    registerCleanup(async () => {
+      await callTool(page, token, "brain_config_set", {
+        key: "autonomous.research.new_files",
+        value: false,
+      });
+      await callTool(page, token, "brain_config_set", {
+        key: "autonomous.research.edits",
+        value: false,
+      });
+    });
+
+    // Race-free fetch wait: the panel fires ``brain_config_get`` on
+    // mount to hydrate its full ``Config.autonomous`` snapshot. Same
+    // pattern as the Settings tabs walk (Case 8).
+    const fetchWait = waitForToolResponse(page, "brain_config_get");
+    await page.goto("/settings/autonomous/");
+    await fetchWait;
+    await page.waitForLoadState("networkidle");
+
+    // Populated state mount marker — the grid only renders once
+    // ``useDomains()`` hydrates with a non-empty list AND the
+    // ``configGet`` snapshot lands in the store.
+    await expect(page.getByTestId("autonomy-grid")).toBeVisible({
+      timeout: 5_000,
+    });
+    // Switch initial states: research/new_files + research/edits are
+    // ``checked`` per the seeded flags above; every other cell is
+    // ``unchecked``. Pin against one of each so the assertions fail
+    // loud if the hydrate path drifts.
+    await expect(
+      page.getByTestId("autonomy-switch-research-new_files"),
+    ).toHaveAttribute("data-state", "checked");
+    await expect(
+      page.getByTestId("autonomy-switch-research-draft"),
+    ).toHaveAttribute("data-state", "unchecked");
+
+    await checkA11y(page, "panel:settings-autonomous-populated");
+  });
+
+  // ----------------------------------------------------------------
   // Case 6d: file-preview overlay (Plan 16 Task 11)
   //
   // Plan 14 Task 4 deferred a real "Browse → file → preview" overlay
