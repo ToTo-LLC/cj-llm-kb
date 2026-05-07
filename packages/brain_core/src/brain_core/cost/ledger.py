@@ -135,6 +135,27 @@ class CostLedger:
             ).fetchall()
         return {domain: float(total) for domain, total in rows}
 
+    def domain_spend_within_window(self, domain: str, since: datetime) -> float:
+        """Sum of ``cost_usd`` for rows in ``domain`` with ``ts_utc >= since``.
+
+        Plan 16 Task 27: surfaces per-domain spend totals over an arbitrary
+        rolling window so Task 28's `PerDomainBudgetGuard` can compare today's
+        spend (window = ``now - 24h``) and this month's spend (window =
+        ``now - 30d`` or month-start) against `BudgetOverride` caps.
+
+        ``since`` is normalized to UTC and ISO-formatted to match the
+        ``ts_utc`` column shape written by `record()`. Returns ``0.0`` when
+        no rows match (unknown domain, empty window, or both).
+        """
+        since_utc_iso = since.astimezone(UTC).isoformat()
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM costs "
+                "WHERE domain = ? AND ts_utc >= ?",
+                (domain, since_utc_iso),
+            ).fetchone()
+        return float(row[0])
+
     def total_by_mode(self, d: date) -> dict[str, float]:
         """Today's spend grouped by ``mode`` tag. ``NULL`` mode aggregates
         into the empty-string key so the dict always has JSON-safe keys.
