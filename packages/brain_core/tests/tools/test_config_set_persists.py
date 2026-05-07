@@ -442,11 +442,14 @@ async def test_active_domain_must_be_in_domains(tmp_path: Path) -> None:
 
     The pre-check in ``_check_active_domain_membership`` mirrors the
     Plan 10 ``Config._check_active_domain_in_domains`` validator's
-    error wording — Config doesn't enable ``validate_assignment`` and
-    ``persisted_dict`` bypasses ``model_validate``, so without this
-    pre-check an orphan slug would persist silently and only fail on
-    the next ``load_config``. Same single-seam pattern as
-    ``test_domain_override_rejects_orphan_slug`` above.
+    error wording. Plan 16 Task 36 enabled ``validate_assignment=True``
+    on ``Config`` (so per-field validators DO fire on assignment), but
+    ``_check_active_domain_in_domains`` is a ``@model_validator(mode=
+    "after")`` — and a Pydantic v2 cross-field validator failure does
+    NOT roll back the triggering field mutation. Without this pre-check,
+    an orphan slug would land on the live Config before the validator
+    raises, leaving it in an inconsistent state. Same single-seam
+    pattern as ``test_domain_override_rejects_orphan_slug`` above.
     """
     cfg = Config(domains=["research", "personal", "work"], active_domain="research")
     ctx = _mk_ctx(tmp_path, cfg)

@@ -70,6 +70,7 @@ Use the Task tool with the matching `subagent_type`. Delegate focused work to th
 - Do not use POSIX-only APIs, `shell=True` subprocess calls, or hardcoded path separators.
 - Do not invoke a frontend implementation task before mockups exist and are approved.
 - Do not mark a task complete with failing tests, partial work, or skipped cross-platform runs.
+- Do not assume a Pydantic v2 `@model_validator(mode="after")` raise rolls back the triggering field mutation — it does not. Field-level validators DO roll back on raise; `model_validator(mode="after")` failures leave the field mutated to the bad value. When `validate_assignment=True` is on (Plan 16 T36 set this for `Config` and all sub-configs), cross-field invariants need a pre-check pattern (see `_check_active_domain_membership` in `tools/config_set.py`) OR the `persist_config_or_revert` snapshot path. Discovered in Plan 16 T36; documented at the seams that depend on it.
 
 ### Workflow Orchestration
 
