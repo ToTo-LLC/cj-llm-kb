@@ -26,7 +26,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
@@ -118,6 +118,11 @@ describe("ChatScreen — dispatchSend honors pendingSendRef.mode (Plan 15 D6 / T
   });
 
   afterEach(() => {
+    // Unmount all rendered components BEFORE resetting stores so the
+    // store mutations don't re-render still-mounted subscribers
+    // outside an act window (a major source of stray act() warnings —
+    // see Plan 16 Task 23 stack-trace investigation).
+    cleanup();
     // Defensive: reset to keep stores from bleeding into other suites
     // sharing the same singletons.
     useCrossDomainGateStore.getState()._resetForTesting();
