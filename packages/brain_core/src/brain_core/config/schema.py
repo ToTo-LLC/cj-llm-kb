@@ -90,6 +90,74 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=1.5)
 
 
+class RateLimitOverride(BaseModel):
+    """Per-domain rate-limit override (Plan 16 Task 30 / D27 step 1 of 3).
+
+    Schema-only landing: the field exists and round-trips, but no runtime
+    enforcement is wired yet (Task 31 lands the AnthropicProvider
+    leaky-bucket enforcement; Task 32 lands the Settings UI).
+
+    A ``None`` ``requests_per_minute`` means "no override; the provider
+    bypasses rate-limit gating for this domain". A positive integer caps
+    the per-minute request rate for spend attributed to this domain. Zero
+    and negative values are rejected because the way to disable a limit
+    is to pass ``None`` (or omit the field), and a non-positive cap would
+    either silently match no traffic or break the leaky-bucket
+    arithmetic downstream once Task 31 lands.
+
+    ``extra="forbid"`` matches every other config sub-model so a typo in
+    ``config.json`` (e.g. ``rpm`` instead of ``requests_per_minute``)
+    surfaces at load time instead of being silently dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    requests_per_minute: int | None = None
+
+    @field_validator("requests_per_minute")
+    @classmethod
+    def _validate_positive(cls, v: int | None) -> int | None:
+        # ``None`` means "no override" and is the documented way to clear
+        # a limit; only reject zero / negative integers. Pydantic v2
+        # dispatches ``None`` to validators by default for ``Optional``
+        # fields, hence the explicit guard.
+        if v is not None and v <= 0:
+            raise ValueError(
+                "requests_per_minute must be positive (use None / omit to disable)"
+            )
+        return v
+
+
+class ProviderConfig(BaseModel):
+    """Per-LLM-provider config (Plan 16 Task 30 / D27 step 1 of 3).
+
+    Lives under :attr:`Config.providers` keyed by provider name (e.g.
+    ``"anthropic"``). The provider name itself is intentionally NOT a
+    field on this model — it's the dict key on the parent map, so a
+    typo in ``config.json`` collides with no real provider rather than
+    silently overriding the active one.
+
+    Schema-only landing: the per-domain rate-limit map exists and
+    round-trips. T31 wires AnthropicProvider to read this map before
+    each ``client.messages.create(...)`` call; T32 surfaces the value
+    via Settings → Domains.
+
+    ``extra="forbid"`` is consistent with every other config sub-model.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    # Plan 16 Task 30 / D27 step 1 of 3: per-domain rate-limit overrides.
+    # Keys are domain slugs; values are :class:`RateLimitOverride`.
+    # Default ``{}`` so legacy configs that lack the field still load
+    # (backward compat). No cross-field "key must be in
+    # ``Config.domains``" check yet — that lands with Task 31 alongside
+    # enforcement; landing it now would require the validator to reach
+    # across into the parent ``Config``, which Pydantic v2 doesn't
+    # expose at the sub-model layer cleanly.
+    rate_limit_per_domain: dict[str, RateLimitOverride] = Field(
+        default_factory=dict
+    )
+
+
 class BudgetOverride(BaseModel):
     """Per-domain budget cap overrides (Plan 16 Task 26 / D26 step 1 of 4).
 
@@ -278,6 +346,7 @@ _PERSISTED_FIELDS: frozenset[str] = frozenset(
         "domain_overrides",
         "privacy_railed",
         "cross_domain_warning_acknowledged",
+        "providers",
     }
 )
 
@@ -324,6 +393,17 @@ class Config(BaseModel):
     # scope)``). Toggling this back to ``False`` via Settings → Domains
     # re-enables the prompt for one more firing.
     cross_domain_warning_acknowledged: bool = Field(default=False)
+    # Plan 16 Task 30 / D27 step 1 of 3: per-LLM-provider config map.
+    # Keys are provider names (e.g. ``"anthropic"``); values are
+    # :class:`ProviderConfig`. Default ``{}`` so legacy configs that
+    # lack the field still load (backward compat). T31 wires the
+    # AnthropicProvider to read the per-domain rate-limit map from
+    # ``self.providers["anthropic"].rate_limit_per_domain`` before
+    # each upstream call; T32 surfaces the value via Settings →
+    # Domains. The provider-name set is intentionally NOT validated
+    # against any Literal — adding a new LLM provider should not
+    # require a schema migration of every user's persisted config.
+    providers: dict[str, ProviderConfig] = Field(default_factory=dict)
 
     @field_validator("domains")
     @classmethod

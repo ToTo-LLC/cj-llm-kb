@@ -108,6 +108,9 @@ def test_persisted_dict_returns_exactly_the_d4_keys() -> None:
         "domain_overrides",
         "privacy_railed",
         "cross_domain_warning_acknowledged",
+        # Plan 16 Task 30 / D27 step 1 of 3: per-LLM-provider config map
+        # carrying per-domain rate-limit overrides.
+        "providers",
     }
     assert keys == expected
     # ``vault_path`` is the canonical excluded field — guard it
