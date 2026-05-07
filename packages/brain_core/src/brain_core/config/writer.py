@@ -134,13 +134,6 @@ def save_config(
     backup = brain_dir / "config.json.bak"
     lock_path = brain_dir / "config.json.lock"
 
-    payload = json.dumps(
-        config.persisted_dict(),
-        indent=2,
-        sort_keys=True,
-        default=_json_default,
-    )
-
     lock = filelock.FileLock(str(lock_path))
     try:
         lock.acquire(timeout=lock_timeout)
@@ -151,7 +144,32 @@ def save_config(
             cause="lock_timeout",
         ) from exc
 
+    # Plan 16 Task 34 / D28 step 2 of 3: bump ``config_version`` in
+    # place BEFORE serializing so the new integer lands on disk.
+    # Mutation is in-place (not ``model_copy``) because the caller
+    # holds a live reference to ``config`` (see
+    # ``persist_config_or_revert``'s contract — ``ToolContext`` is
+    # frozen, so the helper mutates field-by-field). Increment
+    # happens INSIDE the lock so concurrent writers from the same
+    # process can't both observe + bump the same version. We snapshot
+    # the pre-bump value so any failure between here and a successful
+    # ``os.replace`` (replace_failed, mid-write KeyboardInterrupt,
+    # disk full, etc.) rewinds the in-memory ``config_version`` —
+    # leaking a phantom bump to the caller would let direct
+    # ``save_config`` users (whose code path does NOT go through
+    # ``persist_config_or_revert``'s field-by-field revert) observe a
+    # version that never made it to disk.
+    pre_bump_version = config.config_version
+    config.config_version += 1
+    replace_succeeded = False
+
     try:
+        payload = json.dumps(
+            config.persisted_dict(),
+            indent=2,
+            sort_keys=True,
+            default=_json_default,
+        )
         # D6: copy the existing config to .bak before we touch anything.
         # ``copy2`` preserves mtime so the backup reflects when the prior
         # config was last written, not when this save started.
@@ -163,6 +181,7 @@ def save_config(
                 f.write(payload)
             try:
                 os.replace(tmp, target)
+                replace_succeeded = True
             except OSError as exc:
                 # Wrap so the structured-cause contract documented on
                 # ``ConfigPersistenceError`` is fully honored: every
@@ -201,6 +220,18 @@ def save_config(
             finally:
                 os.close(dir_fd)
     finally:
+        # Plan 16 Task 34: if anything between the version bump and the
+        # successful ``os.replace`` raised, rewind the in-memory
+        # ``config_version`` so the caller doesn't observe a phantom
+        # bump that never made it to disk. ``os.replace`` is atomic, so
+        # the boundary "replace_succeeded" is the precise commit point;
+        # everything before is undoable, everything after is on disk
+        # and the bump must stick (the durability fsync below the
+        # commit point is best-effort and a failure there does NOT
+        # invalidate the on-disk write — Mac/Windows ``os.replace``
+        # already provides crash durability).
+        if not replace_succeeded:
+            config.config_version = pre_bump_version
         lock.release()
 
     return target

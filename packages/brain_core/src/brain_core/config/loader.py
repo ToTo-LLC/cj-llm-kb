@@ -11,6 +11,20 @@ startup.
 
 Environment and CLI overlays are applied on top of whichever layer
 succeeded — the fallback only governs the file-read base layer.
+
+Plan 16 Task 34 / D28 step 2 of 3 adds :func:`resolve_config`: a
+single-process cache layer over :func:`load_config`. Successive calls
+return the SAME ``Config`` instance until the on-disk
+``config_version`` integer (peeked via :func:`_peek_config_version`,
+which only re-parses the JSON head) advances. ``load_config`` itself
+remains stateless — every caller that wants caching goes through
+``resolve_config``. Production callers (``brain_api`` lifespan,
+``brain_cli`` chat command) currently still call ``load_config``
+directly; T34.5 (separate task) will migrate them.
+
+The cache is single-process. Cross-process hot-reload (file-watcher +
+SIGHUP) is T35's job; this module deliberately does not stat the file
+on every call beyond the cheap version peek.
 """
 
 from __future__ import annotations
@@ -33,6 +47,20 @@ ENV_MAP: dict[str, str] = {
     "BRAIN_WEB_PORT": "web_port",
     "BRAIN_LOG_LLM_PAYLOADS": "log_llm_payloads",
 }
+
+# Plan 16 Task 34: single-process cache for ``resolve_config``.
+# Keyed by the resolved (absolute) path of the ``config_file`` argument
+# so two different vault roots (one process holding both Configs in
+# flight, e.g. test fixtures) get independent cache entries. Each
+# entry's value is the cached ``Config`` plus the on-disk
+# ``config_version`` we last observed for this path; on every call we
+# peek the disk version and short-circuit when it matches.
+#
+# Env / CLI overrides are intentionally NOT in the cache key. Production
+# never mutates env or CLI args mid-process, and a caller that does
+# want a fresh read can pass ``force_reload=True``. Including them
+# would double the cache miss rate without buying anything real.
+_cached: dict[Path, tuple[Config, int]] = {}
 
 
 def load_config(
@@ -144,3 +172,150 @@ def _coerce(field: str, raw: str) -> Any:
     if field == "vault_path":
         return Path(raw).expanduser()
     return raw
+
+
+def _peek_config_version(path: Path) -> int | None:
+    """Return the on-disk ``config_version`` integer, or ``None``.
+
+    Used by :func:`resolve_config` to detect a stale in-memory cache
+    without re-parsing the entire config file. The function is the
+    cheap path: every ``resolve_config`` call goes through this, but
+    only cache misses fall through to a full :func:`load_config`.
+
+    Returns ``None`` for any of:
+      * the file does not exist (first run, fresh vault)
+      * the file is unreadable (permissions, transient I/O error)
+      * the JSON parse fails or the top-level value is not an object
+      * the ``config_version`` field is absent (legacy pre-T34 config)
+
+    A ``None`` return is the loader's "version unknown — keep cached
+    object" signal. Callers that genuinely need a re-read pass
+    ``force_reload=True``; treating a transient I/O failure as a hard
+    re-load would thrash the in-memory state on a flaky disk.
+
+    Raises :class:`TypeError` if ``config_version`` IS present but is
+    not an integer. Per CLAUDE.md "fail loud on unexpected state":
+    silently coercing corrupted disk state to ``None`` would mask a
+    real bug (someone wrote a string into the version field). The
+    caller is expected to either repair the file or pass
+    ``force_reload=True`` and accept whatever ``Config(**data)``
+    decides about the bad payload.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    version = parsed.get("config_version")
+    if version is None:
+        return None
+    if not isinstance(version, int) or isinstance(version, bool):
+        # ``isinstance(True, int)`` is ``True`` in Python (bool subclasses
+        # int). We refuse booleans here because writing ``true`` to the
+        # version field is unambiguously corrupted disk state, not a
+        # legitimate version of "1".
+        raise TypeError(
+            f"config_version in {path} is {type(version).__name__}, expected int"
+        )
+    return version
+
+
+def resolve_config(
+    *,
+    config_file: Path | None,
+    env: Mapping[str, str],
+    cli_overrides: Mapping[str, Any],
+    force_reload: bool = False,
+) -> Config:
+    """Return a cached :class:`Config`, re-loading when the disk version advances.
+
+    Plan 16 Task 34 / D28 step 2 of 3: the single-process cache layer
+    over :func:`load_config`. Each call:
+
+    1. If ``force_reload`` — re-load via :func:`load_config`, refresh
+       the cache entry for this ``config_file`` path, return.
+    2. If no cache entry for this ``config_file`` path — same.
+    3. Otherwise peek the on-disk ``config_version`` via
+       :func:`_peek_config_version`. If it differs from the cached
+       version (or the peek raises a real corruption error like a
+       non-int field — propagated to the caller), re-load and refresh.
+       If the peek returns ``None`` ("version unknown"), keep the
+       cached object — a transient read failure should not blow the
+       in-memory state.
+
+    The cache key is the resolved ``Path`` of ``config_file`` (or a
+    sentinel for ``None``). Env and CLI overrides are NOT in the key —
+    production never changes them at runtime; callers that need a
+    fresh read pass ``force_reload=True``.
+
+    The returned ``Config`` is the same object across consecutive
+    calls until the disk version advances — callers may rely on
+    object identity, but must NOT mutate the returned object outside
+    of :func:`brain_core.config.writer.save_config` (which does the
+    in-place version bump and re-key under the cache lock implicitly
+    via the next ``resolve_config`` call's version peek).
+    """
+    # Normalize the cache key. ``config_file=None`` is a valid call
+    # (no on-disk source — defaults + env + CLI only) and gets its
+    # own slot via a sentinel. ``Path.resolve()`` collapses
+    # ``../foo`` and symlinks so two callers reaching the same
+    # canonical file share one cache entry.
+    cache_key: Path = (
+        Path("__defaults_only__") if config_file is None else config_file.resolve()
+    )
+
+    cached_entry = _cached.get(cache_key)
+
+    if force_reload or cached_entry is None:
+        cfg = load_config(
+            config_file=config_file,
+            env=env,
+            cli_overrides=cli_overrides,
+        )
+        _cached[cache_key] = (cfg, cfg.config_version)
+        return cfg
+
+    cached_cfg, cached_version = cached_entry
+
+    # ``config_file=None`` has no disk to peek; the cache always hits
+    # until ``force_reload``. Production never uses this path
+    # (callers always supply a config file); it exists for tests and
+    # ergonomic call sites.
+    if config_file is None:
+        return cached_cfg
+
+    on_disk_version = _peek_config_version(config_file)
+    if on_disk_version is None:
+        # Version unknown (file missing / unreadable / no version
+        # field). Keep the cached object — see docstring.
+        return cached_cfg
+
+    if on_disk_version == cached_version:
+        return cached_cfg
+
+    cfg = load_config(
+        config_file=config_file,
+        env=env,
+        cli_overrides=cli_overrides,
+    )
+    _cached[cache_key] = (cfg, cfg.config_version)
+    return cfg
+
+
+def _reset_cache_for_tests() -> None:
+    """Clear the single-process resolve cache.
+
+    Mirrors :func:`brain_core.llm.providers.anthropic._reset_buckets_for_tests`
+    in shape: a leading underscore signals "test-only escape hatch",
+    and the function is a no-arg clear so test fixtures can call it
+    from an autouse fixture without threading state through.
+    """
+    _cached.clear()

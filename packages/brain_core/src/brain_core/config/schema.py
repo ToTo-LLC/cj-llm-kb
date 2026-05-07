@@ -347,6 +347,13 @@ _PERSISTED_FIELDS: frozenset[str] = frozenset(
         "privacy_railed",
         "cross_domain_warning_acknowledged",
         "providers",
+        # Plan 16 Task 34 / D28 step 2 of 3: monotonically-increasing
+        # version stamp. Persisted so the loader's single-process cache
+        # (``loader.resolve_config``) can detect a stale in-memory
+        # snapshot by peeking the on-disk integer without re-parsing
+        # the whole config. Bumped in-place by ``save_config`` on every
+        # successful write.
+        "config_version",
     }
 )
 
@@ -404,6 +411,18 @@ class Config(BaseModel):
     # against any Literal — adding a new LLM provider should not
     # require a schema migration of every user's persisted config.
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
+    # Plan 16 Task 34 / D28 step 2 of 3: monotonically-increasing
+    # version counter, bumped in place by ``save_config`` on every
+    # successful write. The single-process loader cache
+    # (:func:`brain_core.config.loader.resolve_config`) peeks this
+    # field on every call to detect a stale in-memory ``Config`` —
+    # if the on-disk version exceeds the cached version, the loader
+    # re-reads. Default ``0`` so legacy configs that predate this
+    # field still load (backward compat); the first ``save_config``
+    # call will bump them to ``1``. The value is meaningful only as
+    # a strict "did the disk change since I last read it" signal —
+    # callers should not interpret the magnitude.
+    config_version: int = Field(default=0, ge=0)
 
     @field_validator("domains")
     @classmethod

@@ -111,6 +111,10 @@ def test_persisted_dict_returns_exactly_the_d4_keys() -> None:
         # Plan 16 Task 30 / D27 step 1 of 3: per-LLM-provider config map
         # carrying per-domain rate-limit overrides.
         "providers",
+        # Plan 16 Task 34 / D28 step 2 of 3: monotonically-increasing
+        # write counter consumed by ``loader.resolve_config`` to detect
+        # a stale in-memory cache.
+        "config_version",
     }
     assert keys == expected
     # ``vault_path`` is the canonical excluded field — guard it

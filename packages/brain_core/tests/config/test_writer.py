@@ -209,13 +209,16 @@ def test_save_config_release_lock_after_success(tmp_path: Path) -> None:
 
 def test_save_config_output_is_pretty_and_sorted(tmp_path: Path) -> None:
     # ``sort_keys=True`` + ``indent=2`` give us a deterministic, diff-friendly
-    # blob. Same Config, two saves, two byte-identical files.
-    cfg = Config(domains=["research", "work", "personal", "hobby"])
+    # blob. Two SEPARATE Config objects with identical content produce
+    # byte-identical files. Two saves of the SAME Config would NOT — Plan 16
+    # Task 34 bumps ``config_version`` in place on each save.
+    cfg_a = Config(domains=["research", "work", "personal", "hobby"])
+    cfg_b = Config(domains=["research", "work", "personal", "hobby"])
 
     a = tmp_path / "a"
     b = tmp_path / "b"
-    save_config(cfg, a)
-    save_config(cfg, b)
+    save_config(cfg_a, a)
+    save_config(cfg_b, b)
 
     blob_a = (a / ".brain" / "config.json").read_text(encoding="utf-8")
     blob_b = (b / ".brain" / "config.json").read_text(encoding="utf-8")
