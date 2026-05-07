@@ -1264,14 +1264,522 @@ To be filled in on closure following Plan 10 + 11 + 12 + 13 + 14 + 15 format:
 
 ---
 
-## Task 37 — Findings (to be filled by implementer)
+## Task 37 — Findings
 
-To be appended by Task 37 implementer per D30. Expected shape:
+This subsection is the brainstorm artifact T37 was asked to produce (D30 step
+1 of 4). It locks the schema shape, the migration algorithm, the autonomy-
+gate signature evolution, and the modal-vs-panel UI split that T38, T39, and
+T40 codify. Where the brainstorm deviates from the spec's nominated shape it
+flags the deviation explicitly and parks it as a "deferred for sign-off"
+item; T38 should not start until the user has weighed in on those.
 
-- **Locked schema:** `Config.autonomous: dict[str, dict[Literal["new_files","edits","index_entries","concepts","draft"], bool]]`.
-- **Read-time backwards-compat migration:** TBD (T38 implements; T37 documents the algorithm).
-- **UI impact:** TBD (T40 panel-autonomous; T10 modal becomes quick global on/off).
-- **Resolved open questions:** TBD.
+### 0. Pre-flight context (what already exists today)
+
+- `Config.autonomous: AutonomousConfig` (schema.py:291–306) — a flat,
+  category-bucket BaseModel with five booleans: `ingest`, `entities`,
+  `concepts`, `index_rewrites`, `draft`. All default `False`.
+- `PatchCategory` (vault/types.py:12–27) — six values: `INGEST`, `ENTITIES`,
+  `CONCEPTS`, `INDEX_REWRITES`, `DRAFT`, `OTHER`. The first five map 1:1 to
+  the five `AutonomousConfig` flags; `OTHER` never auto-applies.
+- `should_auto_apply(patchset, config) -> bool` (autonomy.py:39–45) — reads
+  `patchset.category`, looks up `_CATEGORY_TO_FLAG`, and returns
+  `config.autonomous.<flag>`. No domain awareness.
+- `apply_patch._resolve_config(ctx)` (apply_patch.py:114–132) — returns a
+  defaults-only `Config(vault_path=ctx.vault_root)`; the real config is NOT
+  read here yet (Plan 16+ work, deliberately deferred). Tests monkeypatch
+  this stub.
+- `PatchSet` (vault/types.py:47–62) — has member fields `new_files: list`,
+  `edits: list`, `index_entries: list`, `log_entry: str | None`, plus
+  `category: PatchCategory`. Note `log_entry` is a member field but is not
+  in the spec's nominated category set (it's a single string log line, not
+  a vault mutation).
+- `AutonomyModal` (autonomy-modal.tsx) — T10 scaffold uses three categories
+  `newFiles` / `edits` / `indexEntries` (member-field-shaped). The scaffold
+  comment at line 14–20 already names T37/T38 as the place where the real
+  per-domain shape gets locked. `concepts` and `draft` are absent from the
+  scaffold.
+- `DomainOverride` (schema.py:309–326) — Plan 12 D1 explicitly DROPPED a
+  per-domain autonomy field from this model. The new shape MUST live
+  somewhere else (this brainstorm picks "top-level dict on `Config`",
+  consistent with `BudgetConfig.per_domain` and
+  `ProviderConfig.rate_limit_per_domain`).
+- `Config` already has `validate_assignment=True` (T36, schema.py:379), so
+  any nested BaseModel we land here gets free per-field validation on
+  `setattr`.
+
+### 1. Locked schema
+
+Adopting the spec's nominated category set verbatim, with one Pydantic-
+shape choice (BaseModel over TypedDict). The locked field declaration on
+`Config`:
+
+```python
+class AutonomyCategoryFlags(BaseModel):
+    """Per-category auto-apply flags for one domain.
+
+    Lives under :attr:`Config.autonomous` keyed by domain slug. The five
+    keys are a HYBRID surface — three are :class:`PatchSet` member-field
+    names (``new_files``, ``edits``, ``index_entries``); two are
+    :class:`PatchCategory` values (``concepts``, ``draft``). The category
+    selection is intentional: chat-mode autonomy ("draft a note for me")
+    is naturally category-shaped, while ingest / propose-note autonomy is
+    naturally member-field-shaped (the user reasons about "do I trust
+    auto-creating new files?" not "do I trust the INGEST bucket?").
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    new_files: bool = False
+    edits: bool = False
+    index_entries: bool = False
+    concepts: bool = False
+    draft: bool = False
+
+
+class Config(BaseModel):
+    ...
+    autonomous: dict[str, AutonomyCategoryFlags] = Field(default_factory=dict)
+```
+
+**TypedDict vs BaseModel — locked to BaseModel.** TypedDict is lighter and
+JSON-friendly, but BaseModel buys five things we want for free:
+
+1. `validate_assignment=True` (T36-locked) catches typos at runtime, not
+   silently. With TypedDict, `cfg.autonomous["research"]["new_filez"] =
+   True` would silently land — the unknown key isn't validated.
+2. `extra="forbid"` rejects unknown category keys at load time, not at
+   gate evaluation time.
+3. Sub-model `model_dump` / `model_validate` round-trip for free (the
+   loader currently `Config.model_validate(raw)`s the whole tree).
+4. The pattern matches every existing per-domain map in the codebase
+   (`BudgetOverride`, `RateLimitOverride`) — consistency over micro-perf.
+5. T39's `should_auto_apply` can read `flags.new_files` (attribute access)
+   instead of `flags["new_files"]` (dict access); the typed read is mypy-
+   strict-friendly and matches existing `config.autonomous.ingest` ergonomics
+   today.
+
+**Why `AutonomyCategoryFlags` (not `dict[Literal[...], bool]`).** The
+spec's nominated shape is `dict[str, dict[Literal[...], bool]]`. Pydantic
+v2 does accept `dict[Literal[...], bool]` as a value type, but it forbids
+`extra` enforcement (every key in the Literal is required, missing keys
+default to `MISSING` then fail validation; or — depending on Pydantic
+version — they default-construct to `False` silently). A named BaseModel
+with explicit `bool = False` defaults gives us the right semantics: every
+flag defaults False, unknown flags raise, and partial JSON like
+`{"research": {"new_files": true}}` round-trips cleanly with the other
+four flags inferred as False. This is a SHAPE-EQUIVALENT clarification
+(not a deviation) — the JSON on disk under the spec's nominated typing
+and under `AutonomyCategoryFlags` is byte-identical.
+
+**Cross-field validator (NEW):**
+
+```python
+@model_validator(mode="after")
+def _check_autonomy_keys_in_domains(self) -> Config:
+    orphans = [slug for slug in self.autonomous if slug not in self.domains]
+    if orphans:
+        raise ValueError(
+            f"autonomous keys {orphans!r} are not in domains {self.domains!r}; "
+            "remove the entry or add the domain first."
+        )
+    return self
+```
+
+Mirrors the existing `_check_domain_overrides_keys_in_domains` validator
+(schema.py:524–535). Without it, deleting a domain leaves orphan autonomy
+entries that silently come back if the slug is re-added — the same risk
+that motivated the orphan-rejection rule for `domain_overrides`.
+
+### 2. Member-field vs category semantics — explicit decisions
+
+This is the core architectural tension flagged in the task brief. The new
+shape is a hybrid (three member-field keys + two category keys), so the
+gate has to adjudicate two semantically different questions in one pass.
+Locked decisions:
+
+**Q1 — Multi-member patches with mixed flags. LOCKED: any-False ⇒ stage the
+WHOLE patch.** A patch with `new_files=[...]` AND `edits=[...]` against a
+domain config of `{new_files: false, edits: true}` routes to the approval
+queue. Rationale:
+
+- Partial-apply is a scope-guard hazard. If we auto-applied the `edits`
+  half and staged the `new_files` half, the user would have to mentally
+  reconcile "this patch was 60% applied"; one half could land while the
+  other waits in pending/, producing a half-consistent vault state. Atomic
+  apply through `VaultWriter.apply` is the contract — partial-apply
+  violates it.
+- Worse, the integrate step often emits patches where new files and edits
+  are causally coupled (a new note PLUS an index entry referencing the new
+  note). Partial-apply could leave a dangling wikilink in the index file
+  pointing at a note that never landed.
+- The spec's T39 step 2 hint ("if any returns False, route the WHOLE
+  patch through the approval queue (not partial — partial-apply opens up
+  scope-guard concerns)") matches this conclusion.
+
+Trade-off acknowledged: a domain with `{new_files: true, edits: false}`
+and a patch that contains BOTH never auto-applies. The user might
+reasonably expect "only the new_files flag matters here". The fix is the
+UI surface — T40's panel makes the AND-gate explicit so the user
+understands flipping `edits` off blocks every multi-member patch in that
+domain. Documented in T40 microcopy.
+
+**Q2 — `category=CONCEPTS` patch with `edits=[...]`. LOCKED: intersection
+(BOTH `concepts=True` AND `edits=True` required).** The hybrid shape
+treats member-field flags and category flags as orthogonal AND-gated
+filters. A CONCEPTS-category patch that touches `edits` requires the user
+to opt INTO both the concepts bucket AND the edits-touch surface for that
+domain. Rationale:
+
+- "Intent" (category) and "blast radius" (member fields) are different
+  axes. A user who trusts the LLM's concept-page judgment but doesn't
+  trust it to silently rewrite existing files needs a way to say "auto-
+  apply concept NEW FILES but stage concept EDITS." Intersection gives
+  that.
+- The "any-False ⇒ stage" rule from Q1 already implies intersection over
+  member fields; adding category-AND-member is the natural extension.
+- Easier to relax later than to tighten later. A union policy ("either
+  flag enabled ⇒ auto-apply") would be a privacy regression to walk back.
+
+Trade-off acknowledged: the AND gate makes "auto-apply ALL concept
+patches in this domain" require the user to flip on `concepts=True` AND
+all three of `new_files`/`edits`/`index_entries=True`. The deep-config
+panel UI must surface this clearly; "Enable all categories" toggle row
+on the panel reduces friction.
+
+**Q3 — `INGEST`, `ENTITIES`, `INDEX_REWRITES` PatchCategory values under
+the new shape. LOCKED: option (b) — the three orphan categories become
+PatchCategory-only metadata; the new member-field flags govern autonomy.**
+Concretely:
+
+- `INGEST` ⇒ no longer reads a top-level "ingest" bool. The new gate
+  inspects the patch's actual member fields (a typical INGEST patch is
+  `new_files=[...] + index_entries=[...]`) and AND-gates against
+  `{new_files, index_entries}` for the target domain.
+- `ENTITIES` ⇒ same. Entity patches are typically `new_files` (a new
+  person/concept page) + `edits` (existing pages get backlinks).
+- `INDEX_REWRITES` ⇒ AND-gates against the `index_entries` member-field
+  flag.
+
+Rationale: there's no clean 1:1 mapping ("INGEST → new_files" silently
+ignores the index_entries half of an ingest patch; "ENTITIES → ???"
+literally has no clean target). Option (a) loses information; option (b)
+preserves the semantic shift the spec is making (member-field-shaped
+autonomy is the point of T37). The `category` field stays on PatchSet —
+it's still useful for the approval-queue UI (group pending patches by
+intent: "5 ingest, 3 concept, 2 entity"), the cost ledger's
+operation-tagging, and lint heuristics. It just doesn't drive the gate
+anymore.
+
+Trade-off acknowledged: this is a real semantic shift away from the spec
+rationale's "categories chosen to mirror the patch-set member fields plus
+`concepts` and `draft` for chat-mode autonomy." The spec implies a 5-
+flag surface; option (b) preserves the 5 flags exactly but reframes
+their meaning (3 member-field flags are the gate; 2 category flags
+preserve the chat-mode-autonomy distinction the spec calls out). The
+brainstorm believes this matches the spec's INTENT but DEVIATES from a
+strictly literal reading of D30. Flagged as a deferred sign-off item
+below.
+
+### 3. Migration from existing `AutonomousConfig` (flat) to nested
+
+The task brief's hypothetical "old shape `autonomous: bool = true`" is
+incorrect — the current shape on disk is the structured `AutonomousConfig`
+object with five named booleans. T38's migration must handle BOTH the
+hypothetical legacy bool AND the real existing-on-disk structured shape.
+
+**LOCKED migration algorithm (T38 codifies):**
+
+```python
+def _migrate_legacy_autonomous(raw: dict) -> dict:
+    """Idempotent: rewrites raw["autonomous"] in place if it's an old shape.
+
+    Three accepted input shapes:
+      1. Already nested (post-migration):
+           {"research": {"new_files": false, ...}, ...}
+         -> no-op.
+      2. Flat AutonomousConfig (real existing on-disk shape):
+           {"ingest": false, "entities": false, "concepts": false,
+            "index_rewrites": false, "draft": false}
+         -> expand per the mapping table below for every slug in raw["domains"].
+      3. Hypothetical legacy bool (forward-compat for any user who
+         hand-edited config.json to a single bool — never shipped, but
+         cheap to handle):
+           true / false
+         -> all-True (or all-False) for every slug in raw["domains"].
+    """
+```
+
+**Mapping table for shape (2) → (1):**
+
+| Old flag (`AutonomousConfig`) | Maps to (per domain)                              |
+|-------------------------------|---------------------------------------------------|
+| `ingest=true`                 | `new_files=true`, `index_entries=true`            |
+| `ingest=false`                | (no-op; defaults are False)                       |
+| `entities=true`               | `new_files=true`, `edits=true`                    |
+| `entities=false`              | (no-op)                                           |
+| `concepts=true`               | `concepts=true`                                   |
+| `concepts=false`              | (no-op)                                           |
+| `index_rewrites=true`         | `index_entries=true`                              |
+| `index_rewrites=false`        | (no-op)                                           |
+| `draft=true`                  | `draft=true`                                      |
+| `draft=false`                 | (no-op)                                           |
+
+Notes on the mapping:
+
+- `ingest` is the trickiest cell. An ingest patch typically creates a
+  source note (`new_files`) AND adds index entries (`index_entries`).
+  Mapping `ingest=true` to BOTH preserves the user's prior intent ("yes,
+  auto-apply ingest patches") under the new member-field gate. Mapping
+  to only `new_files` would break ingest auto-apply for any patch that
+  touches indices.
+- `entities` has no clean target (Q3 above). The migration choice
+  `new_files=true, edits=true` reflects what entity patches typically
+  contain. This is the most aggressive cell of the migration — it grants
+  edit-autonomy to a domain that previously only had entity-bucket
+  autonomy. **DEFERRED** for user sign-off below; conservative
+  alternative is to drop `entities=true` on migration (no target
+  flags get set) and surface a one-time toast: "Your old `entities`
+  autonomy flag had no clean equivalent in the new per-category shape;
+  please re-enable specific categories per domain in Settings → Autonomy."
+- Multiple True flags compose with logical OR per cell: `ingest=true,
+  entities=true` ⇒ `new_files=true` (from both), `edits=true` (from
+  entities), `index_entries=true` (from ingest).
+- The migration runs once at load time (T38 codifies). The on-disk
+  shape after the next `save_config` is the new nested form;
+  `_migrate_legacy_autonomous` is idempotent so a re-run is a no-op.
+- A `brain config migrate` CLI subcommand (T41) writes the migrated
+  shape back AND backs up the original — so users who want to inspect
+  the diff can see exactly what flags landed where.
+
+**Pin tests T38 should land** (in addition to the spec's listed pins):
+
+- (e) flat `{"ingest": true}` ⇒ nested `{slug: {"new_files": true,
+  "index_entries": true}}` for every slug in domains.
+- (f) flat `{"entities": true}` ⇒ migration outcome per the chosen
+  policy (DEFERRED — sign-off determines whether this maps to
+  `{new_files, edits}` or to nothing-with-a-toast).
+- (g) flat `{"ingest": true, "concepts": true}` ⇒ nested with
+  `new_files=True, index_entries=True, concepts=True` per domain;
+  `edits=False, draft=False`.
+- (h) round-trip after migration: `Config(**migrated).model_dump()` ==
+  migrated.
+
+### 4. Defaults at lock time
+
+**LOCKED: empty dict `{}` (NOT all-False explicit).** Rationale:
+
+- An empty dict is the "no per-domain entries configured" signal. The
+  gate function (T39) treats a missing key as "all-False" for that
+  domain — equivalent semantics to an explicit all-False entry, but
+  smaller on-disk footprint and clearer "user has not touched this"
+  state for the UI.
+- The migration path (above) writes explicit per-domain entries for
+  every slug in `domains` whenever the user had non-default flags;
+  fresh installs land at `{}` until the user toggles something.
+- CLAUDE.md principle #3 ("LLM writes are always staged, never direct")
+  is honored either way — both `{}` and `{slug: AutonomyCategoryFlags()}`
+  produce all-False evaluation. The choice is purely cosmetic on disk.
+- Consistent with `BudgetConfig.per_domain: dict[str, BudgetOverride] =
+  Field(default_factory=dict)` and `ProviderConfig.rate_limit_per_domain`.
+
+The cross-field validator catches orphan entries (Section 1). The "is
+this domain configured?" UI predicate is `slug in cfg.autonomous`.
+
+### 5. `should_auto_apply` signature evolution (T39 sketch)
+
+Current (autonomy.py:39):
+
+```python
+def should_auto_apply(patchset: PatchSet, config: Config) -> bool:
+    flag_name = _CATEGORY_TO_FLAG.get(patchset.category)
+    if flag_name is None:
+        return False
+    return bool(getattr(config.autonomous, flag_name))
+```
+
+T39 evolution sketch (NOT for implementation in T37 — T39 lands it):
+
+```python
+def should_auto_apply(
+    patchset: PatchSet,
+    config: Config,
+    *,
+    domain: str,
+) -> bool:
+    """Per-domain × per-category gate.
+
+    Returns True iff the patchset's content is fully covered by enabled
+    flags for ``domain``. Algorithm:
+
+      1. OTHER category never auto-applies (preserved invariant).
+      2. Look up ``flags = config.autonomous.get(domain)``. If missing,
+         return False (no entry ⇒ all-False).
+      3. Build the "required-True" set:
+         - For every non-empty member field on patchset
+           (new_files, edits, index_entries), require flags.<member>.
+         - For category in {CONCEPTS, DRAFT}, additionally require
+           flags.<category-name>.
+         - For category in {INGEST, ENTITIES, INDEX_REWRITES}, NO extra
+           category-level requirement (Q3 decision: those become
+           metadata; member fields govern).
+      4. If every required flag is True, return True. Else False.
+    """
+```
+
+Key signature changes vs today:
+
+- `domain: str` becomes a kwarg (keyword-only to keep the pos-arg
+  signature broken at the type level — every existing call site MUST
+  update; mypy and the test suite catch the migration).
+- `OTHER` short-circuit moves up (no behavior change vs today).
+- Returns False on missing-domain (no entry ⇒ all-False semantic).
+- The category-flag check (Q3) only fires for CONCEPTS and DRAFT.
+
+Call sites that need updating:
+
+- `apply_patch.handle` (apply_patch.py:87) — already has `ctx.allowed_domains`
+  AND `ctx.domain` (Plan 16 T28 added the per-call narrowed domain to
+  `ToolContext`). T39 plumbs `ctx.domain` (or, if `None`, derives from
+  `envelope.target_path.parts[0]`) into `should_auto_apply(...,
+  domain=...)`.
+- `_resolve_config(ctx)` (apply_patch.py:114–132) — STILL the test seam.
+  T39 should NOT replace this with a real config read (that's a separate
+  Plan 16+ task per the existing docstring). The defaults-only stub
+  preserves test isolation; the new shape just means the stub returns a
+  Config with `autonomous={}`, which evaluates to "all-False everywhere"
+  and matches today's test fixtures' baseline.
+- `tests/test_autonomy.py` — every test must update to pass `domain=...`
+  AND construct `Config(autonomous={"research": AutonomyCategoryFlags(...)})`
+  instead of `AutonomousConfig(...)`. T39 lands the test-file rewrite
+  alongside the gate.
+
+### 6. UI mapping — modal vs panel under the new shape
+
+**LOCKED architecture:**
+
+- **Modal (T10 scaffold, finalized at T40):** "quick global on/off."
+  The modal becomes a per-CURRENT-DOMAIN quick toggle. Global-row toggle
+  flips ALL FIVE category flags for the active domain
+  (`config.activeDomain`) atomically. Per-category rows toggle one flag
+  for the active domain. The modal NEVER touches non-active-domain
+  entries. Rationale: the modal's whole point is "I want to flip
+  autonomy on/off for what I'm working on right now"; bleeding into
+  other domains would be surprising.
+- **Panel (T40, NEW):** `panel-autonomous.tsx`. A grid: rows = domains,
+  columns = the five categories. Each cell is a `<Switch>` bound to
+  `config.autonomous[slug][category]`. This is the deep-config surface
+  — every cell is independently toggleable.
+
+**T10 modal scaffold updates** required at T40 lock-time:
+
+- Three-category surface (`newFiles`, `edits`, `indexEntries`) becomes
+  five-category (add `concepts`, `draft`).
+- The "global autonomy" row's semantic changes from "are per-category
+  controls enabled?" to "are all five flags True for the active
+  domain?". All-True ⇒ checked; all-False ⇒ unchecked; mixed ⇒
+  indeterminate (use `data-state="indeterminate"` on the underlying
+  Switch primitive).
+- `onChange` callback gains a domain hint OR is replaced by a direct
+  `setDomainAutonomy(activeDomain, category, value)` API call (T40 lands
+  the API).
+- The current "disabled when global is off" pattern (lines 144–159 in
+  autonomy-modal.tsx) goes AWAY. Per-category rows are independently
+  toggleable; the global row is a convenience fan-out.
+
+**Panel a11y / interaction notes (T40):**
+
+- Each `<Switch>` cell: `aria-label="Auto-apply {category} in {domain}"`.
+- Tab order: row-major (domain A's five cells, then domain B's five).
+- A "Reset to defaults" button per row (sets all five flags False for
+  that domain). A "Disable all autonomy" footer button (clears the
+  whole `autonomous` dict to `{}`).
+- The modal and panel share state via the same config-store; flipping a
+  cell in either UI is reflected in the other on next paint.
+
+### 7. Open questions resolved at lock time
+
+| # | Question                                                              | Resolution                                                                                                                                          |
+|---|-----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | TypedDict vs BaseModel for the per-domain value                       | BaseModel (`AutonomyCategoryFlags`) — gets `validate_assignment` + `extra="forbid"` for free; matches every other per-domain map.                   |
+| 2 | Default for `Config.autonomous`                                       | Empty dict `{}`; the gate treats missing-domain as all-False.                                                                                       |
+| 3 | Multi-member patches with mixed flags (Q1)                            | Any-False ⇒ stage the WHOLE patch. No partial apply.                                                                                                |
+| 4 | `category=CONCEPTS` + `edits=[...]` semantics (Q2)                    | Intersection: both `concepts=True` AND `edits=True` required.                                                                                       |
+| 5 | Where the new shape lives on `Config`                                 | Top-level `Config.autonomous: dict[str, AutonomyCategoryFlags]` (NOT inside `DomainOverride` — Plan 12 D1 dropped that). Mirrors `budget.per_domain`. |
+| 6 | Cross-field validator (orphan slug rejection)                         | YES — mirrors `_check_domain_overrides_keys_in_domains`.                                                                                            |
+| 7 | OTHER category in the new gate                                        | Still always-False short-circuit at the top of `should_auto_apply` (preserved invariant; pin test stays green).                                     |
+| 8 | `domain` arg on `should_auto_apply`                                   | Keyword-only; every call site updates explicitly.                                                                                                   |
+| 9 | What `_resolve_config(ctx)` returns post-migration                    | Same defaults-only stub; with `autonomous={}` default it produces all-False evaluation, matching today's test fixtures' baseline.                   |
+| 10 | Modal scope (cross-domain or active-domain only)                      | Active-domain only. Cross-domain editing lives in the panel.                                                                                        |
+
+### 8. Open questions DEFERRED for user sign-off (BLOCKING T38)
+
+These are questions the brainstorm cannot resolve unilaterally because
+they alter user-facing behavior or deviate from a literal reading of D30.
+T38 should NOT start until the user signs off on these.
+
+**D-1 (DEVIATION FROM SPEC). Q3 / Section 5 step 3: should the gate's
+category-flag check fire for ALL five `_CATEGORY_TO_FLAG` keys (literal
+reading of D30 — preserves today's mapping) or ONLY for `CONCEPTS` and
+`DRAFT` (the brainstorm's recommended reading — `INGEST`, `ENTITIES`,
+`INDEX_REWRITES` become PatchCategory-only metadata, gate is governed
+by member-field flags)?** The recommended option is the latter — it's
+the only way to make the hybrid 5-key shape coherent without losing
+information. But it IS a semantic shift the user should sign off on
+before T38/T39 codifies it.
+
+**D-2. Migration of `entities=True` (Section 3 mapping table).** The
+recommended mapping is `entities=True ⇒ {new_files: true, edits: true}`
+per domain. The conservative alternative is to drop `entities=True` on
+migration with a one-time toast asking the user to re-enable specific
+categories. The aggressive option grants edit-autonomy to a domain
+that previously did not have it; the conservative option silently
+disables a flag the user explicitly turned on. Recommend the aggressive
+option (preserves prior intent) but flag for sign-off because edit-
+autonomy is a scope-guard-adjacent capability.
+
+**D-3. Migration of `index_rewrites=True`.** Recommended mapping is
+`index_rewrites=True ⇒ {index_entries: true}` per domain. This is
+straightforward (1:1 by name), but the brainstorm wants to confirm the
+user is fine with `index_rewrites` being deprecated as a Config field
+name in favor of `index_entries` in the new shape (the new shape's
+Literal must use the member-field name; `index_rewrites` was the old
+category bucket name). No content change, just a name normalization.
+
+**D-4. Default behavior for users with NO existing `AutonomousConfig`
+on disk (i.e. a fresh install or a config.json predating the
+field).** Recommended: `autonomous={}` (matches Section 4). The user
+gets all-False evaluation everywhere, which matches today's
+"out-of-the-box auto-applies nothing" guarantee from CLAUDE.md
+principle #3. No deviation here — flagging only because the migration
+helper's branch coverage needs this case explicitly tested (T38 pin
+(c) "already-nested" should also include "field absent entirely").
+
+### 9. Readiness for T38
+
+**Ready to codify** if the user signs off on D-1, D-2, D-3, D-4 above.
+Sign-offs are independent — D-1 is the only one that materially shifts
+T39's gate algorithm (it changes which `_CATEGORY_TO_FLAG` keys the
+category-flag check evaluates). D-2/D-3/D-4 only affect T38's migration
+mapping table.
+
+If the user accepts the brainstorm's recommendations on all four,
+T38 → T39 → T40 can proceed sequentially without further design
+iteration. If the user wants the literal-D30 reading on D-1, the
+T39 gate algorithm sketch in Section 5 step 3 needs adjustment (the
+`{INGEST, ENTITIES, INDEX_REWRITES}` branch becomes a category-flag
+check on the still-existing `ingest`, `entities`, `index_rewrites`
+keys), but the rest of the design is unchanged — T38's schema shape
+is identical under either reading.
+
+**One quirk noted (no fix in T37 per scope rules):** `apply_patch.py`
+imports `Config` from `brain_core.config.schema` but never reads it
+from `ctx.config` — it always returns the defaults-only stub from
+`_resolve_config`. This is documented as a deliberate test seam, but
+T39 will need to decide whether to keep the seam (pass the stub-Config
+through with `autonomous={}` ⇒ everything stages) or finally wire
+`ctx.config` for real. The brainstorm recommends KEEPING the seam in
+T39 (smallest surface change; Plan 16+ tackles real config plumbing)
+and filing a follow-up task for "wire `_resolve_config` to read
+`ctx.config` when present." Out of scope for T37 to land.
 
 ---
 
