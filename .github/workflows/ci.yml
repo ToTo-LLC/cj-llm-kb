@@ -50,3 +50,49 @@ jobs:
 
       - name: Test
         run: uv run pytest packages/brain_core --cov=brain_core --cov-report=term-missing
+
+      # Plan 16 D18 / Task 18: per-step wall-clock observability. Queries the
+      # current workflow run's jobs API (gh api), parses with jq, and writes a
+      # Markdown table to $GITHUB_STEP_SUMMARY so reviewers can scan step
+      # timings + statuses without drilling into raw logs. Mac vs Windows
+      # comparison appears as adjacent rows in the same workflow-run summary
+      # because both matrix legs append to their own job's summary surface
+      # (the run UI aggregates summaries across all jobs in a run).
+      #
+      # Caveats:
+      # - This step is the LAST step in the job, so its OWN duration won't
+      #   appear (the API call happens before this step's completed_at is
+      #   recorded). That's acceptable per D18 — losing the summary step's
+      #   own row is fine.
+      # - `if: always()` so the summary fires even when a prior step failed.
+      #   A failure summary is more valuable than no summary.
+      # - `set +e` + `|| true` so a transient gh/jq failure does NOT fail the
+      #   job. This is observability, not a gate.
+      # - `shell: bash` is cross-platform — pwsh on windows-2022 has bash
+      #   available via Git Bash; gh + jq are preinstalled on both runners.
+      - name: Write CI duration summary
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          jobs_json=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate)
+          {
+            echo "## CI duration summary"
+            echo ""
+            echo "| Job | Step | Duration | Status |"
+            echo "|---|---|---|---|"
+            echo "$jobs_json" | jq -r '
+              .jobs[] |
+              . as $job |
+              .steps[]? |
+              "| \($job.name) | \(.name) | \(
+                if .completed_at and .started_at then
+                  ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) | tostring + "s"
+                else
+                  "—"
+                end
+              ) | \(.conclusion // "—") |"
+            '
+          } >> "$GITHUB_STEP_SUMMARY" || true
