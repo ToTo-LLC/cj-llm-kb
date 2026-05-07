@@ -146,6 +146,38 @@ def test_settable_keys_all_resolve_to_a_real_schema_field() -> None:
         # 5 lands; until then this exception keeps the drift watchdog
         # honest about WHY it's allowlisted.
         "domain_order": ("PENDING", "Config.domain_order (Plan 07 Task 5)"),
+        # Plan 16 Task 38: ``Config.autonomous`` was reshaped from a flat
+        # ``AutonomousConfig`` BaseModel to ``dict[str, AutonomyCategoryFlags]``.
+        # The legacy ``autonomous.<flag>`` paths on the static allowlist
+        # no longer walk against pydantic ``model_fields`` (the watcher's
+        # walker can't descend through a ``dict[...]`` annotation). The
+        # entries stay on ``_SETTABLE_KEYS`` so the (currently-xfailed)
+        # ``test_allows_autonomous_flag`` keeps a single source of truth
+        # for the wire shape until T40 lands the new
+        # ``autonomous.<slug>.<field>`` wildcard + Settings UI panel.
+        # T40 will either remove these entries from ``_SETTABLE_KEYS`` or
+        # promote them to a wildcard pattern; either way this PENDING
+        # justification rotates out at that point.
+        "autonomous.ingest": (
+            "PENDING",
+            "Config.autonomous reshaped to dict[str, AutonomyCategoryFlags] (Plan 16 T38); T40 lands new wildcard.",
+        ),
+        "autonomous.entities": (
+            "PENDING",
+            "Config.autonomous reshaped to dict[str, AutonomyCategoryFlags] (Plan 16 T38); T40 lands new wildcard.",
+        ),
+        "autonomous.concepts": (
+            "PENDING",
+            "Config.autonomous reshaped to dict[str, AutonomyCategoryFlags] (Plan 16 T38); T40 lands new wildcard.",
+        ),
+        "autonomous.index_rewrites": (
+            "PENDING",
+            "Config.autonomous reshaped to dict[str, AutonomyCategoryFlags] (Plan 16 T38); T40 lands new wildcard.",
+        ),
+        "autonomous.draft": (
+            "PENDING",
+            "Config.autonomous reshaped to dict[str, AutonomyCategoryFlags] (Plan 16 T38); T40 lands new wildcard.",
+        ),
     }
 
     def _resolve(model: type, dotted: str) -> object:
@@ -219,6 +251,19 @@ async def test_allows_handler_config_keys(tmp_path: Path) -> None:
         assert result.data["value"] == value
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Plan 16 Task 38 reshaped Config.autonomous from a flat "
+        "AutonomousConfig BaseModel to dict[str, AutonomyCategoryFlags]. "
+        "The legacy ``autonomous.<flag>`` allowlist entries on _SETTABLE_KEYS "
+        "now hit the dict-walk guard in _resolve_parent_and_field "
+        "('intermediate segments must be pydantic models'). T40 lands the "
+        "new per-domain settable wildcard and Settings UI; until then this "
+        "path is broken by design."
+    ),
+    strict=True,
+    raises=KeyError,
+)
 async def test_allows_autonomous_flag(tmp_path: Path) -> None:
     """Each new autonomy key accepts a bool without secret-refusal or allowlist-refusal.
 

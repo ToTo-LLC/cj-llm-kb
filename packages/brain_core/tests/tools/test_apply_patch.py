@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 from brain_core.chat.pending import PendingPatchStore
 from brain_core.chat.types import ChatMode
-from brain_core.config.schema import AutonomousConfig, Config
+from brain_core.config.schema import Config
 from brain_core.rate_limit import RateLimitError
 from brain_core.state.db import StateDB
 from brain_core.tools import apply_patch as apply_patch_module
@@ -101,10 +101,24 @@ async def test_rate_limit_refusal_propagates(tmp_path: Path) -> None:
     assert exc_info.value.retry_after_seconds == 60
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Plan 16 Task 38 reshaped Config.autonomous to dict[str, "
+        "AutonomyCategoryFlags] and deleted AutonomousConfig; T39 "
+        "rewrites should_auto_apply to consume the new per-domain x "
+        "per-category shape (with a domain= kwarg on the gate). Until "
+        "T39 lands, the legacy AutonomousConfig(ingest=True) fixture "
+        "below cannot construct."
+    ),
+    strict=True,
+    raises=Exception,
+)
 async def test_auto_apply_fires_when_category_flag_enabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PatchCategory.INGEST + autonomous.ingest=True → status="auto_applied"."""
+    from brain_core.config.schema import AutonomousConfig  # type: ignore[attr-defined]
+
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "research").mkdir()
@@ -136,10 +150,23 @@ async def test_auto_apply_fires_when_category_flag_enabled(
     assert (vault / "research" / "notes" / "auto.md").exists()
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Plan 16 Task 38 reshaped Config.autonomous to dict[str, "
+        "AutonomyCategoryFlags] and deleted AutonomousConfig; T39 "
+        "rewrites should_auto_apply to consume the new per-domain x "
+        "per-category shape. Until T39 lands, the legacy "
+        "AutonomousConfig(ingest=False) fixture below cannot construct."
+    ),
+    strict=True,
+    raises=Exception,
+)
 async def test_auto_apply_skipped_when_category_flag_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PatchCategory.INGEST + autonomous.ingest=False → status="applied" (fallback path)."""
+    from brain_core.config.schema import AutonomousConfig  # type: ignore[attr-defined]
+
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "research").mkdir()

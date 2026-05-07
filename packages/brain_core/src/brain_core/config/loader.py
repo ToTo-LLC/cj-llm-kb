@@ -63,6 +63,155 @@ ENV_MAP: dict[str, str] = {
 _cached: dict[Path, tuple[Config, int]] = {}
 
 
+# Plan 16 Task 38 / T37 §3: legacy ``AutonomousConfig`` flag names. The
+# pre-T38 shape was a flat BaseModel with these five booleans; the new
+# shape is ``dict[str, AutonomyCategoryFlags]`` where each value holds
+# the (renamed / reshaped) per-domain flags. The migration helper below
+# detects the flat shape by checking whether every key in the
+# ``autonomous`` payload is one of these names AND every value is a bool.
+_LEGACY_AUTONOMOUS_KEYS: frozenset[str] = frozenset(
+    {"ingest", "entities", "concepts", "index_rewrites", "draft"}
+)
+
+
+def _migrate_legacy_autonomous(raw: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite the pre-T38 flat ``autonomous`` shape into the per-domain nested shape.
+
+    Plan 16 Task 38 / T37 §3 — IDEMPOTENT migration helper. Three accepted
+    input shapes for ``raw["autonomous"]``:
+
+      1. **Already nested** (post-migration / fresh install):
+         ``{slug: {flag: bool, ...}, ...}`` — passes through unchanged.
+      2. **Flat AutonomousConfig** (the real existing on-disk shape):
+         five-key dict ``{"ingest": bool, "entities": bool, "concepts":
+         bool, "index_rewrites": bool, "draft": bool}`` — expanded per
+         the mapping table below for every slug in ``raw["domains"]``.
+      3. **Bare bool** (defensive — a hand-edited legacy config that
+         never shipped): ``True`` ⇒ all-True for every slug; ``False``
+         ⇒ empty dict.
+
+    Mapping table for shape (2) → (1) (USER-LOCKED, T37 §3 D-1/D-2/D-3):
+
+      * ``ingest=True``  ⇒ ``new_files=True, index_entries=True`` per slug.
+        Preserves prior intent ("auto-apply ingest patches") under the new
+        member-field gate; an INGEST patch is typically ``new_files`` +
+        ``index_entries``, so mapping to only one would break ingest
+        auto-apply for half the patches.
+      * ``entities=True`` ⇒ DROPPED (no flag is set). D-2 = CONSERVATIVE
+        choice locked by the user: silently granting edit-autonomy to a
+        domain that didn't previously have it (the alternative aggressive
+        mapping was ``{new_files=True, edits=True}``) is a scope-guard-
+        adjacent capability change. Instead the helper emits a
+        ``logger.warning`` with event ``"legacy_autonomy_entities_dropped"``
+        so a future ``brain doctor`` / Settings UI surface can prompt the
+        user to re-enable specific categories.
+      * ``concepts=True`` ⇒ ``concepts=True`` per slug (1:1 by name).
+      * ``index_rewrites=True`` ⇒ ``index_entries=True`` per slug (D-3
+        rename — the new shape's Literal uses the PatchSet member-field
+        name, the old category-bucket name normalizes away).
+      * ``draft=True`` ⇒ ``draft=True`` per slug (1:1 by name).
+      * Multiple True flags compose with logical OR per cell.
+      * ``False`` flags are no-ops; they leave the per-slug entry's other
+        flags at the default ``False``.
+
+    The function returns ``raw`` (mutated in place when a migration ran;
+    untouched otherwise). ``raw`` without an ``autonomous`` key passes
+    through unchanged — Pydantic's ``Field(default_factory=dict)`` lands
+    the empty-dict default at ``Config.model_validate`` time.
+
+    Stable warning event contract (downstream tools may rely on this):
+      * ``event="legacy_autonomy_entities_dropped"``
+      * ``domains: list[str]`` — the slug list that the dropped flag
+        WOULD have applied to.
+    """
+    if "autonomous" not in raw:
+        # Pre-Plan-07 ``config.json`` (no autonomous field at all). The
+        # Pydantic default lands at construction time.
+        return raw
+
+    autonomous = raw["autonomous"]
+
+    # Shape (3): bare bool. Defensive — never shipped, but cheap to
+    # handle correctly so a hand-edited legacy config doesn't blow up.
+    if isinstance(autonomous, bool):
+        domains_list: list[str] = list(raw.get("domains", []))
+        if autonomous:
+            raw["autonomous"] = {
+                slug: {
+                    "new_files": True,
+                    "edits": True,
+                    "index_entries": True,
+                    "concepts": True,
+                    "draft": True,
+                }
+                for slug in domains_list
+            }
+        else:
+            raw["autonomous"] = {}
+        return raw
+
+    if not isinstance(autonomous, dict):
+        # Anything else (string, int, list, ...) — leave it alone so the
+        # downstream ``Config(**data)`` raises a canonical Pydantic
+        # ``ValidationError``. Coercing here would mask a genuinely
+        # corrupt config.
+        return raw
+
+    # Distinguish shape (1) from shape (2). Shape (2) is uniquely
+    # identified by EVERY key being one of the legacy flag names AND
+    # EVERY value being a bool — no slug-keyed entries can match because
+    # the slug regex (Plan 10 D2) forbids keys like "ingest" only by
+    # accident; the value-type check is what disambiguates a slug
+    # called "ingest" pointing at a dict from the legacy ``ingest: true``.
+    is_flat_legacy = bool(autonomous) and all(
+        key in _LEGACY_AUTONOMOUS_KEYS and isinstance(value, bool)
+        for key, value in autonomous.items()
+    )
+
+    if not is_flat_legacy:
+        # Shape (1): already nested, OR an empty dict (which is also a
+        # valid post-migration shape). Leave it alone.
+        return raw
+
+    # Shape (2): expand per the mapping table.
+    domains_list = list(raw.get("domains", []))
+
+    if autonomous.get("entities") is True:
+        # D-2 = CONSERVATIVE: the entities flag silently drops on
+        # migration. Emit a structured warning so the change is
+        # observable. The event name is stable contract — downstream
+        # tooling may grep ``legacy_autonomy_entities_dropped`` to surface
+        # the migration via brain doctor / Settings UI.
+        logger.warning(
+            "legacy_autonomy_entities_dropped",
+            domains=domains_list,
+        )
+
+    new_autonomous: dict[str, dict[str, bool]] = {}
+    for slug in domains_list:
+        flags: dict[str, bool] = {
+            "new_files": False,
+            "edits": False,
+            "index_entries": False,
+            "concepts": False,
+            "draft": False,
+        }
+        if autonomous.get("ingest") is True:
+            flags["new_files"] = True
+            flags["index_entries"] = True
+        # ``entities=True`` is intentionally not mapped (D-2 conservative).
+        if autonomous.get("concepts") is True:
+            flags["concepts"] = True
+        if autonomous.get("index_rewrites") is True:
+            flags["index_entries"] = True
+        if autonomous.get("draft") is True:
+            flags["draft"] = True
+        new_autonomous[slug] = flags
+
+    raw["autonomous"] = new_autonomous
+    return raw
+
+
 def load_config(
     *,
     config_file: Path | None,
@@ -90,6 +239,19 @@ def load_config(
             backup = config_file.parent / f"{config_file.name}.bak"
             loaded = _try_read_config_file(backup)
         if loaded is not None:
+            # Plan 16 Task 38 / T37 §3: the pre-T38 flat ``AutonomousConfig``
+            # shape (five booleans ``ingest`` / ``entities`` / ``concepts`` /
+            # ``index_rewrites`` / ``draft``) on disk gets rewritten to the
+            # new per-domain nested ``dict[str, AutonomyCategoryFlags]``
+            # shape BEFORE ``Config(**data)`` so any user with an existing
+            # ``config.json`` keeps working across the schema bump. The
+            # migration is idempotent — re-running on the new shape is a
+            # no-op — so a hot-reload cycle (Plan 16 Task 35) doesn't
+            # corrupt state. ``env`` and ``cli_overrides`` deliberately
+            # don't get the migration call: those layers don't carry an
+            # ``autonomous`` key today, and if they ever did the migration
+            # would correctly no-op (already-nested or absent).
+            loaded = _migrate_legacy_autonomous(loaded)
             data.update(loaded)
 
     for env_key, field in ENV_MAP.items():

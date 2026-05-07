@@ -6,15 +6,30 @@ the PatchSet's ``category`` and the matching per-category flag in
 ``Config.autonomous``; if the flag is ``True``, the patch is auto-applied
 by :func:`brain_core.tools.apply_patch.handle` instead of being staged.
 
-Safety invariants pinned by ``tests/test_autonomy.py``:
+**Plan 16 Task 38 status — gate is BROKEN by the schema reshape.** T38
+reshaped ``Config.autonomous`` from a flat
+:class:`brain_core.config.schema.AutonomousConfig` BaseModel (now
+deleted) to ``dict[str, AutonomyCategoryFlags]``. The
+``getattr(config.autonomous, flag_name)`` line below now raises
+``AttributeError`` for any non-default Config (and reads as the dict's
+own attributes — e.g., ``.get`` — for the default). T39 owns the
+rewrite to the new per-domain x per-category gate (with a ``domain:
+str`` kwarg, hybrid member-field/category lookup, and intersection
+semantics — see ``tasks/plans/16-comprehensive-carry-forward.md`` T37
+§5). Until T39 lands, ``tests/test_autonomy.py`` and the two autonomy-
+gate tests in ``tests/tools/test_apply_patch.py`` are
+``pytest.mark.xfail(strict=True)``.
+
+Safety invariants pinned by ``tests/test_autonomy.py`` (every one
+xfails today; T39 flips them back):
 
 * :attr:`PatchCategory.OTHER` NEVER auto-applies. The default category on
   every new ``PatchSet`` is OTHER, so a caller that forgets to stamp a
   category cannot accidentally bypass the approval queue.
-* Default :class:`AutonomousConfig` has every flag ``False``, so the gate
-  is off until the user explicitly opts in.
-* No cross-category leakage: enabling ``autonomous.ingest`` does not cause
-  ``PatchCategory.ENTITIES`` patches to auto-apply.
+* Default :class:`AutonomyCategoryFlags` has every flag ``False``, so the
+  gate is off until the user explicitly opts in.
+* No cross-category leakage: enabling one flag does not cause patches in
+  another category to auto-apply.
 """
 
 from __future__ import annotations

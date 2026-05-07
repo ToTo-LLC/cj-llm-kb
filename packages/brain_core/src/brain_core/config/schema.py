@@ -288,28 +288,43 @@ class HandlersConfig(BaseModel):
     pdf: PDFHandlerConfig = Field(default_factory=PDFHandlerConfig)
 
 
-class AutonomousConfig(BaseModel):
-    """Per-category auto-apply flags for staged PatchSets.
+class AutonomyCategoryFlags(BaseModel):
+    """Per-category auto-apply flags for one domain (Plan 16 Task 38 / T37 §1).
+
+    Lives under :attr:`Config.autonomous` keyed by domain slug. The five
+    keys are a HYBRID surface — three are :class:`brain_core.vault.types.PatchSet`
+    member-field names (``new_files``, ``edits``, ``index_entries``); two
+    are :class:`brain_core.vault.types.PatchCategory` values (``concepts``,
+    ``draft``). The category selection is intentional: chat-mode autonomy
+    ("draft a note for me") is naturally category-shaped, while
+    ingest / propose-note autonomy is naturally member-field-shaped (the
+    user reasons about "do I trust auto-creating new files?" not "do I
+    trust the INGEST bucket?").
 
     Every flag defaults to ``False`` — out-of-the-box brain stages every
     LLM-authored vault mutation for human approval (CLAUDE.md principle #3).
-    Flipping a flag to ``True`` opts that category into auto-apply via
-    :func:`brain_core.autonomy.should_auto_apply`. The category keys mirror
-    :class:`brain_core.vault.types.PatchCategory` values 1:1.
+    The gate (T39 reshapes :func:`brain_core.autonomy.should_auto_apply`)
+    treats a missing-domain entry the same as an all-False entry: no key
+    in ``Config.autonomous`` for a slug means "stage everything for that
+    domain".
+
+    ``extra="forbid"`` rejects unknown category keys at load time so a typo
+    in ``config.json`` (e.g. ``new_filez`` instead of ``new_files``) fails
+    loud rather than being silently dropped.
     """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
-    ingest: bool = False
-    entities: bool = False
+    new_files: bool = False
+    edits: bool = False
+    index_entries: bool = False
     concepts: bool = False
-    index_rewrites: bool = False
     draft: bool = False
 
 
 class DomainOverride(BaseModel):
     """Per-domain LLM overrides (Plan 11 D8; Plan 12 D1 dropped the
     autonomy field — autonomy is governed by the per-category flags on
-    :class:`AutonomousConfig`, not a per-domain bool).
+    :class:`AutonomyCategoryFlags`, not a per-domain bool).
 
     Every field is ``None`` by default — a missing override means "fall
     back to the global value from :class:`LLMConfig`". A populated field
@@ -392,7 +407,24 @@ class Config(BaseModel):
     autonomous_mode: bool = False
     llm: LLMConfig = Field(default_factory=LLMConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
-    autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
+    # Plan 16 Task 38 / T37 §1: per-domain auto-apply flags. Keys are
+    # domain slugs; values are :class:`AutonomyCategoryFlags`. Default
+    # ``{}`` so a fresh install (and any legacy ``config.json`` that
+    # predates this field) lands at all-False evaluation everywhere — the
+    # gate (T39 reshapes :func:`brain_core.autonomy.should_auto_apply`)
+    # treats a missing slug the same as an explicit all-False entry.
+    # Cross-field validator below enforces "every key must be a live
+    # domain" (no orphan autonomy entries for deleted slugs).
+    #
+    # Migration from the pre-T38 flat ``AutonomousConfig`` shape (the
+    # five-bool ``ingest`` / ``entities`` / ``concepts`` /
+    # ``index_rewrites`` / ``draft`` model) is handled by
+    # :func:`brain_core.config.loader._migrate_legacy_autonomous` —
+    # called inside ``load_config`` before ``Config(**data)``, so any
+    # caller that goes through the loader gets the new shape
+    # automatically. The migration is idempotent (re-running on the new
+    # shape is a no-op).
+    autonomous: dict[str, AutonomyCategoryFlags] = Field(default_factory=dict)
     handlers: HandlersConfig = Field(default_factory=HandlersConfig)
     web_port: int = Field(default=4317, ge=1024, le=65535)
     log_llm_payloads: bool = False
@@ -408,7 +440,8 @@ class Config(BaseModel):
     # below enforces that every key is also in ``self.domains`` (no
     # orphan overrides for deleted domains). Plan 12 D1 dropped the
     # per-domain ``autonomous_mode`` override field — autonomy is
-    # governed by :class:`AutonomousConfig` per-category flags.
+    # governed by :class:`AutonomyCategoryFlags` per-category flags
+    # under :attr:`Config.autonomous` (Plan 16 Task 38 reshaped the field).
     domain_overrides: dict[str, DomainOverride] = Field(default_factory=dict)
     # Plan 12 D8 (spec §4): persistent acknowledgment of the cross-domain
     # confirmation modal. Default ``False`` means the modal fires the
@@ -531,6 +564,21 @@ class Config(BaseModel):
             raise ValueError(
                 f"domain_overrides keys {orphans!r} are not in domains {self.domains!r}; "
                 "remove the override or add the domain first."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_autonomy_keys_in_domains(self) -> Config:
+        # Plan 16 Task 38 / T37 §1: orphan autonomy entries (keys for
+        # slugs that aren't in ``domains``) are rejected — mirrors the
+        # equivalent ``domain_overrides`` validator. Without this guard,
+        # deleting a domain would leave a stale autonomy entry that
+        # silently comes back if the slug is re-added.
+        orphans = [slug for slug in self.autonomous if slug not in self.domains]
+        if orphans:
+            raise ValueError(
+                f"autonomous keys {orphans!r} are not in domains {self.domains!r}; "
+                "remove the entry or add the domain first."
             )
         return self
 

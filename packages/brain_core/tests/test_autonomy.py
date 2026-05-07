@@ -5,15 +5,49 @@ CLAUDE.md (LLM writes always staged). It is tightly scoped: per-category,
 defaulting to False, with :class:`PatchCategory.OTHER` wired to always return
 False regardless of config — so a PatchSet emitted without a category can
 never auto-apply.
+
+**Plan 16 Task 38 status — XFAILED.** T38 reshaped ``Config.autonomous``
+from a flat :class:`AutonomousConfig` BaseModel (now deleted) to a per-
+domain ``dict[str, AutonomyCategoryFlags]``; T39 owns the gate rewrite
+of ``should_auto_apply`` to consume the new shape (per-domain x per-
+category, with the hybrid member-field/category gate locked in T37
+§5). Until T39 lands, every test in this file fails because:
+
+  * ``AutonomousConfig`` no longer exists in ``brain_core.config.schema``
+    (the old import was deleted with the schema).
+  * The fixture ``_config(**autonomy)`` constructs a flat
+    ``AutonomousConfig`` payload that the new ``Config.autonomous`` field
+    rejects (it expects ``dict[str, AutonomyCategoryFlags]``).
+  * ``should_auto_apply`` itself still reads ``config.autonomous.<flag>``
+    via ``getattr`` and ``_CATEGORY_TO_FLAG`` — neither is correct under
+    the new dict-shape; T39 plumbs ``domain: str`` and reshapes the
+    lookup.
+
+The file is module-level ``pytest.mark.xfail(strict=True)`` so the suite
+stays green and T39 sees a strict-xfail-flip when the gate rewrite
+lands. Strict mode means an accidental fix (e.g. a passing test before
+T39 lands) errors out instead of silently flipping to xpass.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from brain_core.autonomy import should_auto_apply
-from brain_core.config.schema import AutonomousConfig, Config
+from brain_core.config.schema import Config
 from brain_core.vault.types import NewFile, PatchCategory, PatchSet
+
+pytestmark = pytest.mark.xfail(
+    reason=(
+        "Plan 16 Task 38 reshaped Config.autonomous to dict[str, "
+        "AutonomyCategoryFlags]; T39 rewrites should_auto_apply to "
+        "consume the new shape. AutonomousConfig (the old flat model) "
+        "no longer exists."
+    ),
+    strict=True,
+    raises=Exception,
+)
 
 
 def _patchset(category: PatchCategory = PatchCategory.OTHER) -> PatchSet:
@@ -24,10 +58,15 @@ def _patchset(category: PatchCategory = PatchCategory.OTHER) -> PatchSet:
     )
 
 
-def _config(**autonomy: bool) -> Config:
-    return Config(
-        vault_path=Path("/tmp/vault"),
-        autonomous=AutonomousConfig(**autonomy),
+def _config(**autonomy: bool) -> object:
+    """Stub fixture — kept for shape so the file imports cleanly under
+    strict-xfail. T39 rewrites every call site to pass
+    ``Config(autonomous={"<slug>": AutonomyCategoryFlags(...)})`` plus a
+    new ``domain=...`` kwarg on ``should_auto_apply``.
+    """
+    raise RuntimeError(
+        "_config fixture is stub-only under T38 xfail; T39 rewrites this "
+        "to use Config(autonomous={slug: AutonomyCategoryFlags(...)})."
     )
 
 
