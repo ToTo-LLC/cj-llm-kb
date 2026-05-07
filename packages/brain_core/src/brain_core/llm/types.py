@@ -83,6 +83,14 @@ class LLMRequest(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=1.5)
     stop_sequences: list[str] = Field(default_factory=list)
     tools: list[ToolDef] = Field(default_factory=list)
+    # Plan 16 Task 31 / D27 step 2 of 3: optional per-call domain for the
+    # provider's per-domain rate-limit gate. ``None`` (default) bypasses
+    # rate-limiting entirely — preserving the Plan 02 shape for every
+    # legacy caller. Providers that don't implement per-domain rate
+    # limits MUST ignore this field. Carried as a primitive ``str`` (not
+    # a typed Domain enum) because the LLM layer is provider-agnostic
+    # and the domain set lives in :class:`brain_core.config.Config`.
+    domain: str | None = None
 
 
 class LLMResponse(BaseModel):
