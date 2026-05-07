@@ -393,6 +393,44 @@ export const setPrivacyRailed = (
   configSet({ key: "privacy_railed", value: list });
 
 /**
+ * Per-domain budget cap payload — mirrors
+ * :class:`brain_core.config.schema.BudgetOverride`. Either / both caps may
+ * be omitted or set to ``null`` (= "no override; fall back to global"); a
+ * positive numeric overrides the global :class:`BudgetConfig` cap for
+ * spend attributed to this domain. Zero / negative caps are rejected at
+ * the schema level — the documented way to clear a cap is ``null`` (or
+ * omitting the field).
+ */
+export interface BudgetCap {
+  monthly_cap_usd?: number | null;
+  daily_cap_usd?: number | null;
+}
+
+/**
+ * Persist a per-domain budget cap entry (Plan 16 Task 29 / D26 step 4 of 4).
+ * Routes through ``brain_config_set`` with the dotted key
+ * ``budget.per_domain.<slug>`` — the backend's wildcard handler
+ * (``_apply_budget_per_domain``) writes the whole BudgetOverride payload
+ * at once. Posting ``null`` for the value drops the slug entry entirely
+ * (equivalent to "no override; fall back to the global
+ * :class:`BudgetConfig` caps"); posting a payload where both caps are
+ * ``null`` is also pruned to "no entry" by the backend.
+ *
+ * Unlike ``setDomainOverride`` (which writes one leaf field at a time),
+ * the budget cap path is whole-payload because the Settings UI sets
+ * daily / monthly as a pair and a half-applied save would leave
+ * inconsistent state on disk if one leaf write failed.
+ */
+export const setDomainBudget = (
+  slug: string,
+  cap: BudgetCap | null,
+): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+  configSet({
+    key: `budget.per_domain.${slug}`,
+    value: cap,
+  });
+
+/**
  * Persist a new ``active_domain`` slug (Plan 12 D2 / Task 6).
  *
  * Self-documenting wrapper around ``configSet({key:"active_domain",

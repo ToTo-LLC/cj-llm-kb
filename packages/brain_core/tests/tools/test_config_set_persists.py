@@ -249,6 +249,119 @@ async def test_domain_override_rejects_orphan_slug(tmp_path: Path) -> None:
     assert not (tmp_path / ".brain" / "config.json").exists()
 
 
+async def test_budget_per_domain_whole_payload_persists(tmp_path: Path) -> None:
+    """Plan 16 Task 29 / D26 step 4 of 4: ``budget.per_domain.<slug>``
+    writes a whole :class:`BudgetOverride` payload at once and round-
+    trips through ``load_config`` with both caps preserved.
+
+    The Config instance reference must remain identical across the call
+    (in-place dict mutation on ``Config.budget.per_domain``; no
+    ``model_copy`` in the dispatch path) — same invariant as
+    ``test_domain_override_dict_walk_creates_entry_and_persists``.
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg_id_before = id(cfg)
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    assert "hobby" not in cfg.budget.per_domain
+
+    result = await handle(
+        {
+            "key": "budget.per_domain.hobby",
+            "value": {"daily_cap_usd": 1.5, "monthly_cap_usd": 30.0},
+        },
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["persisted"] is True
+    # Config instance identity preserved.
+    assert id(cfg) == cfg_id_before
+    assert "hobby" in cfg.budget.per_domain
+    assert cfg.budget.per_domain["hobby"].daily_cap_usd == pytest.approx(1.5)
+    assert cfg.budget.per_domain["hobby"].monthly_cap_usd == pytest.approx(30.0)
+
+    # Round-trip via load_config.
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert "hobby" in rehydrated.budget.per_domain
+    assert rehydrated.budget.per_domain["hobby"].daily_cap_usd == pytest.approx(1.5)
+    assert rehydrated.budget.per_domain["hobby"].monthly_cap_usd == pytest.approx(30.0)
+
+
+async def test_budget_per_domain_partial_cap_persists(tmp_path: Path) -> None:
+    """Setting only one cap (the other absent / None) is supported —
+    the absent leaf stays None. Mirrors how the Settings UI sends a
+    partial save when the user only fills one of the two inputs."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    await handle(
+        {
+            "key": "budget.per_domain.hobby",
+            "value": {"daily_cap_usd": 2.0, "monthly_cap_usd": None},
+        },
+        ctx,
+    )
+    assert cfg.budget.per_domain["hobby"].daily_cap_usd == pytest.approx(2.0)
+    assert cfg.budget.per_domain["hobby"].monthly_cap_usd is None
+
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert rehydrated.budget.per_domain["hobby"].daily_cap_usd == pytest.approx(2.0)
+    assert rehydrated.budget.per_domain["hobby"].monthly_cap_usd is None
+
+
+async def test_budget_per_domain_clear_with_none_round_trips(tmp_path: Path) -> None:
+    """Posting ``None`` drops the slug entry, and the dropped state
+    persists across a ``load_config`` round-trip (config.json carries
+    no ``hobby`` entry)."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    # Seed an override.
+    await handle(
+        {
+            "key": "budget.per_domain.hobby",
+            "value": {"daily_cap_usd": 1.0},
+        },
+        ctx,
+    )
+    assert "hobby" in cfg.budget.per_domain
+
+    # Clear it.
+    await handle(
+        {"key": "budget.per_domain.hobby", "value": None},
+        ctx,
+    )
+    assert "hobby" not in cfg.budget.per_domain
+
+    rehydrated = load_config(
+        config_file=tmp_path / ".brain" / "config.json", env={}, cli_overrides={}
+    )
+    assert "hobby" not in rehydrated.budget.per_domain
+
+
+async def test_budget_per_domain_orphan_slug_does_not_persist(tmp_path: Path) -> None:
+    """``ghost`` is not in ``Config.domains`` — the apply helper raises
+    before persistence, leaving config.json unwritten."""
+    cfg = Config(domains=["research", "work", "personal"])
+    ctx = _mk_ctx(tmp_path, cfg)
+
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle(
+            {
+                "key": "budget.per_domain.ghost",
+                "value": {"daily_cap_usd": 1.0},
+            },
+            ctx,
+        )
+
+    assert "ghost" not in cfg.budget.per_domain
+    assert not (tmp_path / ".brain" / "config.json").exists()
+
+
 async def test_privacy_railed_whole_list_persists(tmp_path: Path) -> None:
     """Plan 11 D10/D11: ``privacy_railed`` is written as a whole list
     via ``brain_config_set``. ``personal`` must remain in the list (the

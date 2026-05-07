@@ -56,6 +56,35 @@ vi.mock("@/components/settings/domain-override-form", () => ({
   },
 }));
 
+// Plan 16 Task 29 / D26 step 4 of 4: mock the budget API binding so we
+// can assert the exact (slug, cap) payload the row emits on blur.
+// ``configGet`` powers the lazy hydrate-on-mount fetch; default it to
+// "no entry" so the inputs start empty unless a test overrides.
+const { setDomainBudgetMock, configGetMock } = vi.hoisted(() => ({
+  setDomainBudgetMock: vi.fn(),
+  configGetMock: vi.fn(),
+}));
+
+vi.mock("@/lib/api/tools", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/tools")>(
+    "@/lib/api/tools",
+  );
+  return {
+    ...actual,
+    setDomainBudget: (...args: unknown[]) => setDomainBudgetMock(...args),
+    configGet: (...args: unknown[]) => configGetMock(...args),
+  };
+});
+
+// Pull pushToast onto a spy so we can assert toast emission without
+// also pulling in the system store's actual implementation surface.
+const { pushToastMock } = vi.hoisted(() => ({ pushToastMock: vi.fn() }));
+
+vi.mock("@/lib/state/system-store", () => ({
+  useSystemStore: (selector: (state: unknown) => unknown) =>
+    selector({ pushToast: pushToastMock }),
+}));
+
 import { PanelDomainsRow } from "@/components/settings/panel-domains-row";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { DomainEntry } from "@/lib/state/domains-store";
@@ -127,6 +156,13 @@ function renderRow(overrides: RowProps = {}) {
 
 beforeEach(() => {
   domainOverrideFormMock.mockReset();
+  setDomainBudgetMock.mockReset();
+  setDomainBudgetMock.mockResolvedValue(undefined);
+  configGetMock.mockReset();
+  // Default: no per-domain budget entry exists. Tests that need a
+  // populated slug override this per-test before render.
+  configGetMock.mockResolvedValue({ data: { value: {} } });
+  pushToastMock.mockReset();
 });
 
 describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
@@ -181,6 +217,12 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     const onOverrideChanged = vi.fn();
     renderRow({ isExpanded: true, onOverrideChanged });
 
+    // Plan 16 Task 29: wait for the budget subsection's lazy hydrate
+    // fetch to settle before exercising the override-form save, so
+    // the unrelated state update doesn't leak an act warning into
+    // this test's run.
+    await screen.findByTestId("budget-caps-subsection-work");
+
     // The mocked override form exposes a button that fires its
     // ``onChanged`` prop. Clicking it simulates a successful save.
     await user.click(screen.getByTestId("mock-override-save-work"));
@@ -228,7 +270,202 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     expect(domainOverrideFormMock).not.toHaveBeenCalled();
   });
 
-  test("expand button has aria-expanded that mirrors isExpanded prop", () => {
+  describe("budget caps subsection (Plan 16 Task 29 / D26 step 4 of 4)", () => {
+    test("not rendered when row collapsed", () => {
+      renderRow({ isExpanded: false });
+      expect(
+        screen.queryByTestId("budget-caps-subsection-work"),
+      ).not.toBeInTheDocument();
+    });
+
+    test("rendered when row expanded; both inputs hydrate empty for a slug with no entry", async () => {
+      renderRow({ isExpanded: true });
+
+      expect(
+        await screen.findByTestId("budget-caps-subsection-work"),
+      ).toBeInTheDocument();
+      const daily = screen.getByTestId("budget-cap-daily-work") as HTMLInputElement;
+      const monthly = screen.getByTestId(
+        "budget-cap-monthly-work",
+      ) as HTMLInputElement;
+      // configGet's default mock returns ``{}`` so neither cap is set.
+      expect(daily.value).toBe("");
+      expect(monthly.value).toBe("");
+      // The hydrate fetch reads the per_domain dict.
+      expect(configGetMock).toHaveBeenCalledWith({ key: "budget.per_domain" });
+    });
+
+    test("hydrates inputs from the persisted per_domain entry for this slug", async () => {
+      configGetMock.mockResolvedValueOnce({
+        data: {
+          value: {
+            work: { daily_cap_usd: 1.5, monthly_cap_usd: 30 },
+          },
+        },
+      });
+      renderRow({ isExpanded: true });
+
+      const daily = (await screen.findByTestId(
+        "budget-cap-daily-work",
+      )) as HTMLInputElement;
+      const monthly = screen.getByTestId(
+        "budget-cap-monthly-work",
+      ) as HTMLInputElement;
+      // useEffect hydration happens after the first render's commit;
+      // ``findByTestId`` already retried once but the value flips on a
+      // subsequent commit — wait for it explicitly.
+      await vi.waitFor(() => expect(daily.value).toBe("1.5"));
+      expect(monthly.value).toBe("30");
+    });
+
+    test("typing a monthly cap then blurring calls setDomainBudget with both caps", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const monthly = await screen.findByTestId("budget-cap-monthly-work");
+      await user.type(monthly, "10");
+      await user.tab(); // blur
+
+      expect(setDomainBudgetMock).toHaveBeenCalledTimes(1);
+      expect(setDomainBudgetMock).toHaveBeenCalledWith("work", {
+        daily_cap_usd: null,
+        monthly_cap_usd: 10,
+      });
+    });
+
+    test("typing a daily cap then blurring calls setDomainBudget with both caps", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const daily = await screen.findByTestId("budget-cap-daily-work");
+      await user.type(daily, "2.5");
+      await user.tab();
+
+      expect(setDomainBudgetMock).toHaveBeenCalledTimes(1);
+      expect(setDomainBudgetMock).toHaveBeenCalledWith("work", {
+        daily_cap_usd: 2.5,
+        monthly_cap_usd: null,
+      });
+    });
+
+    test("typing zero shows red border and blocks the save", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const daily = (await screen.findByTestId(
+        "budget-cap-daily-work",
+      )) as HTMLInputElement;
+      await user.type(daily, "0");
+      await user.tab();
+
+      expect(daily).toHaveAttribute("aria-invalid", "true");
+      expect(setDomainBudgetMock).not.toHaveBeenCalled();
+      // The hint text mentions the validation rule.
+      expect(
+        screen.getByText(/positive number/i),
+      ).toBeInTheDocument();
+    });
+
+    test("typing a negative cap shows red border and blocks the save", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const monthly = (await screen.findByTestId(
+        "budget-cap-monthly-work",
+      )) as HTMLInputElement;
+      await user.type(monthly, "-5");
+      await user.tab();
+
+      expect(monthly).toHaveAttribute("aria-invalid", "true");
+      expect(setDomainBudgetMock).not.toHaveBeenCalled();
+    });
+
+    test("clearing a previously-set cap saves with that field as null", async () => {
+      // Slug has a daily cap of 2.0 already.
+      configGetMock.mockResolvedValueOnce({
+        data: {
+          value: {
+            work: { daily_cap_usd: 2.0, monthly_cap_usd: null },
+          },
+        },
+      });
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const daily = (await screen.findByTestId(
+        "budget-cap-daily-work",
+      )) as HTMLInputElement;
+      await vi.waitFor(() => expect(daily.value).toBe("2"));
+
+      await user.clear(daily);
+      await user.tab();
+
+      expect(setDomainBudgetMock).toHaveBeenCalledTimes(1);
+      expect(setDomainBudgetMock).toHaveBeenCalledWith("work", {
+        daily_cap_usd: null,
+        monthly_cap_usd: null,
+      });
+    });
+
+    test("blur with unchanged value does NOT trigger a save", async () => {
+      configGetMock.mockResolvedValueOnce({
+        data: { value: { work: { daily_cap_usd: 1.0 } } },
+      });
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const daily = (await screen.findByTestId(
+        "budget-cap-daily-work",
+      )) as HTMLInputElement;
+      await vi.waitFor(() => expect(daily.value).toBe("1"));
+
+      // Blur without changing the value.
+      await user.click(daily);
+      await user.tab();
+
+      expect(setDomainBudgetMock).not.toHaveBeenCalled();
+    });
+
+    test("successful save fires a success toast", async () => {
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const monthly = await screen.findByTestId("budget-cap-monthly-work");
+      await user.type(monthly, "10");
+      await user.tab();
+
+      await vi.waitFor(() =>
+        expect(pushToastMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: "success",
+            lead: expect.stringMatching(/budget caps saved/i),
+          }),
+        ),
+      );
+    });
+
+    test("failed save fires a danger toast and does not update internal state", async () => {
+      setDomainBudgetMock.mockRejectedValueOnce(new Error("boom"));
+      const user = userEvent.setup();
+      renderRow({ isExpanded: true });
+
+      const daily = await screen.findByTestId("budget-cap-daily-work");
+      await user.type(daily, "1.5");
+      await user.tab();
+
+      await vi.waitFor(() =>
+        expect(pushToastMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: "danger",
+            lead: expect.stringMatching(/couldn['']t save/i),
+            msg: expect.stringContaining("boom"),
+          }),
+        ),
+      );
+    });
+  });
+
+  test("expand button has aria-expanded that mirrors isExpanded prop", async () => {
     const { rerender } = renderRow({ isExpanded: false });
 
     let expandBtn = screen.getByRole("button", {
@@ -268,5 +505,11 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
       name: /collapse work overrides/i,
     });
     expect(expandBtn).toHaveAttribute("aria-expanded", "true");
+
+    // Plan 16 Task 29: re-rendering the row expanded mounts the
+    // ``BudgetCapsSubsection`` which fires a lazy ``configGet``. Wait
+    // for that fetch to settle so the test doesn't leak an act warning
+    // into the next test's run via the unsettled state update.
+    await screen.findByTestId("budget-caps-subsection-work");
   });
 });

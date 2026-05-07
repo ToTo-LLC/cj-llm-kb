@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Edit2, Lock, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Tooltip,
   TooltipContent,
@@ -14,7 +15,9 @@ import {
   DomainOverrideForm,
   type DomainOverrideValues,
 } from "@/components/settings/domain-override-form";
+import { configGet, setDomainBudget } from "@/lib/api/tools";
 import type { DomainEntry } from "@/lib/state/domains-store";
+import { useSystemStore } from "@/lib/state/system-store";
 
 /**
  * PanelDomainsRow (Plan 16 Task 8 / D8).
@@ -208,15 +211,244 @@ export function PanelDomainsRow({
       {isExpanded && (
         <div
           id={`override-panel-${slug}`}
-          className="border-t border-[var(--hairline)] bg-[var(--surface-0)] px-3 py-3"
+          className="flex flex-col gap-3 border-t border-[var(--hairline)] bg-[var(--surface-0)] px-3 py-3"
         >
           <DomainOverrideForm
             slug={slug}
             initialValues={overrideValues}
             onChanged={() => onOverrideChanged(slug)}
           />
+          {/* Plan 16 Task 29 / D26 step 4 of 4: per-domain budget cap
+              editor. Lives inside the same expanded panel as the
+              override form so the user has one place to configure
+              everything domain-specific. The subsection owns its own
+              fetch + save (like ``DomainOverrideForm``) — the row
+              itself stays a thin coordinator. */}
+          <BudgetCapsSubsection slug={slug} />
         </div>
       )}
     </li>
+  );
+}
+
+/* ---------------------- Budget caps subsection ---------------------- */
+
+/**
+ * Per-domain budget cap editor (Plan 16 Task 29 / D26 step 4 of 4).
+ *
+ * Two optional inputs (daily, monthly cap, both in USD). Empty input =
+ * no cap (= ``null`` on the wire). Save fires on blur — the field
+ * compares current input against the last-known persisted value and
+ * skips the API round-trip if nothing changed (mirrors the
+ * ``DomainOverrideForm`` per-field blur pattern).
+ *
+ * Validation: positive numerics only. Zero / negative caps are rejected
+ * client-side with a red border + a hint, AND server-side by the
+ * :class:`BudgetOverride._validate_positive` validator (defense in
+ * depth — the UI catches it first so the user never hits the round
+ * trip). An empty input is valid (= null = "no cap").
+ *
+ * The component reads its own initial state from
+ * ``brain_config_get`` because the parent orchestrator already does
+ * the same dance for ``domain_overrides`` and threading a parallel
+ * cache for budget caps would double the surface area of
+ * ``panel-domains.tsx`` for no win — both forms have identical
+ * round-trip semantics (user-tunable, low-frequency, snapshot-cheap).
+ *
+ * Wire contract: each save posts the WHOLE current pair (both caps)
+ * to ``setDomainBudget``. The backend prunes the entry when both
+ * caps are null.
+ */
+interface BudgetCapsSubsectionProps {
+  slug: string;
+}
+
+interface BudgetCapsState {
+  daily_cap_usd: number | null;
+  monthly_cap_usd: number | null;
+}
+
+const EMPTY_CAPS: BudgetCapsState = {
+  daily_cap_usd: null,
+  monthly_cap_usd: null,
+};
+
+/** Empty input = null = no cap; positive numeric = cap. Reject zero
+ *  and negative; reject non-numeric.
+ */
+function isValidCap(s: string): boolean {
+  if (s.trim() === "") return true;
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0;
+}
+
+async function readBudgetCapsFor(slug: string): Promise<BudgetCapsState> {
+  try {
+    const r = await configGet({ key: "budget.per_domain" });
+    const all = (r.data?.value ?? {}) as Record<string, Partial<BudgetCapsState>>;
+    const entry = all[slug] ?? {};
+    return {
+      daily_cap_usd: entry.daily_cap_usd ?? null,
+      monthly_cap_usd: entry.monthly_cap_usd ?? null,
+    };
+  } catch {
+    return EMPTY_CAPS;
+  }
+}
+
+export function BudgetCapsSubsection({
+  slug,
+}: BudgetCapsSubsectionProps): React.ReactElement {
+  const pushToast = useSystemStore((s) => s.pushToast);
+
+  // Last-known persisted state; updated after each successful save so
+  // the blur-skip-if-unchanged check stays honest. Hydrated lazily on
+  // first mount.
+  const [persisted, setPersisted] = React.useState<BudgetCapsState>(EMPTY_CAPS);
+  // In-progress edit values for each input (string-typed because the
+  // inputs are <input>, coerced on save).
+  const [dailyInput, setDailyInput] = React.useState<string>("");
+  const [monthlyInput, setMonthlyInput] = React.useState<string>("");
+
+  // Lazy fetch on first mount — the parent only mounts this component
+  // when the row is expanded, so this is cheap and one-shot.
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const caps = await readBudgetCapsFor(slug);
+      if (cancelled) return;
+      setPersisted(caps);
+      setDailyInput(caps.daily_cap_usd !== null ? String(caps.daily_cap_usd) : "");
+      setMonthlyInput(
+        caps.monthly_cap_usd !== null ? String(caps.monthly_cap_usd) : "",
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  const dailyValid = isValidCap(dailyInput);
+  const monthlyValid = isValidCap(monthlyInput);
+
+  /** Save the whole pair (both caps). The backend's apply-helper
+   *  prunes the entry when both are null, so we don't have to
+   *  special-case "clear" here. */
+  const saveCaps = async (next: BudgetCapsState) => {
+    try {
+      await setDomainBudget(slug, next);
+      setPersisted(next);
+      pushToast({
+        lead: "Budget caps saved.",
+        msg: `Updated caps for ${slug}.`,
+        variant: "success",
+      });
+    } catch (err) {
+      pushToast({
+        lead: "Couldn't save budget caps.",
+        msg: err instanceof Error ? err.message : "Unknown error.",
+        variant: "danger",
+      });
+    }
+  };
+
+  const onBlurDaily = () => {
+    if (!dailyValid) return;
+    const trimmed = dailyInput.trim();
+    const nextDaily = trimmed === "" ? null : Number(trimmed);
+    if (nextDaily === persisted.daily_cap_usd) return;
+    void saveCaps({
+      daily_cap_usd: nextDaily,
+      monthly_cap_usd: persisted.monthly_cap_usd,
+    });
+  };
+
+  const onBlurMonthly = () => {
+    if (!monthlyValid) return;
+    const trimmed = monthlyInput.trim();
+    const nextMonthly = trimmed === "" ? null : Number(trimmed);
+    if (nextMonthly === persisted.monthly_cap_usd) return;
+    void saveCaps({
+      daily_cap_usd: persisted.daily_cap_usd,
+      monthly_cap_usd: nextMonthly,
+    });
+  };
+
+  const dailyId = `budget-cap-daily-${slug}`;
+  const monthlyId = `budget-cap-monthly-${slug}`;
+
+  return (
+    <div
+      className="flex flex-col gap-3 rounded-md border border-[var(--hairline)] bg-[var(--surface-2)] p-3"
+      data-testid={`budget-caps-subsection-${slug}`}
+      role="group"
+      aria-label={`Budget caps for ${slug}`}
+    >
+      <div className="flex flex-col gap-1">
+        <h3 className="text-xs font-semibold text-[var(--text)]">
+          Budget caps
+        </h3>
+        <p className="text-[11px] text-[var(--text-muted)]">
+          Optional per-domain spending limits (USD). Empty = no cap; the
+          global daily and monthly limits still apply.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={dailyId}
+          className="block text-[11px] uppercase tracking-wider text-[var(--text-dim)]"
+        >
+          Daily cap (USD)
+        </label>
+        <Input
+          id={dailyId}
+          data-testid={`budget-cap-daily-${slug}`}
+          value={dailyInput}
+          onChange={(e) => setDailyInput(e.target.value)}
+          onBlur={onBlurDaily}
+          placeholder="no cap"
+          aria-invalid={!dailyValid}
+          aria-describedby={`${dailyId}-hint`}
+          inputMode="decimal"
+        />
+        {!dailyValid && (
+          <p
+            id={`${dailyId}-hint`}
+            className="mt-1 text-[11px] text-red-400"
+          >
+            Must be a positive number (or empty for no cap).
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={monthlyId}
+          className="block text-[11px] uppercase tracking-wider text-[var(--text-dim)]"
+        >
+          Monthly cap (USD)
+        </label>
+        <Input
+          id={monthlyId}
+          data-testid={`budget-cap-monthly-${slug}`}
+          value={monthlyInput}
+          onChange={(e) => setMonthlyInput(e.target.value)}
+          onBlur={onBlurMonthly}
+          placeholder="no cap"
+          aria-invalid={!monthlyValid}
+          aria-describedby={`${monthlyId}-hint`}
+          inputMode="decimal"
+        />
+        {!monthlyValid && (
+          <p
+            id={`${monthlyId}-hint`}
+            className="mt-1 text-[11px] text-red-400"
+          >
+            Must be a positive number (or empty for no cap).
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

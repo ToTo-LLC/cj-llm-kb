@@ -37,7 +37,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from brain_core.config.schema import Config, DomainOverride
+from brain_core.config.schema import BudgetOverride, Config, DomainOverride
 from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
@@ -138,6 +138,18 @@ _SETTABLE_KEYS: frozenset[str] = frozenset(
 # enumerating them statically would either rot or under-cover).
 _DOMAIN_OVERRIDE_FIELDS: frozenset[str] = frozenset(DomainOverride.model_fields.keys())
 
+# Plan 16 Task 29 / D26 step 4 of 4: ``budget.per_domain.<slug>`` is
+# settable for any user-defined domain slug. Unlike ``domain_overrides``
+# (where each LEAF field is set independently), the per-domain budget
+# entry is written as a WHOLE :class:`BudgetOverride` payload — both
+# caps land in one call and an absent cap is sent as ``None``. The 3-
+# segment shape (``budget.per_domain.<slug>``) is intentional: it
+# mirrors the ``budget.daily_usd`` dotted path users already know from
+# ``brain_config_get``, and keeps the slug as the trailing variable
+# segment so the wildcard check is identical in shape to
+# ``domain_overrides.<slug>.<field>``.
+_BUDGET_OVERRIDE_FIELDS: frozenset[str] = frozenset(BudgetOverride.model_fields.keys())
+
 
 def _is_settable_domain_override_key(key: str) -> bool:
     """Return True if ``key`` matches ``domain_overrides.<slug>.<field>``.
@@ -154,6 +166,35 @@ def _is_settable_domain_override_key(key: str) -> bool:
         and parts[0] == "domain_overrides"
         and parts[2] in _DOMAIN_OVERRIDE_FIELDS
         and bool(parts[1])
+    )
+
+
+def _is_settable_budget_per_domain_key(key: str) -> bool:
+    """Return True if ``key`` matches ``budget.per_domain.<slug>``.
+
+    Plan 16 Task 29 / D26 step 4 of 4. Three-segment wildcard pattern
+    where the trailing slug is the open-set portion. Slug membership
+    in ``Config.domains`` is enforced at apply time inside
+    :func:`_apply_budget_per_domain` (mirroring the existing
+    ``_apply_domain_override`` pattern) so the Settings UI surfaces a
+    consistent error voice regardless of which seam catches it.
+
+    Unlike ``domain_overrides.<slug>.<field>``, this wildcard takes a
+    WHOLE-payload value — the caller posts a ``BudgetOverride`` dict
+    (or ``None`` to clear the entry); there is no per-leaf-field path.
+    Per-leaf would have required either a 4-segment path or a tighter
+    coupling between the static allowlist and ``BudgetOverride``'s
+    field set; both options are strictly more fragile than the whole-
+    payload write because the Settings UI sets daily/monthly caps as a
+    pair and a half-applied save would leave inconsistent state on
+    disk if one leaf write failed.
+    """
+    parts = key.split(".")
+    return (
+        len(parts) == 3
+        and parts[0] == "budget"
+        and parts[1] == "per_domain"
+        and bool(parts[2])
     )
 
 
@@ -288,6 +329,90 @@ def _apply_domain_override(config: Config, key: str, value: Any) -> None:
         del overrides[slug]
 
 
+def _apply_budget_per_domain(config: Config, key: str, value: Any) -> None:
+    """Apply a ``budget.per_domain.<slug>`` mutation in place.
+
+    Plan 16 Task 29 / D26 step 4 of 4. Mirrors
+    :func:`_apply_domain_override` for the
+    ``Config.budget.per_domain: dict[str, BudgetOverride]`` shape. The
+    standard :func:`_resolve_parent_and_field` walker can't descend
+    through ``Config.budget.per_domain`` because the value is a
+    ``dict[str, BudgetOverride]``, not a pydantic model.
+
+    Semantics:
+
+    1. Parse ``budget.per_domain.<slug>``. The caller has already
+       validated the shape via :func:`_is_settable_budget_per_domain_key`.
+    2. Slug-membership pre-check: ``slug`` must be in
+       ``config.domains``. Without this guard, an orphan slug would
+       persist silently — the Plan 16 Task 26 schema landed without a
+       cross-field validator on ``per_domain`` (the cross-field
+       reference would have to reach across into the parent ``Config``,
+       which Pydantic v2 doesn't expose at the sub-model layer
+       cleanly), so the disk-write path is the only seam that catches
+       orphan slugs today and only at the next ``load_config`` if at
+       all.
+    3. Coerce ``value``:
+         - ``None`` → delete the slug entry entirely (the documented
+           way to clear a per-domain budget — equivalent to "fall back
+           to global").
+         - ``dict`` → construct a ``BudgetOverride(**value)``;
+           Pydantic's positive-cap validator
+           (:meth:`BudgetOverride._validate_positive`) catches zero /
+           negative caps before the mutation lands.
+         - anything else → ``ValueError`` (non-callers like a stray
+           string from the wire shouldn't fail with a confusing
+           Pydantic error).
+    4. Prune empty overrides — if both caps are ``None`` the entry is
+       semantically a no-op and shouldn't pollute ``config.json``.
+       Mirrors the ``_apply_domain_override`` prune step exactly.
+
+    The function mutates ``config`` IN PLACE — no ``model_copy``, no new
+    Config instance.
+    """
+    parts = key.split(".")
+    assert len(parts) == 3 and parts[0] == "budget" and parts[1] == "per_domain", (
+        f"_apply_budget_per_domain called with non-budget-per-domain key {key!r}"
+    )
+    slug = parts[2]
+
+    if slug not in config.domains:
+        raise ValueError(
+            f"budget.per_domain keys {[slug]!r} are not in domains "
+            f"{config.domains!r}; remove the override or add the domain first."
+        )
+
+    per_domain = config.budget.per_domain
+
+    if value is None:
+        # Clear the per-domain budget entirely — equivalent to "no
+        # override; fall back to global ``BudgetConfig`` caps".
+        per_domain.pop(slug, None)
+        return
+
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"budget.per_domain value must be a dict (BudgetOverride payload) or None, "
+            f"got {type(value).__name__}"
+        )
+
+    # ``BudgetOverride(**value)`` raises ``ValidationError`` on a zero /
+    # negative cap (the schema-level positive-cap validator) and on any
+    # extra fields (``extra="forbid"``). We let those bubble up as-is so
+    # the Settings UI surfaces the canonical Pydantic error voice.
+    override = BudgetOverride(**value)
+
+    # Prune empty entries — both caps None is a no-op and shouldn't
+    # land in ``config.json``. Mirrors the ``_apply_domain_override``
+    # prune so a "set then clear all caps" round-trip leaves the
+    # persisted shape minimal.
+    if all(getattr(override, f) is None for f in _BUDGET_OVERRIDE_FIELDS):
+        per_domain.pop(slug, None)
+        return
+
+    per_domain[slug] = override
+
+
 def _check_active_domain_membership(config: Config, value: Any) -> None:
     """Mirror ``Config._check_active_domain_in_domains`` at write time.
 
@@ -325,13 +450,23 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # wildcard check, so the secret-substring blocklist would
     # double-cover and false-positive.
     is_domain_override = _is_settable_domain_override_key(key)
-    if not is_domain_override:
+    # Plan 16 Task 29 / D26 step 4 of 4: ``budget.per_domain.<slug>`` is
+    # an open-set wildcard like ``domain_overrides.<slug>.<field>`` —
+    # check it BEFORE the static allowlist for the same reason. The
+    # 3-segment shape is explicit enough that the secret-substring
+    # check can still run on it without false-positives (no leaf field
+    # contains "api_key" / "secret" / "token" / "password" — caps are
+    # plain numerics — so the substring check stays as a redundant
+    # safety net).
+    is_budget_per_domain = _is_settable_budget_per_domain_key(key)
+    if not (is_domain_override or is_budget_per_domain):
         if any(s in key.lower() for s in _SECRET_SUBSTRINGS):
             raise PermissionError(f"refusing to set secret-like key {key!r}")
         if key not in _SETTABLE_KEYS:
             raise PermissionError(
                 f"key {key!r} is not settable via MCP — settable keys: "
-                f"{sorted(_SETTABLE_KEYS)} (plus domain_overrides.<slug>.<field>)"
+                f"{sorted(_SETTABLE_KEYS)} (plus domain_overrides.<slug>.<field> "
+                f"and budget.per_domain.<slug>)"
             )
 
     value = arguments["value"]
@@ -385,6 +520,8 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     with persist_config_or_revert(cfg, ctx.vault_root):
         if is_domain_override:
             _apply_domain_override(cfg, key, value)
+        elif is_budget_per_domain:
+            _apply_budget_per_domain(cfg, key, value)
         else:
             # Plan 12 D2: ``active_domain`` membership is validated here
             # because Config's cross-field validator only fires at

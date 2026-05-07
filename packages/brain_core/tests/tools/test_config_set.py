@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from brain_core.config.schema import Config
+from brain_core.config.schema import BudgetOverride, Config
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.config_set import _SETTABLE_KEYS, NAME, handle
 
@@ -292,6 +292,126 @@ async def test_domain_override_rejects_unknown_field(tmp_path: Path) -> None:
         await handle(
             {"key": "domain_overrides.hobby.unknown_field", "value": "x"},
             _mk_ctx(tmp_path, config=Config()),
+        )
+
+
+async def test_budget_per_domain_keys_pass_allowlist_via_wildcard(tmp_path: Path) -> None:
+    """Plan 16 Task 29 / D26 step 4 of 4: ``budget.per_domain.<slug>``
+    is a wildcard pattern, not a static ``_SETTABLE_KEYS`` entry. A
+    whole-payload write (``BudgetOverride`` dict) should flow through
+    the allowlist gate without raising and land on
+    ``Config.budget.per_domain[slug]``.
+    """
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    result = await handle(
+        {
+            "key": "budget.per_domain.hobby",
+            "value": {"daily_cap_usd": 1.0, "monthly_cap_usd": 10.0},
+        },
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    assert result.data["persisted"] is True
+    assert "hobby" in cfg.budget.per_domain
+    assert cfg.budget.per_domain["hobby"].daily_cap_usd == 1.0
+    assert cfg.budget.per_domain["hobby"].monthly_cap_usd == 10.0
+
+
+async def test_budget_per_domain_clear_with_none_drops_entry(tmp_path: Path) -> None:
+    """``None`` is the documented "no override" sentinel — posting it
+    drops the slug entry from ``Config.budget.per_domain`` entirely."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.budget.per_domain["hobby"] = BudgetOverride(daily_cap_usd=2.0)
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    result = await handle(
+        {"key": "budget.per_domain.hobby", "value": None},
+        ctx,
+    )
+    assert result.data is not None
+    assert result.data["status"] == "updated"
+    assert "hobby" not in cfg.budget.per_domain
+
+
+async def test_budget_per_domain_prunes_all_none_payload(tmp_path: Path) -> None:
+    """A payload where both caps are ``None`` is semantically a no-op
+    (same as "no entry") — the apply helper prunes it rather than
+    writing an empty ``BudgetOverride()`` to disk. Mirrors the
+    ``_apply_domain_override`` prune-empty behaviour."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    cfg.budget.per_domain["hobby"] = BudgetOverride(daily_cap_usd=2.0)
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    await handle(
+        {
+            "key": "budget.per_domain.hobby",
+            "value": {"daily_cap_usd": None, "monthly_cap_usd": None},
+        },
+        ctx,
+    )
+    assert "hobby" not in cfg.budget.per_domain
+
+
+async def test_budget_per_domain_rejects_orphan_slug(tmp_path: Path) -> None:
+    """Slug must be in ``Config.domains``. Mirrors the
+    ``_apply_domain_override`` orphan-slug guard so the Settings UI
+    surfaces a consistent error voice for both override paths."""
+    cfg = Config(domains=["research", "personal"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle(
+            {
+                "key": "budget.per_domain.ghost",
+                "value": {"daily_cap_usd": 1.0},
+            },
+            ctx,
+        )
+
+
+async def test_budget_per_domain_rejects_zero_or_negative_cap(tmp_path: Path) -> None:
+    """The schema-level ``BudgetOverride._validate_positive`` rejects
+    zero / negative caps. Construction inside ``_apply_budget_per_domain``
+    raises ``ValidationError`` which propagates as-is — the Settings UI
+    surfaces the canonical Pydantic voice."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(Exception, match="positive"):
+        await handle(
+            {
+                "key": "budget.per_domain.hobby",
+                "value": {"daily_cap_usd": 0.0},
+            },
+            ctx,
+        )
+
+
+async def test_budget_per_domain_rejects_wrong_segment_count(tmp_path: Path) -> None:
+    """Two-segment ``budget.per_domain`` (would shadow the dict itself)
+    and four-segment ``budget.per_domain.hobby.daily_cap_usd`` (would
+    suggest a per-leaf path that the wildcard does NOT support) both
+    fail the wildcard shape check and hit the static-allowlist gate."""
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "budget.per_domain", "value": {}},
+            _mk_ctx(tmp_path, config=Config()),
+        )
+    with pytest.raises(PermissionError, match="not settable"):
+        await handle(
+            {"key": "budget.per_domain.hobby.daily_cap_usd", "value": 1.0},
+            _mk_ctx(tmp_path, config=Config()),
+        )
+
+
+async def test_budget_per_domain_rejects_non_dict_value(tmp_path: Path) -> None:
+    """A stray string / number / list value (the wire could carry
+    anything) raises a clear ``ValueError`` rather than a confusing
+    Pydantic validation error."""
+    cfg = Config(domains=["research", "personal", "hobby"])
+    ctx = _mk_ctx(tmp_path, config=cfg)
+    with pytest.raises(ValueError, match="must be a dict"):
+        await handle(
+            {"key": "budget.per_domain.hobby", "value": "not a dict"},
+            ctx,
         )
 
 
