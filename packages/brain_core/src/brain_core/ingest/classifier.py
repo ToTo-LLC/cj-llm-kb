@@ -71,6 +71,10 @@ async def classify(
             messages=[LLMMessage(role="user", content=user_content)],
             max_tokens=256,
             temperature=0.0,
+            # Plan 16 Task 31.5: thread the per-call domain into the
+            # request so the AnthropicProvider's per-domain rate-limit
+            # gate (T31) can fire. ``None`` (auto-detect) bypasses.
+            domain=domain,
         )
     )
     # Permissive parse — the model_validator on ClassifyOutput is a

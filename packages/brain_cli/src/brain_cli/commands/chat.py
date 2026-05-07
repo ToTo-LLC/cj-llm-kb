@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import typer
 from brain_core.chat.types import ChatMode
+from brain_core.config.loader import load_config
 from rich.console import Console
 
 from brain_cli.rendering.stream import StreamRenderer
@@ -42,6 +45,24 @@ def chat(
         typer.echo(f"error: vault not found at {vault}", err=True)
         raise typer.Exit(code=1)
 
+    # Plan 16 Task 31.5: load the active Config and thread it into the
+    # session so per-domain budget caps (T28.5) and per-domain rate-limit
+    # overrides (T31) fire end-to-end. Falls back to ``Config()`` defaults
+    # if the vault has no ``config.json`` yet — the loader's fallback chain
+    # handles missing/broken config gracefully and the defaults carry no
+    # caps or rate limits, preserving legacy CLI behavior on first run.
+    try:
+        app_config = load_config(
+            config_file=vault / ".brain" / "config.json",
+            env=os.environ,
+            cli_overrides={"vault_path": vault},
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "config_load_failed: %s — proceeding with defaults", exc
+        )
+        app_config = None
+
     try:
         session = build_session(
             mode=mode,
@@ -49,6 +70,7 @@ def chat(
             open_doc=open_doc,
             model=model,
             vault_root=vault,
+            app_config=app_config,
         )
     except RuntimeError as exc:
         typer.echo(f"error: {exc}", err=True)

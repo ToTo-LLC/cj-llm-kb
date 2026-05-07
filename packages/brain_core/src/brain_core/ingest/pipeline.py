@@ -309,6 +309,12 @@ class IngestPipeline:
                 messages=[LLMMessage(role="user", content=user_content)],
                 max_tokens=256,
                 temperature=0.0,
+                # Plan 16 Task 31.5: thread ``domain_override`` (or
+                # ``None`` on auto-detect) into the request so the
+                # AnthropicProvider's per-domain rate-limit gate (T31)
+                # can fire. Auto-detect path passes ``None`` and the
+                # gate no-ops — same shape as the budget guard above.
+                domain=domain,
             )
         )
         parsed = json.loads(response.content)
@@ -349,6 +355,10 @@ class IngestPipeline:
                 messages=[LLMMessage(role="user", content=user_content)],
                 max_tokens=2048,
                 temperature=0.2,
+                # Plan 16 Task 31.5: thread the resolved post-classify
+                # domain into the request so the AnthropicProvider's
+                # per-domain rate-limit gate (T31) can fire.
+                domain=domain,
             )
         )
         parsed = SummarizeOutput.model_validate_json(response.content)
@@ -392,6 +402,10 @@ class IngestPipeline:
                 messages=[LLMMessage(role="user", content=user_content)],
                 max_tokens=2048,
                 temperature=0.2,
+                # Plan 16 Task 31.5: thread the resolved post-classify
+                # domain into the request so the AnthropicProvider's
+                # per-domain rate-limit gate (T31) can fire.
+                domain=domain,
             )
         )
         parsed = PatchSet.model_validate_json(response.content)

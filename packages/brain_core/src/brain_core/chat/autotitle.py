@@ -67,6 +67,11 @@ class AutoTitler:
             messages=[LLMMessage(role="user", content=user_content)],
             max_tokens=64,
             temperature=0.2,
+            # Plan 16 Task 31.5: thread the per-call domain into the
+            # request so the AnthropicProvider's per-domain rate-limit
+            # gate (T31) can fire. ``None`` (default for legacy callers)
+            # bypasses the gate.
+            domain=self.domain,
         )
         # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
         # round-trip.

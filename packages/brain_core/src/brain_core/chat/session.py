@@ -246,6 +246,17 @@ class ChatSession:
                     )
                     return
 
+                # Plan 16 Task 31.5: derive per-call domain ONCE for both
+                # the per-domain budget guard (T28.5) and the
+                # ``LLMRequest.domain`` field that the AnthropicProvider's
+                # leaky-bucket gate (T31) keys on. Single-domain chats get
+                # enforcement; multi-domain chats pass ``None`` and both
+                # the guard and the rate-limit gate no-op (no canonical
+                # per-call domain for a multi-domain scope).
+                chat_call_domain = (
+                    self.config.domains[0] if len(self.config.domains) == 1 else None
+                )
+
                 request = LLMRequest(
                     model=turn_model,
                     system=compiled.system,
@@ -253,18 +264,12 @@ class ChatSession:
                     temperature=MODES[self.config.mode].temperature,
                     tools=[tool_to_tooldef(t) for t in self._effective_registry.all()],
                     max_tokens=4096,
+                    domain=chat_call_domain,
                 )
 
                 # Plan 16 Task 28.5: per-domain budget guard fires BEFORE
-                # the LLM round-trip. Single-domain chats (the common
-                # case for caps) get enforcement; multi-domain chats pass
-                # ``None`` and the guard no-ops, preserving the existing
-                # cost-ledger best-effort tagging shape (``config.domains[0]``
-                # below) without forcing a single domain to absorb the cap.
+                # the LLM round-trip.
                 if self.guard is not None:
-                    chat_call_domain = (
-                        self.config.domains[0] if len(self.config.domains) == 1 else None
-                    )
                     self.guard.check_for(domain=chat_call_domain, config=self.app_config)
 
                 pending_tool_uses: list[dict[str, Any]] = []

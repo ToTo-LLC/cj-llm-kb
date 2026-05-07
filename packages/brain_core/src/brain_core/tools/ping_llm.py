@@ -55,6 +55,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             },
         )
     model = str(arguments.get("model") or _DEFAULT_MODEL)
+    # Plan 16 Task 31.5 adjudication: ping_llm is deliberately NOT routed
+    # through the per-domain rate-limit gate, matching the module-level
+    # docstring rationale ("the user is explicitly asking to probe the
+    # provider"). Leaving ``LLMRequest.domain`` unset (i.e. ``None``)
+    # makes the AnthropicProvider gate (T31) no-op for this call regardless
+    # of any configured per-domain override. Cost gating still applies
+    # via the per-domain budget guard above (T28.5) and the global cost
+    # ledger — the rate-limit bypass only affects request-throttling.
     request = LLMRequest(
         model=model,
         messages=[LLMMessage(role="user", content="ok")],

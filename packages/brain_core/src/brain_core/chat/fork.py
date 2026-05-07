@@ -103,6 +103,10 @@ async def summarize_turns(
             messages=[LLMMessage(role="user", content=transcript)],
             max_tokens=600,
             temperature=0.2,
+            # Plan 16 Task 31.5: thread the per-call domain into the
+            # request so the AnthropicProvider's per-domain rate-limit
+            # gate (T31) can fire. ``None`` (no domain pinned) bypasses.
+            domain=domain,
         )
     )
     return response.content.strip()

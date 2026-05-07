@@ -12,6 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from brain_core.budget import PerDomainBudgetGuard
 from brain_core.chat.autotitle import AutoTitler
 from brain_core.chat.context import ContextCompiler
 from brain_core.chat.modes import MODES
@@ -27,6 +28,8 @@ from brain_core.chat.tools.propose_note import ProposeNoteTool
 from brain_core.chat.tools.read_note import ReadNoteTool
 from brain_core.chat.tools.search_vault import SearchVaultTool
 from brain_core.chat.types import ChatMode, ChatSessionConfig
+from brain_core.config.schema import Config
+from brain_core.cost.ledger import CostLedger
 from brain_core.llm.provider import LLMProvider
 from brain_core.state.db import StateDB
 from brain_core.vault.writer import VaultWriter
@@ -49,8 +52,14 @@ def _register_all_tools(registry: ToolRegistry) -> None:
     registry.register(EditOpenDocTool())
 
 
-def _build_anthropic_provider() -> LLMProvider:
-    """Build a real AnthropicProvider from the ANTHROPIC_API_KEY env var."""
+def _build_anthropic_provider(config: Config | None = None) -> LLMProvider:
+    """Build a real AnthropicProvider from the ANTHROPIC_API_KEY env var.
+
+    Plan 16 Task 31.5: when ``config`` is supplied, the provider receives
+    it so the per-domain rate-limit gate (T31) can read
+    ``config.providers["anthropic"].rate_limit_per_domain`` at request
+    time. ``None`` preserves the legacy shape (gate fully off).
+    """
     from brain_core.llm.providers.anthropic import AnthropicProvider
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -59,7 +68,7 @@ def _build_anthropic_provider() -> LLMProvider:
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it in your shell or .env file before running `brain chat`."
         )
-    return AnthropicProvider(api_key=api_key)
+    return AnthropicProvider(api_key=api_key, config=config)
 
 
 def build_session(
@@ -71,8 +80,16 @@ def build_session(
     vault_root: Path,
     llm: LLMProvider | None = None,
     thread_id: str | None = None,
+    app_config: Config | None = None,
 ) -> ChatSession:
-    """Stand up a fully-wired ChatSession. ``llm=None`` builds an AnthropicProvider."""
+    """Stand up a fully-wired ChatSession. ``llm=None`` builds an AnthropicProvider.
+
+    Plan 16 Task 31.5: ``app_config`` (the loaded :class:`Config`) is
+    threaded into both the AnthropicProvider (so its T31 rate-limit gate
+    is live) and the ChatSession (so its T28.5 budget guard is live).
+    Defaults to ``None`` so existing test callers keep working — production
+    callers in ``brain_cli/commands/chat.py`` load Config and pass it.
+    """
     (vault_root / ".brain").mkdir(parents=True, exist_ok=True)
     state_db = StateDB.open(vault_root / ".brain" / "state.sqlite")
     writer = VaultWriter(vault_root=vault_root)
@@ -87,7 +104,9 @@ def build_session(
     registry = ToolRegistry()
     _register_all_tools(registry)
 
-    llm_provider: LLMProvider = llm if llm is not None else _build_anthropic_provider()
+    llm_provider: LLMProvider = (
+        llm if llm is not None else _build_anthropic_provider(app_config)
+    )
 
     config = ChatSessionConfig(
         mode=mode,
@@ -97,6 +116,13 @@ def build_session(
     )
 
     autotitler = AutoTitler(llm_provider)
+
+    # Plan 16 Task 31.5: per-domain budget guard (T28.5) — built from a
+    # CostLedger keyed off the vault's ``costs.sqlite`` so the chat
+    # session's pre-flight cap check is live alongside the provider-side
+    # rate-limit gate. ``app_config`` carries the per-domain BudgetConfig.
+    cost_ledger = CostLedger(db_path=vault_root / ".brain" / "costs.sqlite")
+    guard = PerDomainBudgetGuard(cost_ledger)
 
     return ChatSession(
         config=config,
@@ -111,4 +137,7 @@ def build_session(
         persistence=persistence,
         autotitler=autotitler,
         vault_writer=writer,
+        cost_ledger=cost_ledger,
+        guard=guard,
+        app_config=app_config,
     )
