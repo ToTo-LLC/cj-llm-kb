@@ -98,6 +98,8 @@ from brain_core.tools import recent as _recent  # noqa: E402, F401
 from brain_core.tools import recent_ingests as _recent_ingests  # noqa: E402, F401
 from brain_core.tools import reject_patch as _reject_patch  # noqa: E402, F401
 from brain_core.tools import rename_domain as _rename_domain  # noqa: E402, F401
+from brain_core.tools import repair_config as _repair_config  # noqa: E402, F401
+from brain_core.tools import repair_config_apply as _repair_config_apply  # noqa: E402, F401
 from brain_core.tools import search as _search  # noqa: E402, F401
 from brain_core.tools import set_api_key as _set_api_key  # noqa: E402, F401
 from brain_core.tools import undo_last as _undo_last  # noqa: E402, F401

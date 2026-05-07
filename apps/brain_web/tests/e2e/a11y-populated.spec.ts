@@ -514,15 +514,20 @@ test.describe("a11y — populated-state dialog sweep", () => {
   });
 
   // ----------------------------------------------------------------
-  // Case 6b: repair-config dialog (Plan 16 Task 9 SCAFFOLD)
+  // Case 6b: repair-config dialog (Plan 16 Task 33 — full polish)
   //
   // Plan 14 Task 3's deferral receipt asked for a UI surface so this
-  // populated-state spec can scan it. Plan 16 Task 9 lands the scaffold:
-  // Settings → General has a "Repair config" button that opens a minimal
-  // ``<RepairConfigDialog>`` (Modal + Run repair + Cancel). Full
-  // implementation (per-step controls, ``Config.config_version``) lands
-  // at Plan 16 Task 33 — that re-uses the same component, so the a11y
-  // gate stays valid through the upgrade.
+  // populated-state spec can scan it. Plan 16 Task 9 landed a scaffold;
+  // Plan 16 Task 33 lands the full polish: Re-run repair (calls
+  // ``brain_repair_config``), per-step results panel, Re-apply (calls
+  // ``brain_repair_config_apply``), Cancel.
+  //
+  // Two-phase scan: empty-state (just opened) AND populated-state (after
+  // Re-run reports per-step results). Both must pass axe-core's
+  // hard-fail gate. The Re-run path goes through the real backend
+  // dispatcher — the e2e vault has a clean config so the run reports a
+  // "primary clean" 2-step success with ``repair_changes_pending=false``
+  // (Re-apply stays disabled).
   // ----------------------------------------------------------------
   test("repair-config dialog has 0 violations", async ({ page, checkA11y }) => {
     await page.goto("/settings/general/");
@@ -532,7 +537,7 @@ test.describe("a11y — populated-state dialog sweep", () => {
     await expect(repairButton).toBeVisible();
     await repairButton.click();
 
-    // Modal heading is "Repair config" per the Task 9 spec microcopy.
+    // Modal heading is "Repair config" per the Task 33 spec microcopy.
     await expect(
       page.getByRole("heading", { name: /^Repair config$/i }),
     ).toBeVisible();
@@ -543,7 +548,33 @@ test.describe("a11y — populated-state dialog sweep", () => {
     // settles or it can flake on mid-animation low-contrast frames.
     await waitForAnimationsToFinish(page, "[role=dialog]");
 
-    await checkA11y(page, "dialog:repair-config");
+    // Phase 1: empty state — Re-run / Re-apply / Cancel rendered, no
+    // step rows yet.
+    await checkA11y(page, "dialog:repair-config:empty");
+
+    // Phase 2: populated state — click Re-run, wait for the
+    // ``brain_repair_config`` response to land + step rows to mount, and
+    // re-scan. The e2e vault has a clean config so the call returns a
+    // 2-step success (read_primary + validate_primary). Re-apply stays
+    // disabled because in-memory config matches what's on disk.
+    const responsePromise = waitForToolResponse(page, "brain_repair_config");
+    await page
+      .getByRole("button", { name: /^Re-run repair$/i })
+      .click();
+    await responsePromise;
+
+    // Wait for the canonical step row label to appear (load-bearing
+    // mount signal — the panel is rendered conditionally on
+    // ``hasRun && steps.length > 0``). Use exact match because the
+    // backup row label ("Read config.json.bak") is a substring of the
+    // primary row label and would trip strict-mode locator collision.
+    await expect(
+      page.getByText("Read config.json", { exact: true }),
+    ).toBeVisible({ timeout: 10_000 });
+    // Animations may fire on the new step rows — re-wait before axe.
+    await waitForAnimationsToFinish(page, "[role=dialog]");
+
+    await checkA11y(page, "dialog:repair-config:populated");
 
     // Cleanup: dismiss with Escape so the dialog doesn't bleed into
     // subsequent cases that share the page lifecycle.

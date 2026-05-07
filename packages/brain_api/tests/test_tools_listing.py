@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 
 def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
-    """After issue #17 the registry has all 36 tools auto-registered.
+    """After Plan 16 Task 33 the registry has all 38 tools auto-registered.
 
     Plan 05 baseline: 18. Plan 07 Task 4 added 4
     (brain_recent_ingests, brain_create_domain, brain_rename_domain,
@@ -28,12 +28,14 @@ def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
     brain_backup_restore, brain_delete_domain) → 34. Issue #18 added
     ``brain_list_threads`` for the left-nav recent-chats panel → 35.
     Issue #17 added ``brain_export_thread`` for the chat-sub-header
-    export action → 36.
+    export action → 36. Plan 16 Task 33 added two tools for the Settings
+    Repair-config dialog (``brain_repair_config`` diagnostic +
+    ``brain_repair_config_apply`` write) → 38.
     """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 36
+    assert len(body["tools"]) == 38
     # Spot-check a few names across all groups.
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
@@ -63,6 +65,9 @@ def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
     assert "brain_list_threads" in names
     # Issue #17 — chat-sub-header export-thread action.
     assert "brain_export_thread" in names
+    # Plan 16 Task 33 — Settings Repair-config dialog.
+    assert "brain_repair_config" in names
+    assert "brain_repair_config_apply" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:

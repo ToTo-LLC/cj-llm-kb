@@ -342,6 +342,72 @@ export const configGet = (args: {
 }): Promise<ToolResponse<{ key: string; value: unknown }>> =>
   callTool<{ key: string; value: unknown }>("brain_config_get", args);
 
+// ---------- Plan 16 Task 33 — Repair-config dialog ----------
+
+/**
+ * One row in the per-step results panel (Plan 16 Task 33). Mirrors the
+ * Python ``brain_core.tools.repair_config.handle`` step shape:
+ *
+ *   - ``step``    — canonical step id (``read_primary``, ``validate_primary``,
+ *                   ``read_backup``, ``validate_backup``, ``apply_defaults``)
+ *   - ``status``  — ``"success"`` | ``"warning"`` | ``"error"``
+ *   - ``message`` — human-readable one-liner; for errors carries the
+ *                   underlying error text.
+ *
+ * Steps that did NOT run (because earlier steps already succeeded) are
+ * NOT in the returned array — keeps the UI compact.
+ */
+export interface RepairConfigStep {
+  step:
+    | "read_primary"
+    | "validate_primary"
+    | "read_backup"
+    | "validate_backup"
+    | "apply_defaults";
+  status: "success" | "warning" | "error";
+  message: string;
+}
+
+/**
+ * Full payload returned by ``brain_repair_config``. The
+ * ``repaired_config`` blob is the persisted-dict shape that the Re-apply
+ * action posts back to ``brain_repair_config_apply`` to commit the
+ * recovered Config to disk.
+ */
+export interface RepairConfigData {
+  steps: RepairConfigStep[];
+  repair_changes_pending: boolean;
+  repaired_config: Record<string, unknown>;
+}
+
+/**
+ * Re-run the config-load fallback chain (Plan 16 Task 33). Read-only; the
+ * Re-apply button calls :func:`repairConfigApply` with the
+ * ``repaired_config`` payload returned here. The split mirrors
+ * ``brain_backup_create`` / ``brain_backup_restore`` (Option 1: two
+ * tools, two responsibilities — see backend dispatch text).
+ */
+export const repairConfig = (): Promise<ToolResponse<RepairConfigData>> =>
+  callTool<RepairConfigData>("brain_repair_config");
+
+/**
+ * Apply a repaired config payload to disk (Plan 16 Task 33). The
+ * payload comes from a prior :func:`repairConfig` call's
+ * ``data.repaired_config`` — the frontend round-trips it back to the
+ * backend rather than re-deriving the recovered state. Returns
+ * ``{status:"applied", path, config_version}`` on success; throws
+ * :class:`ApiError` on schema validation failure or disk-write failure.
+ */
+export const repairConfigApply = (
+  repaired: Record<string, unknown>,
+): Promise<
+  ToolResponse<{ status: string; path: string; config_version: number }>
+> =>
+  callTool<{ status: string; path: string; config_version: number }>(
+    "brain_repair_config_apply",
+    { repaired_config: repaired },
+  );
+
 /** Write a single config key. ``value`` is validated server-side. */
 export const configSet = (args: {
   key: string;
@@ -911,6 +977,9 @@ export const ALL_TOOL_NAMES = [
   "brain_list_threads",
   // Issue #17 — chat-sub-header export-thread action.
   "brain_export_thread",
+  // Plan 16 Task 33 — Settings Repair-config dialog (diagnostic + apply).
+  "brain_repair_config",
+  "brain_repair_config_apply",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
