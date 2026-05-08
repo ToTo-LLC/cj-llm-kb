@@ -49,6 +49,46 @@ testpaths = [
     "scripts/tests",
 ]
 
+# Plan 16 Task 45 / D33 — let ruff know BRN001 is a real (external) lint code,
+# so its `# noqa: BRN001` parser doesn't warn when it sees the pragma in
+# source files (the BRN001 hook is enforced separately via pre-commit).
+[tool.ruff.lint]
+external = ["BRN001"]
+
+# Plan 16 Task 45 / D33 — BRN001 allowlist.
+#
+# BRN001 flags ``ctx.config`` reads outside the entry-point boundary.
+# The list below is the audit result: every site in the codebase that
+# legitimately reads ``ctx.config`` because it IS the entry point
+# (tools where Config flows in from ``ToolContext``). Adding to this
+# list should be deliberate — the goal is to keep the surface where
+# Config is read centralized so future refactors don't sprawl.
+#
+# The rule is enforced via the ``brn001`` pre-commit hook
+# (``.pre-commit-config.yaml``), which calls
+# ``python -m brain_core._lint.brn001 <staged-files>``. NOT a ruff
+# plugin: ruff's custom-rule path is Rust-only (verified 2026-05;
+# Astral has no Python plugin API).
+[tool.brain-lint.brn001]
+allowed-entry-points = [
+    # ToolContext entry points — tools where Config legitimately
+    # flows in from the outside world via ``ctx.config``.
+    "packages/brain_core/src/brain_core/tools/_errors.py",
+    "packages/brain_core/src/brain_core/tools/apply_patch.py",
+    "packages/brain_core/src/brain_core/tools/bulk_import.py",
+    "packages/brain_core/src/brain_core/tools/classify.py",
+    "packages/brain_core/src/brain_core/tools/config_get.py",
+    "packages/brain_core/src/brain_core/tools/config_set.py",
+    "packages/brain_core/src/brain_core/tools/create_domain.py",
+    "packages/brain_core/src/brain_core/tools/delete_domain.py",
+    "packages/brain_core/src/brain_core/tools/fork_thread.py",
+    "packages/brain_core/src/brain_core/tools/ingest.py",
+    "packages/brain_core/src/brain_core/tools/list_domains.py",
+    "packages/brain_core/src/brain_core/tools/rename_domain.py",
+    "packages/brain_core/src/brain_core/tools/repair_config.py",
+    "packages/brain_core/src/brain_core/tools/repair_config_apply.py",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

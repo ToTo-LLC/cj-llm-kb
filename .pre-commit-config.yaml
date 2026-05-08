@@ -68,3 +68,41 @@ repos:
     hooks:
       - id: actionlint
         name: actionlint (workflow YAML)
+
+  # Plan 16 Task 45 / D33 — BRN001 standalone AST checker.
+  #
+  # WHY THIS EXISTS
+  # ---------------
+  # BRN001 flags ``ctx.config`` reads outside the allowed entry-points
+  # list (config'd in pyproject.toml under
+  # ``[tool.brain-lint.brn001]``). Goal: keep the surface where the
+  # live Config is read centralized at the tool entry-point boundary,
+  # so future code threads Config explicitly instead of picking it up
+  # ad-hoc from the ToolContext.
+  #
+  # WHY NOT A RUFF PLUGIN
+  # ---------------------
+  # Ruff does NOT support pure-Python custom rules. Per Astral's
+  # stance (verified 2026-05), the only extension path is to
+  # contribute the rule in Rust to ruff's main repo. The plan
+  # author's original "ruff custom rule" wording (Plan 16 Task 45)
+  # assumed a plugin shape that doesn't exist. The corrected design
+  # (user pre-authorized) is a standalone AST checker wired here as
+  # a `local` pre-commit hook — same shape as actionlint above.
+  #
+  # SCOPE
+  # -----
+  # Runs on every staged ``.py`` file. The checker walks up from CWD
+  # to find the repo's pyproject.toml, reads
+  # ``[tool.brain-lint.brn001].allowed-entry-points``, and reports
+  # any ``ctx.config`` AST node in a non-allowlisted file. Suppress
+  # with a trailing ``# noqa: BRN001`` (narrow only — bare ``# noqa``
+  # does NOT suppress, by design).
+  - repo: local
+    hooks:
+      - id: brn001
+        name: BRN001 — flag ctx.config reads outside allowed entry points
+        entry: python -m brain_core._lint.brn001
+        language: system
+        types: [python]
+        pass_filenames: true
