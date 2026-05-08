@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class PatchCategory(StrEnum):
@@ -31,11 +31,25 @@ class NewFile(BaseModel):
     path: Path
     content: str
 
+    # Vault paths in API responses are POSIX-form across platforms per
+    # CLAUDE.md ("no POSIX-only code; pathlib everywhere"). Without this
+    # serializer, ``model_dump(mode="json")`` would emit
+    # ``research\\notes\\x.md`` on Windows runners (Path.__str__ is OS-
+    # dependent) which leaks the host separator into JSON / MCP / UI
+    # surfaces. Mirrors PendingEnvelope.target_path (chat/pending.py).
+    @field_serializer("path")
+    def _serialize_path(self, value: Path) -> str:
+        return value.as_posix()
+
 
 class Edit(BaseModel):
     path: Path
     old: str
     new: str
+
+    @field_serializer("path")
+    def _serialize_path(self, value: Path) -> str:
+        return value.as_posix()
 
 
 class IndexEntryPatch(BaseModel):
