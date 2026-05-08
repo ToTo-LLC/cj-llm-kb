@@ -45,6 +45,31 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      # Plan 16 D33 / Task 46: BRN001 hard-fail gate. The standalone AST
+      # checker (Plan 16 T45 — `packages/brain_core/src/brain_core/_lint/
+      # brn001.py`) flags ``ctx.config`` reads outside the allowlisted
+      # entry-points list (declared in `[tool.brain-lint.brn001]`).
+      # Pre-commit catches local edits; this CI step catches anything
+      # that bypasses pre-commit (commits via the GitHub UI, force-pushes
+      # that skip hooks). Hard-fail — `set -e` is implicit per GHA's
+      # step contract; a non-zero exit fails the run.
+      #
+      # Plan-author drift adjudicated at T45 (verified 2026-05): ruff has
+      # no Python plugin API, so the spec's wording "ruff check . --select
+      # BRN001" was structurally impossible. The standalone AST module
+      # is the equivalent and matches the actionlint hook shape from T16.
+      - name: BRN001 (ctx.config allowlist)
+        shell: bash
+        run: |
+          # ``find ... -exec ... {} +`` aggregates all matched paths into a
+          # single invocation — handles spaces in paths safely (no shell
+          # word-split on $files) and works the same under Git Bash on
+          # Windows runners. If no Python files exist, find emits nothing
+          # and the -exec is a no-op (exit 0).
+          find packages/brain_core/src packages/brain_api/src packages/brain_mcp/src packages/brain_cli/src apps/brain_web/scripts \
+            -name '*.py' \
+            -exec uv run python -m brain_core._lint.brn001 {} +
+
       - name: Type-check brain_core
         run: uv run mypy packages/brain_core/src
 
