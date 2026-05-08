@@ -76,6 +76,43 @@ jobs:
       - name: Test
         run: uv run pytest packages/brain_core --cov=brain_core --cov-report=term-missing
 
+      # Plan 17 Task 1: brain_api → AnthropicProvider e2e integration test.
+      # Boots the production lifespan with a real ``ANTHROPIC_API_KEY`` and
+      # round-trips ``brain_ping_llm`` through the full
+      # ``create_app → AnthropicProvider → AsyncAnthropic → live API`` path.
+      #
+      # Two-layer gating:
+      #
+      # 1. ``if: github.event_name == 'push' && github.ref ==
+      #    'refs/heads/main'`` — never run on pull requests. Forks (and
+      #    branch PRs) cannot read repo secrets, so a PR-time run would
+      #    always behave as "no key" → silent no-op. Pinning to
+      #    main-pushes makes the contract explicit (the secret is only
+      #    in scope for trusted commits), AND avoids the surprise of
+      #    integration tests blocking PR merges on transient API issues.
+      # 2. Inline bash ``[ -z "${ANTHROPIC_API_KEY}" ]`` — within the
+      #    main-push window, still no-op if the
+      #    ``ANTHROPIC_TEST_API_KEY`` repo secret hasn't been set. GHA
+      #    expressions can't read ``secrets.*`` in ``if:`` clauses for
+      #    security reasons (they'd leak into the workflow context); the
+      #    standard pattern is to surface the secret as an env var,
+      #    which renders as the empty string when unset, then guard
+      #    inside the script.
+      #
+      # When the test ITSELF fails (key set, real call fails), the step
+      # fails — that's the point of the integration gate.
+      - name: Integration test (Anthropic e2e)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_TEST_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "ANTHROPIC_TEST_API_KEY secret not set; skipping integration test."
+            exit 0
+          fi
+          uv run pytest packages/brain_api/tests/test_anthropic_e2e.py -q
+
       # Plan 16 D18 / Task 18: per-step wall-clock observability. Queries the
       # current workflow run's jobs API (gh api), parses with jq, and writes a
       # Markdown table to $GITHUB_STEP_SUMMARY so reviewers can scan step
