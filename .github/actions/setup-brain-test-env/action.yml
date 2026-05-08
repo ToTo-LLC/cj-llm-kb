@@ -53,8 +53,12 @@ description: >
 inputs:
   pythonpath_separator:
     description: >
-      Path separator for PYTHONPATH — `:` on POSIX, `;` on Windows.
-      Caller passes `${{ runner.os == 'Windows' && ';' || ':' }}`.
+      Path separator for PYTHONPATH — colon on POSIX, semicolon on Windows.
+      Callers compute the right value from runner.os in the WORKFLOW YAML
+      (where the runner context is in scope) and pass the resolved literal
+      here. A literal template expression cannot live inside this
+      description field — composite-action manifests evaluate ${ ... } at
+      action-load time and `runner` is not yet in scope at that level.
     required: false
     default: ":"
   install_pnpm:
