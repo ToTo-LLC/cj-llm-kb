@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import webvtt
+import webvtt  # type: ignore[import-untyped]
 
 from brain_core.ingest.handlers.base import HandlerError
 from brain_core.ingest.types import ExtractedSource, SourceType

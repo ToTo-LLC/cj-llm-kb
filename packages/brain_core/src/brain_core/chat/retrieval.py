@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from rank_bm25 import BM25Okapi
+from rank_bm25 import BM25Okapi  # type: ignore[import-untyped]
 
 from brain_core.state.db import StateDB
 from brain_core.vault.frontmatter import FrontmatterError, parse_frontmatter
