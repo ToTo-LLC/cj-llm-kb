@@ -8,7 +8,7 @@
     "build": "next build && test -d out",
     "start": "echo 'Static export — serve apps/brain_web/out/ via brain_api. See BRAIN_WEB_OUT_DIR.' && exit 1",
     "lint": "next lint",
-    "stylelint": "stylelint 'src/**/*.css'",
+    "stylelint": "stylelint \"src/**/*.css\"",
     "type-check": "tsc --noEmit",
     "test": "vitest",
     "test:e2e": "playwright test",
