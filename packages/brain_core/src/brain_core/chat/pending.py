@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from brain_core.chat.types import ChatMode
 from brain_core.vault.types import PatchSet
@@ -40,6 +40,16 @@ class PendingEnvelope(BaseModel):
     reason: str
     status: PendingStatus = PendingStatus.PENDING
     patchset: PatchSet = Field(...)
+
+    # Vault paths are platform-agnostic per CLAUDE.md non-negotiable
+    # ("no POSIX-only code; pathlib everywhere; line-endings LF on disk")
+    # — emit POSIX-form in API responses regardless of host OS so the
+    # JSON / MCP / cost-ledger surfaces don't leak ``\\`` on Windows.
+    # Without this, ``model_dump(mode="json")`` would serialize via
+    # ``Path.__str__`` which is OS-dependent.
+    @field_serializer("target_path")
+    def _serialize_target_path_posix(self, value: Path) -> str:
+        return value.as_posix()
 
 
 def _new_patch_id() -> str:

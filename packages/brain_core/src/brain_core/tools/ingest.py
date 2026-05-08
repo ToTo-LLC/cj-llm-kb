@@ -212,7 +212,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         data={
             "status": "pending",
             "patch_id": envelope.patch_id,
-            "target_path": str(envelope.target_path),
+            "target_path": envelope.target_path.as_posix(),
         },
     )
 

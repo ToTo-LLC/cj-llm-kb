@@ -40,7 +40,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "patch_id": env.patch_id,
             "created_at": env.created_at.isoformat(),
             "tool": env.tool,
-            "target_path": str(env.target_path),
+            "target_path": env.target_path.as_posix(),
             "reason": env.reason[:200],  # truncate long reasons
             "mode": env.mode.value,
         }

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -262,10 +263,16 @@ def test_save_config_no_fsync_on_windows(tmp_path: Path, monkeypatch: pytest.Mon
     assert fsync_calls == []
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only test: ``os.open(directory, O_RDONLY)`` for fsync "
+    "raises PermissionError on Windows even when ``_is_posix`` is "
+    "monkeypatched True (the syscall is what fails, not the branch).",
+)
 def test_save_config_fsync_runs_on_posix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Mirror image of the Windows skip: on POSIX the parent dir is
     # ``fsync``'d. Force the helper to ``True`` so the assertion holds
-    # regardless of host OS.
+    # regardless of host OS — the skipif above already excludes Windows.
     fsync_calls: list[int] = []
 
     real_fsync = os.fsync

@@ -29,7 +29,11 @@ class TestDetectConfigPath:
         )
         path = detect_config_path()
         assert path.name == "claude_desktop_config.json"
-        assert "Library/Application Support/Claude" in str(path)
+        # Use ``as_posix()`` so the assertion works on both POSIX and
+        # Windows runners — the test monkeypatches ``platform.system``
+        # to "Darwin" but the underlying ``Path`` operations still use
+        # the host OS's separator when ``__str__`` is invoked.
+        assert "Library/Application Support/Claude" in path.as_posix()
 
     def test_default_windows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.delenv("BRAIN_CLAUDE_DESKTOP_CONFIG_PATH", raising=False)

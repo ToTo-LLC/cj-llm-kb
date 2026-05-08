@@ -448,7 +448,7 @@ class ChatSession:
                             kind=ChatEventKind.PATCH_PROPOSED,
                             data={
                                 "patch_id": result.proposed_patch.patch_id,
-                                "target_path": str(result.proposed_patch.target_path),
+                                "target_path": result.proposed_patch.target_path.as_posix(),
                                 "tool": tu["name"],
                             },
                         )
