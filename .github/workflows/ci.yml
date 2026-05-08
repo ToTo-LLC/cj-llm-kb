@@ -104,6 +104,11 @@ jobs:
       - name: Integration test (Anthropic e2e)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
+        # Plan 17 T1 review nit: cap step at 5min so a stuck TCP connection
+        # to api.anthropic.com doesn't hang the whole job. AsyncAnthropic's
+        # 60s default timeout applies per call; this is the step-level
+        # backstop for "all 3 calls hang at once" or similar pathologies.
+        timeout-minutes: 5
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_TEST_API_KEY }}
         run: |
