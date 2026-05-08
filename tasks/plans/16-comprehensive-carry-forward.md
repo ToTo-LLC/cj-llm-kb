@@ -1783,14 +1783,131 @@ and filing a follow-up task for "wire `_resolve_config` to read
 
 ---
 
-## Task 44 — pendingSendRef-as-local audit findings (to be filled by implementer)
+## Task 44 — pendingSendRef-as-local audit findings
 
-To be appended by Task 44 implementer per D32(c). Expected shape:
+Audit of `apps/brain_web/src` for the ref-spans-await anti-pattern (a
+`React.useRef` whose `.current` is read AFTER an `await` in the same
+handler — risks stale-mode races + throw-leaks). The canonical fix shape
+is the one applied to `pendingSendRef` in Plan 15 T7 (commit `545591f`'s
+predecessor on chat-screen.tsx) — capture into a synchronous local,
+clear the ref BEFORE the await, dispatch from the local.
 
-- **Sites inspected:** TBD.
-- **Sites that needed the fix (with diff):** TBD.
-- **Sites that didn't need it (with rationale):** TBD.
-- **Regression tests added:** TBD.
+### (a) Sites inspected
+
+Full enumeration of every `useRef` occurrence under
+`apps/brain_web/src` (grep: `useRef` in `*.tsx`/`*.ts`):
+
+| # | File | Line | Ref name | Type |
+|---|------|------|----------|------|
+| 1 | `components/settings/panel-brain-md.tsx` | 29 | `loadedRef` | boolean sentinel |
+| 2 | `components/bulk/step-pick-folder.tsx` | 124 | `fileInputRef` | DOM (`<input>`) |
+| 3 | `components/chat/chat-screen.tsx` | 98 | `pendingSendRef` | `{text, attachedSources, mode}` |
+| 4 | `components/inbox/drop-zone.tsx` | 42 | `fileInputRef` | DOM (`<input>`) |
+| 5 | `components/shell/app-shell.tsx` | 46 | `pathRef` | string snapshot |
+| 6 | `components/chat/transcript.tsx` | 32 | `scrollRef` | DOM (`<div>`) |
+| 7 | `components/chat/composer.tsx` | 83 | `textareaRef` | DOM (`<textarea>`) |
+| 8 | `components/browse/search-overlay.tsx` | 40 | `inputRef` | DOM (`<input>`) |
+| 9 | `components/dialogs/cross-domain-modal.tsx` | 188 | `continueButtonRef` | DOM (`<button>`) |
+| 10 | `components/dialogs/file-to-wiki-dialog.tsx` | 147 | `snappedRef` | boolean sentinel |
+| 11 | `lib/ws/hooks.ts` | 75 | `wsRef` | `BrainWebSocket` instance |
+
+11 useRef sites total.
+
+### (b) Sites that needed the fix
+
+**None.** The audit found zero `NEEDS-FIX` sites. The only ref that
+ever exhibited the ref-spans-await pattern was `pendingSendRef` on
+`chat-screen.tsx`, which Plan 15 T7 already converted to the canonical
+shape (verified at lines 187-188 — `const pending = pendingSendRef.current;
+pendingSendRef.current = null;` before the `await
+setCrossDomainWarningAcknowledged(true);` on line 198).
+
+No code changes landed for T44.
+
+### (c) Sites that didn't need the fix (per-site rationale)
+
+1. **`panel-brain-md.tsx:29` `loadedRef`** — write-only sentinel.
+   Assigned to `true` in the `finally` of the load `useEffect`.
+   Cross-file grep confirms the ref is never read anywhere. Throw-leak
+   path is N/A: no dispatch reads its value.
+
+2. **`step-pick-folder.tsx:124` `fileInputRef`** — DOM ref. Only
+   `.click()` (synchronous) and `.value = ""` (synchronous, after
+   `pickFolder` dispatch — no await). The `await bulkImport(...)` in
+   `runDryRun` doesn't read the ref. SAFE — intentional persistence
+   (DOM element backing the hidden folder picker).
+
+3. **`chat-screen.tsx:98` `pendingSendRef`** — already canonical. The
+   `handleCrossDomainContinue` callback at lines 187-188 captures
+   into `const pending = pendingSendRef.current;` and clears the ref
+   BEFORE `await setCrossDomainWarningAcknowledged(true)`. Dispatch on
+   line 222 reads the local `pending`, not the ref. Plan 15 T7
+   precedent + extant inline comment block (lines 174-186) document
+   the throw-leak + stale-mode invariants this shape protects.
+
+4. **`drop-zone.tsx:42` `fileInputRef`** — DOM ref. Only `.click()`
+   called (synchronous). The `submitUrl` async handler doesn't touch
+   the ref. SAFE — intentional persistence.
+
+5. **`app-shell.tsx:46` `pathRef`** — already canonical. `pathRef`
+   exists *because* `handleDrop` needs the click-time pathname
+   without the React-render cycle. Reads at line 155 and 168 are
+   both SYNCHRONOUS, BEFORE `uploadFile(file)` on line 173. The
+   `.then`/`.catch` callbacks at 174 / 189 use the closure-captured
+   `onChatRoute` local, never re-reading `pathRef.current`. This is
+   the canonical "snapshot synchronously, dispatch async on the
+   snapshot" pattern — it predates T44.
+
+6. **`transcript.tsx:32` `scrollRef`** — DOM ref for autoscroll.
+   Read inside a synchronous `useEffect` body (`el.scrollTop =
+   el.scrollHeight`). No await. SAFE.
+
+7. **`composer.tsx:83` `textareaRef`** — DOM ref for focus +
+   autosize. Reads happen inside `queueMicrotask` callbacks (no
+   intervening await — microtasks resolve before any `await`
+   continuation in the same task) and synchronous `autosize()` calls.
+   SAFE.
+
+8. **`search-overlay.tsx:40` `inputRef`** — DOM ref for autofocus.
+   Read inside a `setTimeout(() => inputRef.current?.focus(), 0)`
+   (synchronous arrow body inside a timer). The debounced search
+   `useEffect` doesn't touch the ref. SAFE.
+
+9. **`cross-domain-modal.tsx:188` `continueButtonRef`** — DOM ref
+   for synchronous `.focus()` from `handleOpenAutoFocus`. SAFE.
+
+10. **`file-to-wiki-dialog.tsx:147` `snappedRef`** — boolean
+    "did the auto-snap already run" sentinel. All four read/write
+    sites (lines 149, 153, 154, 157) are inside a synchronous
+    `useEffect` body — no await. SAFE — intentional persistence
+    (the ref tracks "this once-only snap has happened" across
+    re-renders without triggering one).
+
+11. **`lib/ws/hooks.ts:75` `wsRef`** — holds the `BrainWebSocket`
+    instance for the lifetime of the (threadId, token) pair. Reads
+    in the returned send methods (`wsRef.current?.send(...)`) are
+    SYNCHRONOUS — `.send()` is fire-and-forget, no await. The
+    `useEffect` cleanup nulls it synchronously on teardown. SAFE —
+    intentional persistence (the ref IS the WS handle's lifetime).
+
+### (d) Regression tests added
+
+**None.** No fix sites means no fix-targeted regression tests. The
+existing throw-leak invariants on `pendingSendRef` are covered by the
+chat-screen tests landed under Plan 12 Task 9 + Plan 15 T7's harness.
+
+### (e) Net delta
+
+- **Files modified:** 1 — this plan doc subsection (the placeholder
+  is replaced with the full audit).
+- **Source files modified:** 0.
+- **Tests added:** 0.
+
+The audit was thorough by the design-delta brief: every `useRef` site
+is enumerated and classified above, not just the candidates. Future
+readers can confirm the audit was complete by re-running
+`grep -rn 'useRef' apps/brain_web/src --include='*.tsx' --include='*.ts'`
+and matching the count (11) to the table.
 
 ---
 
