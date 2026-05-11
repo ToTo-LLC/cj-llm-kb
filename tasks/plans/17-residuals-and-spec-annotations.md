@@ -275,6 +275,22 @@ None-config setup needs migration to the new helper.
 **Per-task review:** combined spec + code-quality. Verify the test
 actually runs in current CI (was it being skipped silently?).
 
+**T10 outcome (2026-05-11): ALREADY-DONE — no migration needed.**
+The audit found that:
+- The named test `test_mcp_session_list_domains` lives at
+  `packages/brain_mcp/tests/test_tool_list_domains.py:32` and is a
+  happy-path session-level test against a real seeded vault. It passes
+  in current CI; was never failing post-Plan-15.
+- The `raise_if_no_config` migration for `brain_list_domains` was
+  already shipped in Plan 15 Task 8. Production callers:
+  `packages/brain_core/src/brain_core/tools/list_domains.py:91,104`.
+- The None-config behavior is pinned by
+  `packages/brain_core/tests/tools/test_errors_raise_if_no_config.py
+  ::test_list_domains_uses_helper` plus the parametrized helper tests
+  covering every Plan-15 migrated tool. All green.
+- The plan author's mental model was stale; T10 had nothing to do.
+Closing T10 as already-done; no commit beyond this plan-doc update.
+
 #### T11 — brain_api mypy debt closure (residuals)
 
 **Files:**
