@@ -205,11 +205,20 @@ export const exportThread = (
     byte_length: number;
   }>("brain_export_thread", args);
 
-/** Fetch the top-level ``BRAIN.md`` meta-index. */
+/**
+ * Fetch the top-level `BRAIN.md` meta-index.
+ *
+ * Mirrors the `brain_get_brain_md` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/get_brain_md.py`); both
+ * the happy path and the missing-file branch emit `{exists, body}`.
+ * Plan 18 T3.3 narrowed the TS interface from `{path, content}`
+ * (which never matched backend) to the real shape. No active consumer
+ * at the time of the narrow.
+ */
 export const getBrainMd = (): Promise<
-  ToolResponse<{ path: string; content: string }>
+  ToolResponse<{ exists: boolean; body: string }>
 > =>
-  callTool<{ path: string; content: string }>("brain_get_brain_md");
+  callTool<{ exists: boolean; body: string }>("brain_get_brain_md");
 
 // ---------- ingest tools (3) ----------
 

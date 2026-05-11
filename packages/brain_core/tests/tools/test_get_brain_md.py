@@ -45,3 +45,30 @@ async def test_missing_brain_md_returns_stub(tmp_path: Path) -> None:
     assert result.data is not None
     assert result.data["exists"] is False
     assert result.data["body"] == ""
+
+
+async def test_data_keys_pin_happy(tmp_path: Path) -> None:
+    """Plan 18 T3.3 drift pin (happy path): backend handler must emit
+    exactly these keys in ``ToolResult.data``. The TS ``getBrainMd()``
+    interface at ``apps/brain_web/src/lib/api/tools.ts`` mirrors this
+    set. Individual-key reads in the other tests would not catch a
+    silent key-set drift (e.g., adding ``path`` or renaming ``body``
+    -> ``content``).
+    """
+    (tmp_path / "BRAIN.md").write_text("# BRAIN\n\npersona\n", encoding="utf-8")
+
+    result = await handle({}, _mk_ctx(tmp_path))
+
+    assert result.data is not None
+    assert set(result.data.keys()) == {"exists", "body"}
+
+
+async def test_data_keys_pin_miss(tmp_path: Path) -> None:
+    """Plan 18 T3.3 drift pin (miss branch): the missing-file branch
+    must emit the same key set as the happy path so TS callers can
+    unconditionally read both keys.
+    """
+    result = await handle({}, _mk_ctx(tmp_path))
+
+    assert result.data is not None
+    assert set(result.data.keys()) == {"exists", "body"}
