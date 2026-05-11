@@ -373,21 +373,33 @@ export const rejectPatch = (args: {
     args,
   );
 
-/** Revert the most recent applied write (or a specific ``undo_id``). */
+/**
+ * Revert the most recent applied write (or a specific `undo_id`).
+ *
+ * Mirrors the `brain_undo_last` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/undo_last.py`); two branches
+ * discriminated by `status`:
+ *  - `"reverted"`: an undo record was found and reverted — `undo_id`
+ *    identifies which record was rolled back.
+ *  - `"nothing_to_undo"`: no undo history existed (empty/missing
+ *    `<vault>/.brain/undo/`); the caller should treat this as a no-op
+ *    rather than an error.
+ *
+ * Plan 18 T3.7 narrowed this TS interface from the pre-fix
+ * `{undo_id, reverted_files: string[], [extra]}` shape (which never
+ * matched backend — `reverted_files` was plan-author drift that never
+ * landed; the consumer toast at `pending-screen.tsx` was reading the
+ * missing field and always showing "Reverted 0 file(s)." — fixed in
+ * the same commit).
+ */
+export type UndoLastData =
+  | { status: "reverted"; undo_id: string }
+  | { status: "nothing_to_undo" };
+
 export const undoLast = (
   args: { undo_id?: string } = {},
-): Promise<
-  ToolResponse<{
-    undo_id: string;
-    reverted_files: string[];
-    [extra: string]: unknown;
-  }>
-> =>
-  callTool<{
-    undo_id: string;
-    reverted_files: string[];
-    [extra: string]: unknown;
-  }>("brain_undo_last", args);
+): Promise<ToolResponse<UndoLastData>> =>
+  callTool<UndoLastData>("brain_undo_last", args);
 
 // ---------- maintenance tools (4) ----------
 

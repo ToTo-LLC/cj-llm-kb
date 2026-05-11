@@ -124,10 +124,23 @@ export function PendingScreen(): React.ReactElement {
   const handleUndoLast = async () => {
     try {
       const res = await undoLast({});
-      const data = res.data as { reverted_files?: string[] } | null;
+      const data = res.data;
+      if (data?.status === "nothing_to_undo") {
+        pushToast({
+          lead: "Nothing to undo.",
+          msg: "No undo history was available.",
+          variant: "default",
+        });
+        return;
+      }
+      // status === "reverted" — successful undo. Backend doesn't report
+      // a file count (Plan 18 T3.7 — `reverted_files` was never emitted),
+      // so the toast acknowledges the undo by undo_id instead.
       pushToast({
         lead: "Undone.",
-        msg: `Reverted ${data?.reverted_files?.length ?? 0} file(s).`,
+        msg: data?.undo_id
+          ? `Reverted change ${data.undo_id}.`
+          : "Reverted the last change.",
         variant: "success",
       });
       await loadPending();
