@@ -57,11 +57,18 @@ export function DropZone(): React.ReactElement {
       // where the UI surfaces progress. Failures flip the row to
       // ``failed`` so the Needs-attention tab surfaces them.
       uploadFile(file)
-        .then((res) => {
+        .then(() => {
+          // Plan 19 T2: the backend's ``UploadResponse`` only emits
+          // ``patch_id`` — it does not include the classified domain.
+          // The row's actual ``domain`` is filled in by
+          // ``inbox-store``'s ``recentIngests`` poll once the staged
+          // patch resolves; the optimistic row's ``domain`` stays
+          // ``null`` (its placeholder value) until then. Previously
+          // this call wrote ``res.domain`` which was always
+          // ``undefined``, silently clobbering the row.
           updateStatus(id, {
             status: "done",
             progress: 100,
-            domain: res.domain,
           });
         })
         .catch((err) => {

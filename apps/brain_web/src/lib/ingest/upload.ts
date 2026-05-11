@@ -21,12 +21,24 @@
 import { ApiError } from "@/lib/api/types";
 import { getToken } from "@/lib/state/token-store";
 
-/** Successful upload response — echoes the patch id from ``brain_ingest``. */
+/**
+ * Successful upload response — echoes the patch id from ``brain_ingest``.
+ *
+ * Plan 19 T2 narrow: the backend's ``UploadResponse`` (Pydantic
+ * ``BaseModel`` at ``packages/brain_api/src/brain_api/endpoints/upload.py:91``)
+ * declares ``{patch_id: str}`` — a single non-nullable field. The previous
+ * TS shape declared ``applied`` + ``domain`` which the backend never
+ * emits, plus a permissive ``patch_id: string | null`` (backend's is
+ * non-null). Two live consumers (``drop-zone.tsx``,
+ * ``app-shell.tsx``) read ``res.domain`` and silently wrote
+ * ``undefined``/``null`` into the inbox row's ``domain`` field on
+ * every successful upload. T2 narrows TS to backend reality; the
+ * inbox row's actual classified ``domain`` is filled in by
+ * ``inbox-store``'s ``recentIngests`` poll once the staged patch
+ * resolves backend-side.
+ */
 export interface UploadResult {
-  patch_id: string | null;
-  applied: boolean;
-  domain: string | null;
-  [extra: string]: unknown;
+  patch_id: string;
 }
 
 /**
@@ -88,9 +100,20 @@ export async function uploadFile(file: File): Promise<UploadResult> {
     data?: UploadResult | null;
     text?: string;
   };
-  return (envelope.data ?? {
-    patch_id: null,
-    applied: false,
-    domain: null,
-  }) as UploadResult;
+  // Plan 19 T2: backend's ``response_model=UploadResponse`` guarantees a
+  // ``{patch_id: str}`` body on 2xx; the previous fallback that filled
+  // ``{patch_id: null, applied: false, domain: null}`` was dead code under
+  // the current backend contract (audited 2026-05-11; see plan doc
+  // ``T1 audit findings``). Treat a missing/empty ``data`` as a contract
+  // violation rather than papering over it.
+  const data = envelope.data;
+  if (!data || typeof data.patch_id !== "string" || data.patch_id === "") {
+    throw new ApiError(
+      response.status,
+      "upload_envelope_invalid",
+      null,
+      "upload succeeded but server did not return a patch_id",
+    );
+  }
+  return { patch_id: data.patch_id };
 }

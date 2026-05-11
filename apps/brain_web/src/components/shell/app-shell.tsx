@@ -172,10 +172,17 @@ export function AppShell({
 
       uploadFile(file)
         .then((res) => {
+          // Plan 19 T2: the backend's ``UploadResponse`` only emits
+          // ``patch_id`` — it does not include the classified domain.
+          // The row's actual ``domain`` is filled in by
+          // ``inbox-store``'s ``recentIngests`` poll once the staged
+          // patch resolves; the optimistic row's ``domain`` stays
+          // ``null`` (its placeholder value) until then. Previously
+          // this call wrote ``res.domain ?? null`` which was always
+          // ``null``, silently clobbering the row.
           inbox.updateStatus(id, {
             status: "done",
             progress: 100,
-            domain: res.domain ?? null,
           });
           if (onChatRoute && res.patch_id) {
             useChatStore.getState().addAttachedSource(res.patch_id);
