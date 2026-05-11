@@ -373,19 +373,25 @@ export const costReport = (): Promise<
     [extra: string]: unknown;
   }>("brain_cost_report");
 
-/** Run lint checks across a domain (or every allowed domain if omitted). */
+/**
+ * Run lint checks across a domain (or every allowed domain if omitted).
+ *
+ * **Stub until Plan 09 lands the real lint engine.** The backend handler
+ * (`packages/brain_core/src/brain_core/tools/lint.py`) currently always
+ * returns `{status: "not_implemented", message: "..."}` — Plan 18 T3.4
+ * narrowed this TS interface to match the stub reality. When Plan 09
+ * delivers wikilink checking, orphan detection, and frontmatter
+ * validation, the backend `data` shape will change to include
+ * `findings: Array<...>`, at which point this TS interface needs to be
+ * widened to a discriminated union (e.g.,
+ * `{status: "not_implemented", message: string} | {findings: ...}`) or
+ * replaced outright. The Python key-set pin in `test_lint.py` will fail
+ * RED when Plan 09 changes the backend, surfacing the need to update.
+ */
 export const lint = (
   args: { domain?: string } = {},
-): Promise<
-  ToolResponse<{
-    findings: Array<Record<string, unknown>>;
-    [extra: string]: unknown;
-  }>
-> =>
-  callTool<{
-    findings: Array<Record<string, unknown>>;
-    [extra: string]: unknown;
-  }>("brain_lint", args);
+): Promise<ToolResponse<{ status: string; message: string }>> =>
+  callTool<{ status: string; message: string }>("brain_lint", args);
 
 /** Read a single config key. */
 export const configGet = (args: {

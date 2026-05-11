@@ -38,3 +38,16 @@ async def test_stub_returns_not_implemented(tmp_path: Path) -> None:
     assert result.data is not None
     assert result.data["status"] == "not_implemented"
     assert "Plan 09" in result.data["message"]
+
+
+async def test_data_keys_pin(tmp_path: Path) -> None:
+    """Plan 18 T3.4 drift pin: backend stub must emit exactly these
+    keys in `ToolResult.data` (and the TS `lint()` interface at
+    `apps/brain_web/src/lib/api/tools.ts` must mirror them). When Plan
+    09 lands the real lint engine and changes the backend shape, this
+    test will fail RED and the TS interface will need to be widened in
+    lockstep.
+    """
+    result = await handle({}, _mk_ctx(tmp_path))
+    assert result.data is not None
+    assert set(result.data.keys()) == {"status", "message"}
