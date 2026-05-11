@@ -20,6 +20,7 @@ rate-limit tests and keeps the test free of mocking the entire tool context.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -54,7 +55,7 @@ class ApiClient:
 
 
 @pytest.fixture
-def api(app: FastAPI):
+def api(app: FastAPI) -> Iterator[ApiClient]:
     """Lifespan-active ApiClient — mint the token inside ``TestClient`` context."""
     with TestClient(app, base_url="http://localhost") as base:
         token = app.state.ctx.token

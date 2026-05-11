@@ -74,7 +74,7 @@ def _python_type_for(prop_schema: dict[str, Any]) -> Any:
     enum_values = prop_schema.get("enum")
     if isinstance(enum_values, list) and enum_values:
         # ``Literal[*values]`` — Pydantic handles the rest.
-        return Literal[tuple(enum_values)]  # type: ignore[valid-type]
+        return Literal[tuple(enum_values)]
 
     js_type = prop_schema.get("type")
     if js_type is None:

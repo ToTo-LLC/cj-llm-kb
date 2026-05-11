@@ -16,12 +16,14 @@ and the lifespan watcher wiring:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from brain_api.app import _on_config_change, create_app
 from brain_core.config.schema import Config
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -62,7 +64,9 @@ def vault(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-def running_app(vault: Path, monkeypatch: pytest.MonkeyPatch):
+def running_app(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[TestClient, FastAPI]]:
     """A started TestClient (lifespan runs) bound to *vault*.
 
     ``mount_static_ui=False`` keeps the test surface clean (no SPA catch-all).
@@ -81,7 +85,7 @@ def running_app(vault: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_on_config_change_updates_tool_ctx_config(
-    vault: Path, running_app: tuple
+    vault: Path, running_app: tuple[TestClient, FastAPI]
 ) -> None:
     """Calling ``_on_config_change`` replaces ``tool_ctx.config`` with the new Config.
 
@@ -106,7 +110,7 @@ def test_on_config_change_updates_tool_ctx_config(
 
 
 def test_on_config_change_preserves_ctx_and_tool_ctx_identity(
-    vault: Path, running_app: tuple
+    vault: Path, running_app: tuple[TestClient, FastAPI]
 ) -> None:
     """``ctx`` and ``ctx.tool_ctx`` must not be replaced — only ``config`` swaps.
 
@@ -136,7 +140,7 @@ def test_on_config_change_preserves_ctx_and_tool_ctx_identity(
 
 
 def test_on_config_change_swallows_resolve_error(
-    vault: Path, running_app: tuple
+    vault: Path, running_app: tuple[TestClient, FastAPI]
 ) -> None:
     """A ``resolve_config`` failure must NOT propagate and must preserve the old config.
 

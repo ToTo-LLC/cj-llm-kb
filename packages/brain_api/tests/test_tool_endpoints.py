@@ -23,7 +23,7 @@ turns unhandled ``ScopeError`` into 403 ``scope`` and ``KeyError`` into 404
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -67,7 +67,7 @@ class ApiClient:
 
 
 @pytest.fixture
-def api(app: FastAPI):
+def api(app: FastAPI) -> Iterator[ApiClient]:
     """Lifespan-active ApiClient.
 
     Entering ``TestClient(app, ...)`` as a context manager runs FastAPI's

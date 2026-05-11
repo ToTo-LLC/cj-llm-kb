@@ -36,15 +36,20 @@ on the upgrade).
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, Any
 
+import pytest
 from _ws_helpers import get_app_ctx, get_app_token
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+if TYPE_CHECKING:
+    from brain_core.chat.session import ChatSession
+
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
 
-def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch) -> None:
+def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``cancel_turn`` sent while a turn is running emits ``cancelled``.
 
     We monkeypatch ``ChatSession.turn`` to yield one ``DELTA`` then park
@@ -58,7 +63,7 @@ def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch) -> None:
     from brain_core.chat import session as session_mod
     from brain_core.chat.types import ChatEvent, ChatEventKind
 
-    async def slow_turn(self, user_message):
+    async def slow_turn(self: ChatSession, user_message: str) -> Any:
         # One quick event so the client has proof the turn is actually
         # in flight, then park — the cancel is what unblocks this.
         yield ChatEvent(kind=ChatEventKind.DELTA, data={"text": "hi"})
@@ -165,7 +170,7 @@ def test_switch_mode_between_turns(app: FastAPI) -> None:
                     break
 
 
-def test_switch_mode_mid_turn_rejected(app: FastAPI, monkeypatch) -> None:
+def test_switch_mode_mid_turn_rejected(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     """``switch_mode`` during a live turn MUST emit an ``invalid_state`` error.
 
     We force a slow turn (same mechanic as ``test_cancel_turn_mid_stream``)
@@ -186,7 +191,7 @@ def test_switch_mode_mid_turn_rejected(app: FastAPI, monkeypatch) -> None:
     from brain_core.chat import session as session_mod
     from brain_core.chat.types import ChatEvent, ChatEventKind
 
-    async def slow_turn(self, user_message):
+    async def slow_turn(self: ChatSession, user_message: str) -> Any:
         yield ChatEvent(kind=ChatEventKind.DELTA, data={"text": "start"})
         await asyncio.sleep(60)
         yield ChatEvent(kind=ChatEventKind.DELTA, data={"text": "never"})

@@ -31,16 +31,18 @@ underlying reason.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from _ws_helpers import get_app_ctx, get_app_token
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketTestSession
 
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
 
-def _drain_until_turn_end(ws) -> list[dict]:
+def _drain_until_turn_end(ws: WebSocketTestSession) -> list[dict[str, Any]]:
     """Read WS frames until a ``turn_end`` or ``error`` arrives.
 
     Returns all frames observed (including the terminal one). Useful
@@ -48,7 +50,7 @@ def _drain_until_turn_end(ws) -> list[dict]:
     ``turn_start, (delta|tool_call|tool_result|cost_update)*, turn_end``
     and tests here only care about the terminal marker.
     """
-    frames: list[dict] = []
+    frames: list[dict[str, Any]] = []
     while True:
         frame = ws.receive_json()
         frames.append(frame)

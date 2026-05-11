@@ -20,9 +20,15 @@ hard-codes ``Host: testserver`` on WS connects, which Task 8's
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+import pytest
 from _ws_helpers import get_app_ctx, get_app_token
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    from brain_core.chat.session import ChatSession
 
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
@@ -42,7 +48,7 @@ def test_turn_emits_ordered_events(app: FastAPI) -> None:
 
             ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
 
-            events: list[dict] = []
+            events: list[dict[str, Any]] = []
             while True:
                 frame = ws.receive_json()
                 events.append(frame)
@@ -61,7 +67,9 @@ def test_turn_emits_ordered_events(app: FastAPI) -> None:
     assert turn_ends[0]["turn_number"] == 1
 
 
-def test_turn_error_emits_error_event_keeps_connection_open(app: FastAPI, monkeypatch) -> None:
+def test_turn_error_emits_error_event_keeps_connection_open(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A ChatSession failure emits ``error`` but does not close the WS.
 
     Monkeypatches ``ChatSession.turn`` to raise. The SessionRunner catches
@@ -73,7 +81,7 @@ def test_turn_error_emits_error_event_keeps_connection_open(app: FastAPI, monkey
     """
     from brain_core.chat import session as session_mod
 
-    async def boom(self, user_message):
+    async def boom(self: ChatSession, user_message: str) -> Any:
         raise RuntimeError("simulated session failure")
         yield  # pragma: no cover — unreachable, makes this an async-gen
 
@@ -123,7 +131,7 @@ def test_cost_update_ws_frame_includes_cumulative_tokens_in(app: FastAPI) -> Non
 
             ws.send_json({"type": "turn_start", "content": "hi", "mode": "ask"})
 
-            cost_frames: list[dict] = []
+            cost_frames: list[dict[str, Any]] = []
             while True:
                 frame = ws.receive_json()
                 if frame["type"] == "cost_update":

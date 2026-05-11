@@ -130,7 +130,8 @@ def _header_value(scope: Scope, name: str) -> str:
     decode of every header.
     """
     needle = name.encode("latin-1").lower()
-    for key, value in scope.get("headers", []):
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for key, value in headers:
         if key == needle:
             return value.decode("latin-1")
     return ""

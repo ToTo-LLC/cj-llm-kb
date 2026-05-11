@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from brain_api.auth import generate_token, read_token_file, write_token_file
+from fastapi import FastAPI
 
 
 def test_generate_token_is_64_hex_chars() -> None:
@@ -56,7 +57,7 @@ def test_read_token_file_returns_written_token(tmp_path: Path) -> None:
     assert read_token_file(tmp_path) == token
 
 
-def test_lifespan_generates_and_stashes_token(app, seeded_vault: Path) -> None:
+def test_lifespan_generates_and_stashes_token(app: FastAPI, seeded_vault: Path) -> None:
     from fastapi.testclient import TestClient
 
     with TestClient(app):
