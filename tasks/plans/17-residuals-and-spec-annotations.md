@@ -554,6 +554,46 @@ tasks/
 └── ci.yml                              # MODIFY: optional integration step (T1); brain_api mypy step (T11)
 ```
 
+## T9 audit findings
+
+**Task:** confirm no consumer of
+`brain_core.tools.apply_patch._resolve_config(ctx)` mutates the
+returned `Config`. Post-Plan 16 T39.5 the helper returns
+`ctx.config` directly (live shared reference) on the production
+path, so any mutation would leak across consumers.
+
+**Call sites grepped** (rg `_resolve_config(` across `packages/`):
+
+- `packages/brain_core/src/brain_core/tools/apply_patch.py:97` —
+  production consumer inside `handle(...)`. The returned reference
+  is bound to a local `config` and passed positionally as
+  `should_auto_apply(envelope.patchset, config, domain=domain)`. No
+  attribute assignment, no `setattr`, no `object.__setattr__`, no
+  method call on the local. Verdict: **read-only, no mutation**.
+- `packages/brain_core/src/brain_core/tools/apply_patch.py:125` —
+  the function definition itself (matched by the same grep). Not a
+  consumer. Verdict: **n/a**.
+- `packages/brain_core/tests/tools/test_apply_patch.py:230` —
+  `test_resolve_config_falls_back_to_defaults_when_ctx_config_none`.
+  Asserts `cfg.vault_path == vault` and `cfg.autonomous == {}`.
+  Verdict: **read-only, no mutation**.
+- `packages/brain_core/tests/tools/test_apply_patch.py:249` —
+  `test_resolve_config_returns_ctx_config_by_identity`. Asserts
+  `cfg_out is cfg_in`. Verdict: **read-only, no mutation**.
+
+**Transitive read of `should_auto_apply`** (the one function the
+production local is passed to,
+`packages/brain_core/src/brain_core/autonomy.py:70`): only reads
+`patchset.category`, `config.autonomous.get(domain)`, attribute
+accesses on `flags`, and `getattr(flags, category_flag)`. No
+mutation, no method call that could mutate. Verdict: **read-only,
+no mutation**.
+
+**Action taken:** added a `Read-only contract` block to the
+`_resolve_config` docstring in `apply_patch.py` declaring that
+callers MUST NOT mutate the returned reference (it IS
+`ctx.config` on the production path). No code-logic changes.
+
 ## Plan 18 candidate scope (forwarded from Plan 17)
 
 To be filled in at T19 closure. Expected NEAR-EMPTY: Plan 17 sweeps

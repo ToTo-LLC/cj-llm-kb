@@ -125,6 +125,13 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 def _resolve_config(ctx: ToolContext) -> Config:
     """Resolve the Config the autonomy gate evaluates against.
 
+    **Read-only contract** (Plan 17 Task 9 audit): callers MUST NOT mutate
+    the returned reference. On the production path it IS ``ctx.config`` —
+    the live shared Config threaded by the lifespan / session factory — so
+    any attribute assignment, ``setattr``, or method call that mutates state
+    would leak back into every other consumer of ``ctx.config`` in the same
+    process. Read attributes only; mutation is the config-loader's job.
+
     Plan 16 Task 39.5 — production wiring sweep. Two tiers:
 
     * **Production path** (``ctx.config is not None``): return ``ctx.config``
