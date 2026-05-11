@@ -20,6 +20,7 @@ hard-codes ``Host: testserver`` on WS connects, which Task 8's
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -29,6 +30,7 @@ from fastapi.testclient import TestClient
 
 if TYPE_CHECKING:
     from brain_core.chat.session import ChatSession
+    from brain_core.chat.types import ChatEvent
 
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
@@ -81,7 +83,9 @@ def test_turn_error_emits_error_event_keeps_connection_open(
     """
     from brain_core.chat import session as session_mod
 
-    async def boom(self: ChatSession, user_message: str) -> Any:
+    async def boom(
+        self: ChatSession, user_message: str
+    ) -> AsyncIterator[ChatEvent]:
         raise RuntimeError("simulated session failure")
         yield  # pragma: no cover — unreachable, makes this an async-gen
 

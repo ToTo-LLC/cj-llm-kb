@@ -36,7 +36,8 @@ on the upgrade).
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 import pytest
 from _ws_helpers import get_app_ctx, get_app_token
@@ -45,6 +46,7 @@ from fastapi.testclient import TestClient
 
 if TYPE_CHECKING:
     from brain_core.chat.session import ChatSession
+    from brain_core.chat.types import ChatEvent
 
 _LOOPBACK_HEADERS = {"Host": "localhost"}
 
@@ -63,7 +65,9 @@ def test_cancel_turn_mid_stream(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -
     from brain_core.chat import session as session_mod
     from brain_core.chat.types import ChatEvent, ChatEventKind
 
-    async def slow_turn(self: ChatSession, user_message: str) -> Any:
+    async def slow_turn(
+        self: ChatSession, user_message: str
+    ) -> AsyncIterator[ChatEvent]:
         # One quick event so the client has proof the turn is actually
         # in flight, then park — the cancel is what unblocks this.
         yield ChatEvent(kind=ChatEventKind.DELTA, data={"text": "hi"})
@@ -191,7 +195,9 @@ def test_switch_mode_mid_turn_rejected(app: FastAPI, monkeypatch: pytest.MonkeyP
     from brain_core.chat import session as session_mod
     from brain_core.chat.types import ChatEvent, ChatEventKind
 
-    async def slow_turn(self: ChatSession, user_message: str) -> Any:
+    async def slow_turn(
+        self: ChatSession, user_message: str
+    ) -> AsyncIterator[ChatEvent]:
         yield ChatEvent(kind=ChatEventKind.DELTA, data={"text": "start"})
         await asyncio.sleep(60)
         yield ChatEvent(kind=ChatEventKind.DELTA, data={"text": "never"})

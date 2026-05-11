@@ -71,6 +71,7 @@ jobs:
             -exec uv run python -m brain_core._lint.brn001 {} +
 
       - name: Type-check brain_core
+        timeout-minutes: 5
         run: uv run mypy packages/brain_core/src
 
       # Plan 17 Task 11: brain_api mypy --strict hard-fail gate. Mirrors the
@@ -88,6 +89,7 @@ jobs:
       # to the config-file directory, so mypy must be invoked from
       # ``packages/brain_api/`` for them to point at the right paths.
       - name: Type-check brain_api
+        timeout-minutes: 5
         working-directory: packages/brain_api
         run: uv run mypy --strict src tests
 
