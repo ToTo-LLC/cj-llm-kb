@@ -98,9 +98,10 @@ describe("BudgetWall", () => {
     budgetOverrideMock.mockResolvedValue({
       text: "Cap raised.",
       data: {
-        amount_usd: 5,
-        duration_hours: 24,
-        expires_at: "2026-04-22T00:00:00Z",
+        status: "override_set",
+        override_until: "2026-04-22T00:00:00Z",
+        override_delta_usd: 5,
+        note: "Override window persisted to <vault>/.brain/config.json via save_config(). Restart respects the override until it expires.",
       },
     });
     const onClose = vi.fn();
@@ -126,6 +127,11 @@ describe("BudgetWall", () => {
     expect(toasts.length).toBeGreaterThanOrEqual(1);
     const latest = toasts[toasts.length - 1];
     expect(latest.lead).toMatch(/cap raised/i);
+    // Plan 18 T3.11 drift-pin regression: toast msg must reflect the
+    // backend-emitted `override_delta_usd` (was `amount_usd`, always
+    // undefined pre-fix) and the request's `duration_hours` (24).
+    expect(latest.msg).toMatch(/cap raised by \$5/i);
+    expect(latest.msg).toMatch(/24 hours/i);
   });
 
   test("Wait it out' closes the dialog", async () => {

@@ -85,10 +85,10 @@ export function BudgetWall({ open, onClose, data = MOCK_DATA }: BudgetWallProps)
     setRaising(true);
     try {
       const res = await budgetOverride({ amount_usd: 5, duration_hours: 24 });
-      const newCap = res?.data?.amount_usd ?? data.budget + 5;
+      const raise = res?.data?.override_delta_usd ?? 5;
       pushToast({
         lead: "Cap raised.",
-        msg: `Today's cap is now ${formatUsd(newCap)}`,
+        msg: `Cap raised by ${formatUsd(raise)} for the next 24 hours.`,
         variant: "success",
       });
       onClose();

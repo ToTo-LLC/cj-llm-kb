@@ -849,23 +849,39 @@ export const renameDomain = (args: {
     [extra: string]: unknown;
   }>("brain_rename_domain", args);
 
-/** Temporarily bump the cost-budget ceiling. */
+/**
+ * Temporarily bump the cost-budget ceiling by `amount_usd` for
+ * `duration_hours` hours.
+ *
+ * Mirrors the `brain_budget_override` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/budget_override.py`). Single
+ * branch on success — out-of-range inputs raise exceptions, not
+ * alternate-shape error branches.
+ *
+ * Plan 18 T3.11 narrowed this TS interface from the pre-fix
+ * `{amount_usd, duration_hours, expires_at, [extra]}` shape (which
+ * never matched backend — all three TS-required fields were renames
+ * of backend fields or echoes of INPUT-only args). `override_until`
+ * carries the ISO-8601 timestamp when the override expires;
+ * `override_delta_usd` is the dollar amount added to the daily cap
+ * (semantically the same as the caller's `amount_usd` input).
+ */
 export const budgetOverride = (args: {
   amount_usd: number;
   duration_hours?: number;
 }): Promise<
   ToolResponse<{
-    amount_usd: number;
-    duration_hours: number;
-    expires_at: string;
-    [extra: string]: unknown;
+    status: "override_set";
+    override_until: string;
+    override_delta_usd: number;
+    note: string;
   }>
 > =>
   callTool<{
-    amount_usd: number;
-    duration_hours: number;
-    expires_at: string;
-    [extra: string]: unknown;
+    status: "override_set";
+    override_until: string;
+    override_delta_usd: number;
+    note: string;
   }>("brain_budget_override", args);
 
 // ---------- Plan 07 Task 20 addition (1) ----------

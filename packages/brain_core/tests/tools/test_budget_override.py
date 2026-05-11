@@ -90,3 +90,23 @@ def test_is_over_budget_respects_active_override(tmp_path: Path) -> None:
         override_delta_usd=5.0,
     )
     assert ledger.is_over_budget(expired, today) is True
+
+
+async def test_data_keys_pin(tmp_path: Path) -> None:
+    """Plan 18 T3.11 drift pin: backend handler must emit exactly these
+    keys in ``ToolResult.data`` (and the TS ``budgetOverride()`` interface
+    at ``apps/brain_web/src/lib/api/tools.ts`` must mirror them). Single
+    branch on success — out-of-range inputs raise exceptions, not
+    alternate-shape variants. ``_mk_ctx`` does not attach ``config``, so
+    the persistence branch is skipped; the response shape is still
+    complete (see ``budget_override.py`` lines 73-93).
+    """
+    result = await handle({"amount_usd": 5.0, "duration_hours": 24}, _mk_ctx(tmp_path))
+    assert result.data is not None
+    assert set(result.data.keys()) == {
+        "status",
+        "override_until",
+        "override_delta_usd",
+        "note",
+    }
+    assert result.data["status"] == "override_set"
