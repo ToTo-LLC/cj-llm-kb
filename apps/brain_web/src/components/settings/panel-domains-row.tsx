@@ -15,7 +15,8 @@ import {
   DomainOverrideForm,
   type DomainOverrideValues,
 } from "@/components/settings/domain-override-form";
-import { configGet, setDomainBudget, setDomainRateLimit } from "@/lib/api/tools";
+import { configGet, setDomainRateLimit } from "@/lib/api/tools";
+import { useBudgetStore } from "@/lib/state/budget-store";
 import type { DomainEntry } from "@/lib/state/domains-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
@@ -241,7 +242,8 @@ export function PanelDomainsRow({
 /* ---------------------- Budget caps subsection ---------------------- */
 
 /**
- * Per-domain budget cap editor (Plan 16 Task 29 / D26 step 4 of 4).
+ * Per-domain budget cap editor (Plan 16 Task 29 / D26 step 4 of 4;
+ * migrated to budget-store in Plan 17 Task 4).
  *
  * Two optional inputs (daily, monthly cap, both in USD). Empty input =
  * no cap (= ``null`` on the wire). Save fires on blur — the field
@@ -255,16 +257,16 @@ export function PanelDomainsRow({
  * depth — the UI catches it first so the user never hits the round
  * trip). An empty input is valid (= null = "no cap").
  *
- * The component reads its own initial state from
- * ``brain_config_get`` because the parent orchestrator already does
- * the same dance for ``domain_overrides`` and threading a parallel
- * cache for budget caps would double the surface area of
- * ``panel-domains.tsx`` for no win — both forms have identical
- * round-trip semantics (user-tunable, low-frequency, snapshot-cheap).
+ * Hydration reads from the shared ``useBudgetStore`` snapshot (Plan 17
+ * Task 4). The ``readBudgetCapsFor`` inline fetch is removed; the store
+ * owns the fetch lifecycle and keeps peer tabs in sync via
+ * BroadcastChannel.  Saves go through
+ * ``useBudgetStore.getState().setDomainCap`` which applies the same
+ * optimistic-revert pattern as the global budget caps.
  *
  * Wire contract: each save posts the WHOLE current pair (both caps)
- * to ``setDomainBudget``. The backend prunes the entry when both
- * caps are null.
+ * to ``setDomainCap``. The backend prunes the entry when both caps are
+ * null.
  */
 interface BudgetCapsSubsectionProps {
   slug: string;
@@ -289,20 +291,6 @@ function isValidCap(s: string): boolean {
   return Number.isFinite(n) && n > 0;
 }
 
-async function readBudgetCapsFor(slug: string): Promise<BudgetCapsState> {
-  try {
-    const r = await configGet({ key: "budget.per_domain" });
-    const all = (r.data?.value ?? {}) as Record<string, Partial<BudgetCapsState>>;
-    const entry = all[slug] ?? {};
-    return {
-      daily_cap_usd: entry.daily_cap_usd ?? null,
-      monthly_cap_usd: entry.monthly_cap_usd ?? null,
-    };
-  } catch {
-    return EMPTY_CAPS;
-  }
-}
-
 export function BudgetCapsSubsection({
   slug,
 }: BudgetCapsSubsectionProps): React.ReactElement {
@@ -317,33 +305,36 @@ export function BudgetCapsSubsection({
   const [dailyInput, setDailyInput] = React.useState<string>("");
   const [monthlyInput, setMonthlyInput] = React.useState<string>("");
 
-  // Lazy fetch on first mount — the parent only mounts this component
-  // when the row is expanded, so this is cheap and one-shot.
+  // Read from the shared budget store (Plan 17 Task 4). The store is
+  // loaded by the parent layout; ``budgetLoaded`` gates the one-time
+  // hydration of the edit buffers. We intentionally omit
+  // ``perDomainCaps`` from the dependency array to avoid overwriting an
+  // in-progress edit when a peer-tab broadcast updates the store.
+  const perDomainCaps = useBudgetStore((s) => s.snapshot.per_domain);
+  const budgetLoaded = useBudgetStore((s) => s.loaded);
+
   React.useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const caps = await readBudgetCapsFor(slug);
-      if (cancelled) return;
-      setPersisted(caps);
+    if (budgetLoaded) {
+      const caps = perDomainCaps[slug] ?? EMPTY_CAPS;
       setDailyInput(caps.daily_cap_usd !== null ? String(caps.daily_cap_usd) : "");
       setMonthlyInput(
         caps.monthly_cap_usd !== null ? String(caps.monthly_cap_usd) : "",
       );
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [slug]);
+      setPersisted(caps);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [budgetLoaded, slug]); // `perDomainCaps` intentionally omitted to avoid mid-edit overwrite
 
   const dailyValid = isValidCap(dailyInput);
   const monthlyValid = isValidCap(monthlyInput);
 
   /** Save the whole pair (both caps). The backend's apply-helper
    *  prunes the entry when both are null, so we don't have to
-   *  special-case "clear" here. */
+   *  special-case "clear" here. Routes through the budget store so
+   *  the optimistic update + peer-tab broadcast happen automatically. */
   const saveCaps = async (next: BudgetCapsState) => {
     try {
-      await setDomainBudget(slug, next);
+      await useBudgetStore.getState().setDomainCap(slug, next);
       setPersisted(next);
       pushToast({
         lead: "Budget caps saved.",

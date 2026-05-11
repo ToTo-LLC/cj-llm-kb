@@ -56,23 +56,18 @@ vi.mock("@/components/settings/domain-override-form", () => ({
   },
 }));
 
-// Plan 16 Task 29 / D26 step 4 of 4: mock the budget API binding so we
-// can assert the exact (slug, cap) payload the row emits on blur.
-// ``configGet`` powers the lazy hydrate-on-mount fetch; default it to
-// "no entry" so the inputs start empty unless a test overrides.
+// Plan 16 Task 32 / D27 step 3 of 3: rate-limit API binding.
+// ``configGet`` (with key ``providers``) powers the rate-limit hydrate;
+// ``setDomainRateLimit`` handles saves. Both are still direct API calls
+// (no rate-limit store exists). Default configGet returns ``{}`` so
+// the input starts empty; tests that need a populated state override
+// per-call via ``mockResolvedValueOnce`` or ``mockImplementation``.
 //
-// Plan 16 Task 32 / D27 step 3 of 3: add the rate-limit binding mock so
-// the rate-limit subsection can be exercised the same way. The
-// rate-limit subsection reads ``providers`` (not ``budget.per_domain``)
-// for hydration, but the budget subsection always mounts alongside it
-// — both fire ``configGet`` on first mount, with different keys. The
-// default mock returns the SAME shape regardless of ``key`` (an empty
-// object) so each subsection's hydration sees "no entry"; tests that
-// need a populated state use ``mockResolvedValueOnce`` per call site
-// or differentiate by key.
-const { setDomainBudgetMock, setDomainRateLimitMock, configGetMock } = vi.hoisted(
+// Plan 17 Task 4: ``setDomainBudget`` is removed from the tools import
+// in the component; do NOT mock it here. ``configGet`` is still used by
+// ``RateLimitSubsection``; the mock is kept for those tests.
+const { setDomainRateLimitMock, configGetMock } = vi.hoisted(
   () => ({
-    setDomainBudgetMock: vi.fn(),
     setDomainRateLimitMock: vi.fn(),
     configGetMock: vi.fn(),
   }),
@@ -84,11 +79,51 @@ vi.mock("@/lib/api/tools", async () => {
   );
   return {
     ...actual,
-    setDomainBudget: (...args: unknown[]) => setDomainBudgetMock(...args),
     setDomainRateLimit: (...args: unknown[]) => setDomainRateLimitMock(...args),
     configGet: (...args: unknown[]) => configGetMock(...args),
   };
 });
+
+// Plan 17 Task 4: mock the budget store so ``BudgetCapsSubsection``
+// reads hydration state from the store (not from a ``configGet`` call)
+// and saves via ``useBudgetStore.getState().setDomainCap``.
+//
+// ``useBudgetStore`` is called as a hook (selector pattern) and
+// statically via ``.getState()``. We maintain a ``_budgetStoreState``
+// object that the selector-fn mock reads from; tests mutate it via
+// ``setBudgetStoreState()``.
+const { setDomainCapMock } = vi.hoisted(() => ({
+  setDomainCapMock: vi.fn(),
+}));
+
+interface MockBudgetStoreState {
+  loaded: boolean;
+  snapshot: {
+    per_domain: Record<string, { daily_cap_usd: number | null; monthly_cap_usd: number | null }>;
+  };
+}
+
+let _budgetStoreState: MockBudgetStoreState = {
+  loaded: false,
+  snapshot: { per_domain: {} },
+};
+
+function setBudgetStoreState(s: Partial<MockBudgetStoreState>) {
+  _budgetStoreState = { ..._budgetStoreState, ...s };
+}
+
+vi.mock("@/lib/state/budget-store", () => ({
+  useBudgetStore: Object.assign(
+    // Selector hook calls: apply the selector to the current mock state.
+    (selector: (s: MockBudgetStoreState) => unknown) =>
+      selector(_budgetStoreState),
+    {
+      getState: () => ({
+        setDomainCap: setDomainCapMock,
+      }),
+    },
+  ),
+}));
 
 // Pull pushToast onto a spy so we can assert toast emission without
 // also pulling in the system store's actual implementation surface.
@@ -170,18 +205,22 @@ function renderRow(overrides: RowProps = {}) {
 
 beforeEach(() => {
   domainOverrideFormMock.mockReset();
-  setDomainBudgetMock.mockReset();
-  setDomainBudgetMock.mockResolvedValue(undefined);
+  setDomainCapMock.mockReset();
+  setDomainCapMock.mockResolvedValue(undefined);
   setDomainRateLimitMock.mockReset();
   setDomainRateLimitMock.mockResolvedValue(undefined);
   configGetMock.mockReset();
-  // Default: no per-domain budget OR rate-limit entry exists. Tests
-  // that need a populated slug override this per-test before render.
-  // Both subsections hydrate from this mock with different keys
-  // (``budget.per_domain`` vs. ``providers``); the empty ``{}`` shape
-  // is correct for both.
+  // Default: no rate-limit entry exists. Tests that need a populated
+  // providers entry override this per-test before render.
   configGetMock.mockResolvedValue({ data: { value: {} } });
   pushToastMock.mockReset();
+  // Default budget store state: loaded=true with empty per_domain map
+  // so ``BudgetCapsSubsection`` hydrates with empty inputs immediately
+  // (no async wait needed for the "empty" case).
+  setBudgetStoreState({
+    loaded: true,
+    snapshot: { per_domain: {} },
+  });
 });
 
 describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
@@ -236,11 +275,11 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     const onOverrideChanged = vi.fn();
     renderRow({ isExpanded: true, onOverrideChanged });
 
-    // Plan 16 Task 29 + Task 32: wait for the budget AND rate-limit
-    // subsections' lazy hydrate fetches to settle before exercising
-    // the override-form save, so the unrelated state updates don't
-    // leak act warnings into this test's run.
-    await screen.findByTestId("budget-caps-subsection-work");
+    // Plan 17 T4: budget subsection now hydrates synchronously from the
+    // store (no async fetch), so ``getByTestId`` is sufficient. The
+    // rate-limit subsection still fires an async ``configGet``; wait for
+    // it to settle so its state update doesn't leak an act warning.
+    screen.getByTestId("budget-caps-subsection-work");
     await screen.findByTestId("rate-limit-subsection-work");
 
     // The mocked override form exposes a button that fires its
@@ -290,7 +329,7 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     expect(domainOverrideFormMock).not.toHaveBeenCalled();
   });
 
-  describe("budget caps subsection (Plan 16 Task 29 / D26 step 4 of 4)", () => {
+  describe("budget caps subsection (Plan 16 Task 29 / D26 step 4 of 4; store-based after Plan 17 T4)", () => {
     test("not rendered when row collapsed", () => {
       renderRow({ isExpanded: false });
       expect(
@@ -299,70 +338,77 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     });
 
     test("rendered when row expanded; both inputs hydrate empty for a slug with no entry", async () => {
+      // beforeEach sets loaded=true with empty per_domain — budget hydration
+      // is synchronous (store-based). The rate-limit subsection still fires
+      // an async configGet; wait for it to settle so the state update doesn't
+      // leak an act warning.
       renderRow({ isExpanded: true });
 
       expect(
-        await screen.findByTestId("budget-caps-subsection-work"),
+        screen.getByTestId("budget-caps-subsection-work"),
       ).toBeInTheDocument();
       const daily = screen.getByTestId("budget-cap-daily-work") as HTMLInputElement;
       const monthly = screen.getByTestId(
         "budget-cap-monthly-work",
       ) as HTMLInputElement;
-      // configGet's default mock returns ``{}`` so neither cap is set.
+      // Store's per_domain is empty so neither cap is set.
       expect(daily.value).toBe("");
       expect(monthly.value).toBe("");
-      // The hydrate fetch reads the per_domain dict.
-      expect(configGetMock).toHaveBeenCalledWith({ key: "budget.per_domain" });
+      // Budget hydration no longer calls configGet (that was the old path).
+      expect(configGetMock).not.toHaveBeenCalledWith({ key: "budget.per_domain" });
+      // Drain the rate-limit async fetch.
+      await screen.findByTestId("rate-limit-subsection-work");
     });
 
-    test("hydrates inputs from the persisted per_domain entry for this slug", async () => {
-      configGetMock.mockResolvedValueOnce({
-        data: {
-          value: {
+    test("hydrates inputs from the budget store's per_domain entry for this slug", async () => {
+      // Set up the store state before rendering.
+      setBudgetStoreState({
+        loaded: true,
+        snapshot: {
+          per_domain: {
             work: { daily_cap_usd: 1.5, monthly_cap_usd: 30 },
           },
         },
       });
       renderRow({ isExpanded: true });
 
-      const daily = (await screen.findByTestId(
-        "budget-cap-daily-work",
-      )) as HTMLInputElement;
+      const daily = screen.getByTestId("budget-cap-daily-work") as HTMLInputElement;
       const monthly = screen.getByTestId(
         "budget-cap-monthly-work",
       ) as HTMLInputElement;
       // useEffect hydration happens after the first render's commit;
-      // ``findByTestId`` already retried once but the value flips on a
-      // subsequent commit — wait for it explicitly.
+      // wait for the value to flip on the subsequent commit.
       await vi.waitFor(() => expect(daily.value).toBe("1.5"));
       expect(monthly.value).toBe("30");
+      // Drain the rate-limit async fetch.
+      await screen.findByTestId("rate-limit-subsection-work");
     });
 
-    test("typing a monthly cap then blurring calls setDomainBudget with both caps", async () => {
+    test("typing a monthly cap then blurring calls setDomainCap with both caps", async () => {
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const monthly = await screen.findByTestId("budget-cap-monthly-work");
+      const monthly = screen.getByTestId("budget-cap-monthly-work");
       await user.type(monthly, "10");
       await user.tab(); // blur
 
-      expect(setDomainBudgetMock).toHaveBeenCalledTimes(1);
-      expect(setDomainBudgetMock).toHaveBeenCalledWith("work", {
+      expect(setDomainCapMock).toHaveBeenCalledTimes(1);
+      expect(setDomainCapMock).toHaveBeenCalledWith("work", {
         daily_cap_usd: null,
         monthly_cap_usd: 10,
       });
     });
 
-    test("typing a daily cap then blurring calls setDomainBudget with both caps", async () => {
+    test("typing a daily cap then blurring calls setDomainCap with both caps", async () => {
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const daily = await screen.findByTestId("budget-cap-daily-work");
+      const daily = screen.getByTestId("budget-cap-daily-work");
       await user.type(daily, "2.5");
       await user.tab();
 
-      expect(setDomainBudgetMock).toHaveBeenCalledTimes(1);
-      expect(setDomainBudgetMock).toHaveBeenCalledWith("work", {
+      expect(setDomainCapMock).toHaveBeenCalledTimes(1);
+      expect(setDomainCapMock).toHaveBeenCalledWith("work", {
         daily_cap_usd: 2.5,
         monthly_cap_usd: null,
       });
@@ -372,14 +418,12 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const daily = (await screen.findByTestId(
-        "budget-cap-daily-work",
-      )) as HTMLInputElement;
+      const daily = screen.getByTestId("budget-cap-daily-work") as HTMLInputElement;
       await user.type(daily, "0");
       await user.tab();
 
       expect(daily).toHaveAttribute("aria-invalid", "true");
-      expect(setDomainBudgetMock).not.toHaveBeenCalled();
+      expect(setDomainCapMock).not.toHaveBeenCalled();
       // The hint text mentions the validation rule.
       expect(
         screen.getByText(/positive number/i),
@@ -390,21 +434,20 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const monthly = (await screen.findByTestId(
-        "budget-cap-monthly-work",
-      )) as HTMLInputElement;
+      const monthly = screen.getByTestId("budget-cap-monthly-work") as HTMLInputElement;
       await user.type(monthly, "-5");
       await user.tab();
 
       expect(monthly).toHaveAttribute("aria-invalid", "true");
-      expect(setDomainBudgetMock).not.toHaveBeenCalled();
+      expect(setDomainCapMock).not.toHaveBeenCalled();
     });
 
     test("clearing a previously-set cap saves with that field as null", async () => {
       // Slug has a daily cap of 2.0 already.
-      configGetMock.mockResolvedValueOnce({
-        data: {
-          value: {
+      setBudgetStoreState({
+        loaded: true,
+        snapshot: {
+          per_domain: {
             work: { daily_cap_usd: 2.0, monthly_cap_usd: null },
           },
         },
@@ -412,45 +455,46 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const daily = (await screen.findByTestId(
-        "budget-cap-daily-work",
-      )) as HTMLInputElement;
+      const daily = screen.getByTestId("budget-cap-daily-work") as HTMLInputElement;
       await vi.waitFor(() => expect(daily.value).toBe("2"));
 
       await user.clear(daily);
       await user.tab();
 
-      expect(setDomainBudgetMock).toHaveBeenCalledTimes(1);
-      expect(setDomainBudgetMock).toHaveBeenCalledWith("work", {
+      expect(setDomainCapMock).toHaveBeenCalledTimes(1);
+      expect(setDomainCapMock).toHaveBeenCalledWith("work", {
         daily_cap_usd: null,
         monthly_cap_usd: null,
       });
     });
 
     test("blur with unchanged value does NOT trigger a save", async () => {
-      configGetMock.mockResolvedValueOnce({
-        data: { value: { work: { daily_cap_usd: 1.0 } } },
+      setBudgetStoreState({
+        loaded: true,
+        snapshot: {
+          per_domain: {
+            work: { daily_cap_usd: 1.0, monthly_cap_usd: null },
+          },
+        },
       });
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const daily = (await screen.findByTestId(
-        "budget-cap-daily-work",
-      )) as HTMLInputElement;
+      const daily = screen.getByTestId("budget-cap-daily-work") as HTMLInputElement;
       await vi.waitFor(() => expect(daily.value).toBe("1"));
 
       // Blur without changing the value.
       await user.click(daily);
       await user.tab();
 
-      expect(setDomainBudgetMock).not.toHaveBeenCalled();
+      expect(setDomainCapMock).not.toHaveBeenCalled();
     });
 
     test("successful save fires a success toast", async () => {
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const monthly = await screen.findByTestId("budget-cap-monthly-work");
+      const monthly = screen.getByTestId("budget-cap-monthly-work");
       await user.type(monthly, "10");
       await user.tab();
 
@@ -465,11 +509,11 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     });
 
     test("failed save fires a danger toast and does not update internal state", async () => {
-      setDomainBudgetMock.mockRejectedValueOnce(new Error("boom"));
+      setDomainCapMock.mockRejectedValueOnce(new Error("boom"));
       const user = userEvent.setup();
       renderRow({ isExpanded: true });
 
-      const daily = await screen.findByTestId("budget-cap-daily-work");
+      const daily = screen.getByTestId("budget-cap-daily-work");
       await user.type(daily, "1.5");
       await user.tab();
 
@@ -748,12 +792,11 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     });
     expect(expandBtn).toHaveAttribute("aria-expanded", "true");
 
-    // Plan 16 Task 29 + Task 32: re-rendering the row expanded mounts
-    // the ``BudgetCapsSubsection`` AND the ``RateLimitSubsection``,
-    // both of which fire lazy ``configGet`` calls. Wait for both
-    // fetches to settle so this test doesn't leak an act warning into
-    // the next test's run via an unsettled state update.
-    await screen.findByTestId("budget-caps-subsection-work");
+    // Plan 17 T4: budget subsection hydrates synchronously from the store
+    // so no async wait needed there. Rate-limit subsection still fires an
+    // async ``configGet``; wait for it to settle so the state update
+    // doesn't leak an act warning into the next test's run.
+    screen.getByTestId("budget-caps-subsection-work");
     await screen.findByTestId("rate-limit-subsection-work");
   });
 });
