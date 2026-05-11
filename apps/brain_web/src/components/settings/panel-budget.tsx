@@ -5,49 +5,36 @@ import { AlertTriangle, DollarSign } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { configGet, configSet } from "@/lib/api/tools";
+import { useBudget } from "@/lib/hooks/use-budget";
+import { useBudgetStore } from "@/lib/state/budget-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
 /**
- * PanelBudget (Plan 07 Task 22).
+ * PanelBudget (Plan 07 Task 22; migrated to budget-store in Plan 17 T3).
  *
  * Three controls:
  *   - Daily cap       — number input → `budget.daily_usd`.
  *   - Monthly cap     — number input → `budget.monthly_usd`. Stubbed until
  *                        Task 1's config-schema extension (noted inline).
- *   - Alert threshold — read-only display of `budget.alert_threshold_pct`.
+ *   - Alert threshold — read-only display of `budget.alert_threshold_pct`,
+ *                        derived directly from the budget-store snapshot.
  */
 
 export function PanelBudget(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
+  const { snapshot, loaded } = useBudget();
   const [daily, setDaily] = React.useState<string>("");
   const [monthly, setMonthly] = React.useState<string>("");
-  const [threshold, setThreshold] = React.useState<number | null>(null);
 
+  // Hydrate the daily edit buffer once from the store on first load.
+  // Subsequent store changes (peer-tab broadcasts, etc.) do NOT
+  // overwrite the buffer — the user may be mid-edit.
   React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await configGet({ key: "budget.daily_usd" });
-        if (!cancelled && typeof r.data?.value === "number") {
-          setDaily(String(r.data.value));
-        }
-      } catch {
-        /* leave empty */
-      }
-      try {
-        const r = await configGet({ key: "budget.alert_threshold_pct" });
-        if (!cancelled && typeof r.data?.value === "number") {
-          setThreshold(r.data.value);
-        }
-      } catch {
-        /* leave null */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (loaded) {
+      if (snapshot.daily_usd !== null) setDaily(String(snapshot.daily_usd));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   const saveDaily = async () => {
     const n = Number(daily);
@@ -60,7 +47,7 @@ export function PanelBudget(): React.ReactElement {
       return;
     }
     try {
-      await configSet({ key: "budget.daily_usd", value: n });
+      await useBudgetStore.getState().setDailyCap(n);
       pushToast({
         lead: "Daily cap saved.",
         msg: `budget.daily_usd → $${n}`,
@@ -155,7 +142,10 @@ export function PanelBudget(): React.ReactElement {
           <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
           <span className="text-[var(--text)]">Alert threshold</span>
           <span className="ml-auto font-mono text-[var(--text-muted)]">
-            {threshold != null ? `${threshold}%` : "—"} of cap
+            {snapshot.alert_threshold_pct != null
+              ? `${snapshot.alert_threshold_pct}%`
+              : "—"}{" "}
+            of cap
           </span>
         </div>
         <p className="mt-2 text-[11px] text-[var(--text-muted)]">
