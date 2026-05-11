@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 from brain_core.config.schema import Config
+from brain_core.config.writer import ConfigPersistenceError
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.tools.repair_config import NAME as REPAIR_NAME
 from brain_core.tools.repair_config import handle as repair_handle
@@ -312,3 +313,48 @@ async def test_apply_registered_in_tool_registry() -> None:
     names = [m.NAME for m in tools_registry.list_tools()]
     assert "brain_repair_config" in names
     assert "brain_repair_config_apply" in names
+
+
+async def test_apply_save_failure_reverts_in_memory_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 17 Task 17: ``save_config`` failure must roll back the in-memory
+    mutation atomically.
+
+    Pre-T17 shape: the handler mutated ``ctx.config`` field-by-field BEFORE
+    calling ``save_config``, so a disk-write failure left the live Config in
+    the post-mutation "bad" state. Plan 16 T34's lazy version-peek self-heals
+    on next read, but during the window between failure and next read,
+    callers observed the failed mutation as if it succeeded.
+
+    Post-T17: the mutation is wrapped in ``persist_config_or_revert``, whose
+    snapshot/revert path restores every field via the ``__dict__`` fast-path
+    when ``save_config`` raises. The exception re-raises so the caller sees
+    the structured ``ConfigPersistenceError``.
+    """
+    in_memory = Config(active_domain="research", web_port=4317)
+    snapshot_dump = in_memory.model_dump()  # pre-mutation deep snapshot
+
+    repaired_payload = Config(active_domain="research", web_port=5500).persisted_dict()
+
+    def boom(_config: Config, _vault_root: Path, **_kw: object) -> Path:
+        raise ConfigPersistenceError("disk failed", cause="io_error")
+
+    # Patch the symbol AS RE-EXPORTED through ``persist_config_or_revert``'s
+    # module, since that's the lookup site at call time. The helper lives in
+    # ``brain_core.config.writer`` and calls ``save_config`` from the same
+    # module, so patching ``brain_core.config.writer.save_config`` redirects
+    # the helper's call.
+    monkeypatch.setattr("brain_core.config.writer.save_config", boom)
+
+    ctx = _mk_ctx(tmp_path, config=in_memory)
+
+    with pytest.raises(ConfigPersistenceError, match="disk failed"):
+        await apply_handle({"repaired_config": repaired_payload}, ctx)
+
+    # Deep-equal vs pre-mutation snapshot: every field reverted.
+    assert ctx.config.model_dump() == snapshot_dump
+    # Specifically: the mutation target field is the pre-mutation value.
+    assert ctx.config.web_port == 4317
+    # No config.json written (boom raised before any disk artifact).
+    assert not (tmp_path / ".brain" / "config.json").exists()

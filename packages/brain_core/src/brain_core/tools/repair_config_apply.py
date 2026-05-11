@@ -19,6 +19,17 @@ field-by-field shape; ``ToolContext`` is frozen so we cannot reassign
 ``ctx.config`` and must field-mutate). Subsequent calls to
 :func:`brain_core.tools.repair_config.handle` see the post-apply state and
 report ``repair_changes_pending=False``.
+
+Plan 17 Task 17: the field-by-field mutation + persist is wrapped in
+:func:`brain_core.config.writer.persist_config_or_revert` so a
+``save_config`` failure (disk full, lock timeout, replace_failed) rolls
+back the in-memory Config to its pre-mutation state. Pre-T17, the live
+``ctx.config`` was left in the post-mutation "bad" state until the next
+read; Plan 16 T34's lazy version-peek would self-heal eventually, but
+the failure-window observability was wrong (callers saw the failed
+mutation as success). The helper's snapshot-then-revert contract closes
+the seam — same atomicity guarantee as the five Plan 11 T4 mutation
+tools (``brain_config_set``, ``brain_create_domain``, etc.).
 """
 
 from __future__ import annotations
@@ -27,7 +38,7 @@ import sys
 from typing import Any
 
 from brain_core.config.schema import Config
-from brain_core.config.writer import save_config
+from brain_core.config.writer import persist_config_or_revert
 from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
 
@@ -61,16 +72,22 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
       1. Validate the payload by constructing a fresh ``Config(**payload)``.
          Raises a Pydantic validation error if the payload is malformed —
          the disk write does not run.
-      2. Mutate ``ctx.config`` in place to mirror the validated Config.
-         Field-by-field setattr because ToolContext is frozen.
-      3. Persist via ``save_config`` (atomic temp+rename, filelock-guarded,
-         backup-on-write per Plan 11). On disk-write failure, in-memory
-         mutation is NOT rolled back — the caller (frontend) re-fetches
-         and the next ``brain_repair_config`` call surfaces the residual
-         drift as a fresh diff.
+      2. Inside ``persist_config_or_revert`` (snapshot, yield, save, revert):
+         mutate ``ctx.config`` field-by-field to mirror the validated
+         Config. The helper persists via ``save_config`` after the yield;
+         any failure (caller mutation, schema cross-field validators,
+         lock timeout, disk write) restores the snapshot's field values
+         and re-raises so the caller observes structured error +
+         pre-mutation in-memory state.
 
     Returns a structured ``ToolResult`` with ``status: "applied"`` plus the
     persisted-dict shape that landed on disk for the UI to confirm against.
+
+    Plan 17 Task 17: the mutation+save pair is wrapped in
+    ``persist_config_or_revert`` so a ``save_config`` failure rolls back
+    the live ``ctx.config`` atomically. Pre-T17 the helper was not used
+    and a disk-write failure left the live Config in the post-mutation
+    state — observable as a phantom successful apply until the next read.
     """
     raise_if_no_config(ctx, NAME)
 
@@ -87,7 +104,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Validate before any mutation. Pydantic will raise on malformed payloads;
     # we propagate the underlying error so the brain_api error envelope can
     # surface schema details to the UI (the dispatcher wraps ValueError /
-    # ValidationError into a 400 ApiError automatically).
+    # ValidationError into a 400 ApiError automatically). This runs OUTSIDE
+    # the persist_config_or_revert block because a malformed payload should
+    # never even reach the snapshot — no mutation to revert.
     validated = Config(**payload)
 
     # Plan 11 D4: ``vault_path`` is excluded from the persisted whitelist.
@@ -99,23 +118,30 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # never the persisted blob).
     live_vault = ctx.config.vault_path
 
-    # Field-by-field in-place mutation (ToolContext is frozen — same shape
-    # as ``persist_config_or_revert``). Mutate every model field on the
-    # validated Config except ``vault_path`` (preserved from live).
-    for field_name in type(ctx.config).model_fields:
-        if field_name == "vault_path":
-            continue
-        setattr(ctx.config, field_name, getattr(validated, field_name))
+    # Plan 17 Task 17: mutate + persist inside the snapshot/revert helper.
+    # Same shape as the Plan 11 T4 mutation tools (config_set, create_domain,
+    # rename_domain, delete_domain, budget_override). The helper snapshots
+    # ``ctx.config`` before the yield, lets us mutate field-by-field
+    # (ToolContext is frozen so we cannot reassign), then calls save_config
+    # on the live reference. On any exception between snapshot and a
+    # successful disk replace, ``persist_config_or_revert`` restores every
+    # field via the ``__dict__`` fast-path (Plan 16 T36 — bypasses
+    # validate_assignment so transient cross-field invalid intermediates
+    # don't fault the revert) and re-raises.
+    with persist_config_or_revert(ctx.config, ctx.vault_root):
+        for field_name in type(ctx.config).model_fields:
+            if field_name == "vault_path":
+                continue
+            setattr(ctx.config, field_name, getattr(validated, field_name))
+        # Restore the live vault path defensively (the explicit skip above
+        # already guarantees this).
+        ctx.config.vault_path = live_vault
 
-    # Restore the live vault path in case the loop touched it (defensive;
-    # the explicit skip above already guarantees this).
-    ctx.config.vault_path = live_vault
-
-    # Persist via save_config. The writer bumps ``config_version`` in
-    # place + handles atomic write + backup. If this raises
-    # ConfigPersistenceError, the in-memory mutation above stays —
-    # acceptable per the docstring contract.
-    written_path = save_config(ctx.config, ctx.vault_root)
+    # ``save_config`` ran inside the helper; reconstruct the written path
+    # from the canonical location. (We don't capture the helper's return
+    # because the context manager interface doesn't surface it; the path
+    # is deterministic — ``<vault_root>/.brain/config.json``.)
+    written_path = ctx.vault_root / ".brain" / "config.json"
 
     return ToolResult(
         text=f"applied repaired config to {written_path}",
