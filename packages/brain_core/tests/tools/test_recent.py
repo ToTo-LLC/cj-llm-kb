@@ -39,7 +39,7 @@ async def test_lists_recent_notes(tmp_path: Path) -> None:
 
     assert isinstance(result, ToolResult)
     assert result.data is not None
-    paths = [n["path"] for n in result.data["notes"]]
+    paths = [it["path"] for it in result.data["items"]]
     assert "research/notes/a.md" in paths
     assert "research/notes/b.md" in paths
     assert not any("chats" in p for p in paths)

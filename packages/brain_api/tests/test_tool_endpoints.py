@@ -115,7 +115,7 @@ _HAPPY_CASES: list[tuple[str, dict[str, Any], Callable[[dict[str, Any]], bool]]]
         lambda d: "body" in d,
     ),
     ("brain_search", {"query": "karpathy"}, lambda d: isinstance(d["hits"], list)),
-    ("brain_recent", {}, lambda d: "notes" in d and "limit_used" in d),
+    ("brain_recent", {}, lambda d: "items" in d and "limit_used" in d),
     ("brain_get_brain_md", {}, lambda d: "You are brain" in d["body"]),
     ("brain_list_pending_patches", {}, lambda d: d["count"] == 0),
     ("brain_cost_report", {}, lambda d: "today_usd" in d),

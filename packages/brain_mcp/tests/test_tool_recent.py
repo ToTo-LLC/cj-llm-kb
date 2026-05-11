@@ -28,7 +28,7 @@ async def test_returns_recent_sorted(
     ctx = make_ctx(seeded_vault, allowed_domains=("research",))
     out = await handle({"limit": 5}, ctx)
     data = json.loads(out[1].text)
-    assert data["notes"][0]["path"] == "research/notes/rag.md"
+    assert data["items"][0]["path"] == "research/notes/rag.md"
 
 
 async def test_default_limit_is_10(
@@ -48,7 +48,7 @@ async def test_excludes_chats_directory(
     ctx = make_ctx(seeded_vault, allowed_domains=("research",))
     out = await handle({}, ctx)
     data = json.loads(out[1].text)
-    paths = [n["path"] for n in data["notes"]]
+    paths = [it["path"] for it in data["items"]]
     assert not any("chats" in p for p in paths)
 
 

@@ -1,4 +1,13 @@
-"""brain_recent — recently modified notes via filesystem walk (D6a)."""
+"""brain_recent — recently modified vault items via filesystem walk (D6a).
+
+ToolResult.data shape (Plan 17 Task 16 aligned the field name with the
+multi-source semantics introduced by Plan 14 Task 11):
+
+    {
+        "items": [{"path": str, "modified_at": ISO-8601}, ...],
+        "limit_used": int,
+    }
+"""
 
 from __future__ import annotations
 
@@ -10,7 +19,7 @@ from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.paths import ScopeError
 
 NAME = "brain_recent"
-DESCRIPTION = "List recently modified notes across allowed domains, sorted newest first."
+DESCRIPTION = "List recently modified vault items across allowed domains, sorted newest first."
 _DEFAULT_LIMIT = 10
 _MAX_LIMIT = 50
 INPUT_SCHEMA: dict[str, Any] = {
@@ -49,9 +58,9 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     entries.sort(reverse=True)
     top = entries[:limit]
-    notes = [{"path": p, "modified_at": t} for (_, p, t) in top]
-    lines = [f"- {n['path']} ({n['modified_at']})" for n in notes] or ["(no recent notes)"]
-    return ToolResult(text="\n".join(lines), data={"notes": notes, "limit_used": limit})
+    items = [{"path": p, "modified_at": t} for (_, p, t) in top]
+    lines = [f"- {it['path']} ({it['modified_at']})" for it in items] or ["(no recent items)"]
+    return ToolResult(text="\n".join(lines), data={"items": items, "limit_used": limit})
 
 
 # Auto-register at import time.

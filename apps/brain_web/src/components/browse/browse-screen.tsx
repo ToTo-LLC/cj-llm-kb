@@ -231,25 +231,23 @@ export function BrowseScreen({
             // request below the schema cap.
             recent({ domain: d, limit: 50 })
               .then((r) => {
-                // Plan 16 Task 11: ``brain_recent`` historically emitted
-                // ``data.notes`` (``{path, modified_at}``) while the
-                // typed FE wrapper expects ``data.items``
-                // (``RecentEntry``). Until ``brain_recent`` is updated to
-                // emit ``items`` directly (deferred), accept either —
-                // ``notes`` rows get adapted into ``RecentEntry`` shape
-                // here. ``slugOf`` + ``domainOf`` reconstruct the
-                // missing ``title`` + ``domain`` fields from the path.
-                const data = r.data as
-                  | { items?: RecentEntry[]; notes?: Array<{ path: string; modified_at: string }> }
-                  | undefined;
-                const items: RecentEntry[] = data?.items
-                  ? data.items
-                  : (data?.notes ?? []).map((n) => ({
-                      path: n.path,
-                      title: slugOf(n.path),
-                      modified: n.modified_at,
-                      domain: domainOf(n.path),
-                    }));
+                // Plan 17 Task 16: ``brain_recent`` emits ``data.items``
+                // directly (Plan 14 Task 11 multi-source semantics).
+                // Rows arrive as ``{path, modified_at}`` so we reconstruct
+                // the ``title`` + ``domain`` fields from the path to
+                // satisfy ``RecentEntry``.
+                const rows = r.data?.items ?? [];
+                const items: RecentEntry[] = rows.map((row) => {
+                  const raw = row as Partial<RecentEntry> & {
+                    modified_at?: string;
+                  };
+                  return {
+                    path: raw.path ?? "",
+                    title: raw.title ?? slugOf(raw.path ?? ""),
+                    modified: raw.modified ?? raw.modified_at ?? "",
+                    domain: raw.domain ?? domainOf(raw.path ?? ""),
+                  };
+                });
                 return { domain: d, items };
               })
               .catch(() => ({
