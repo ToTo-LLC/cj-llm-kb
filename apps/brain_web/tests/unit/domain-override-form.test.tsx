@@ -163,14 +163,9 @@ describe("DomainOverrideForm — LLM field routes to setOverrideField", () => {
     const user = userEvent.setup();
     setOverrideFieldMock.mockResolvedValue(undefined);
 
-    const { container } = renderForm({ temperature: null });
+    renderForm({ temperature: null });
 
-    // Temperature and max_output_tokens inputs have no accessible label
-    // (they use aria-describedby for the hint only). Select by id attribute.
-    const input = container.querySelector(
-      `#override-${TEST_SLUG}-temperature`,
-    ) as HTMLInputElement;
-    expect(input).not.toBeNull();
+    const input = screen.getByRole("textbox", { name: /temperature/i });
 
     await user.click(input);
     await user.type(input, "0.7");
@@ -191,12 +186,9 @@ describe("DomainOverrideForm — LLM field routes to setOverrideField", () => {
     const user = userEvent.setup();
     setOverrideFieldMock.mockResolvedValue(undefined);
 
-    const { container } = renderForm({ max_output_tokens: null });
+    renderForm({ max_output_tokens: null });
 
-    const input = container.querySelector(
-      `#override-${TEST_SLUG}-max-output-tokens`,
-    ) as HTMLInputElement;
-    expect(input).not.toBeNull();
+    const input = screen.getByRole("textbox", { name: /max output tokens/i });
 
     await user.click(input);
     await user.type(input, "4096");

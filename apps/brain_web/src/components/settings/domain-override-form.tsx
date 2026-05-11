@@ -128,30 +128,24 @@ export function DomainOverrideForm({
   const tempValid = isValidTemperature(temperature);
   const maxTokensValid = isValidMaxTokens(maxTokens);
 
-  // The four LLM override fields are owned by domain-overrides-store;
-  // autonomous_mode is intentionally excluded from DomainOverrideEntry
-  // (Plan 16 / store design note) and must write via configSet directly.
-  const STORE_FIELDS = new Set<string>([
-    "classify_model",
-    "default_model",
-    "temperature",
-    "max_output_tokens",
-  ]);
-
   const saveField = async (
     field: keyof DomainOverrideValues,
     value: string | number | boolean | null,
   ) => {
     try {
-      if (STORE_FIELDS.has(field)) {
+      if (field === "autonomous_mode") {
+        // autonomous_mode is intentionally excluded from DomainOverrideEntry
+        // (Plan 16 store design note): write via configSet directly.
+        await configSet({ key: `domain_overrides.${slug}.${field}`, value });
+      } else {
+        // All other fields (and any future additions) route through the store's
+        // optimistic-update + BroadcastChannel path. New DomainOverrideValues
+        // fields default here safely — no Set maintenance required.
         await useDomainOverridesStore.getState().setOverrideField(
           slug,
           field as DomainOverrideField,
           value as string | number | null,
         );
-      } else {
-        // autonomous_mode — not in DomainOverrideEntry; write via configSet directly.
-        await configSet({ key: `domain_overrides.${slug}.${field}`, value });
       }
       pushToast({
         lead: value === null ? "Reset to global." : "Override saved.",
