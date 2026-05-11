@@ -146,6 +146,7 @@ export const useInboxStore = create<InboxState>((set, get) => ({
         source: it.source,
         title: (it.title as string) ?? inferTitle(it.source), // title not emitted by backend — Task 25 sweep
         type: (it.type as IngestType) ?? inferType(it.source), // type not emitted by backend — Task 25 sweep
+        // Backend emits status as `string`; cast narrows to the IngestStatus literal union.
         status: (it.status as IngestStatus) ?? "done",
         domain: it.domain ?? null,
         progress:
@@ -156,6 +157,9 @@ export const useInboxStore = create<InboxState>((set, get) => ({
               : 0,
         at: it.classified_at,
         error: it.error,
+        // Backend always emits cost_usd (0.0 for cached / zero-token rows). Renders
+        // as $0.000 in <SourceRow>; future UX pass may want to suppress the badge
+        // when cost === 0 specifically. Plan 19 candidate.
         cost: it.cost_usd,
       }),
     );
