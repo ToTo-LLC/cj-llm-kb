@@ -100,11 +100,11 @@ def test_watcher_chained_callback_clears_cache_end_to_end(
 ) -> None:
     """End-to-end: a config-file change triggers ``_reset_ctx_cache``.
 
-    Mirrors the chained callback the production ``__main__._run`` wires
-    up (``invalidate_cache_for(...)`` then ``_reset_ctx_cache()``). We
-    set up the watcher pointing at a real config path, warm
-    ``_cached_ctx`` with a sentinel, write the config to trigger the
-    debounce timer, and assert the cache cleared.
+    Calls the same ``_on_config_change`` callback the production
+    ``__main__._run`` wires into the watcher. We set up the watcher
+    pointing at a real config path, warm ``_cached_ctx`` with a
+    sentinel, write the config to trigger the debounce timer, and
+    assert the cache cleared.
     """
     config_path = seeded_vault / ".brain" / "config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
