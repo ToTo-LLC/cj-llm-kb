@@ -509,14 +509,26 @@ grep -rn "without validate_assignment" packages/brain_core/tests/
 grep -rn "NOT enable validate_assignment" packages/brain_core/tests/
 ```
 
-The docstring at
+**T4 execution-time re-verification (2026-05-11, post-T3.11):** all
+four greps still return zero matches. The docstring at
 `packages/brain_core/tests/tools/test_config_set_persists.py:445`
 correctly describes `validate_assignment=True` as enabled and
 references Plan 16 T36's `@model_validator(mode="after")` no-rollback
-quirk. Verification will be re-run at T4 execution time per the
-task description; if state has shifted, the close verdict adapts.
+quirk. Current line: `445` (unchanged from plan-write; the docstring
+spans lines 439-453 inside `test_active_domain_must_be_in_domains`).
 
-**Expected close verdict:** ALREADY-DONE (Plan 17 T10 precedent).
+Quoted excerpt (the relevant portion of the docstring):
+```
+Plan 16 Task 36 enabled ``validate_assignment=True``
+on ``Config`` (so per-field validators DO fire on assignment), but
+``_check_active_domain_in_domains`` is a ``@model_validator(mode=
+"after")`` — and a Pydantic v2 cross-field validator failure does
+NOT roll back the triggering field mutation.
+```
+
+**Close verdict:** **ALREADY-DONE** (Plan 17 T10 precedent — audits
+closing as already-done are valid outcomes when the premise has
+shifted).
 
 ## Plan 19 candidate scope (placeholder)
 
