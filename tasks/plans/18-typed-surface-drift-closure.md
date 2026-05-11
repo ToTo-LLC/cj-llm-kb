@@ -414,15 +414,81 @@ tasks/
 
 ## T2 audit findings
 
-To be filled in at T2 execution. Expected format:
+Audited 2026-05-11 against backend handlers under
+`packages/brain_core/src/brain_core/tools/`. One row per exported
+wrapper in `tools.ts` that declares a non-opaque `data` shape (i.e.,
+typed beyond `Record<string, unknown>`). Wrappers that consume
+`Record<string, unknown>` opaque payloads are excluded by design — see
+footnote.
+
+Verdict legend: **OK** — TS and backend agree exactly on key set +
+types; **MINOR** — TS uses optional fields (`?:`) or an
+`[extra: string]: unknown` index signature that absorbs the
+discrepancy and runtime reads degrade gracefully; **DRIFT** — TS
+declares required fields the backend does not emit (the T1 class —
+silently `undefined` at runtime) OR backend emits keys not declared in
+TS AND TS has no index-sig escape hatch (TS callers can't read those
+fields without an `as`-cast). T3 fix candidates.
 
 | TS interface / inline shape | Backend tool | Verdict | Notes |
 |---|---|---|---|
-| (filled in at T2) | | | |
+| inline @ `listDomains()` (`tools.ts:87-98`) | `brain_list_domains` (`tools/list_domains.py:108-132`) | MINOR | TS marks `entries?` and `active_domain?` optional; backend always emits both. Permissive TS → safe runtime. |
+| inline @ `getIndex()` (`tools.ts:101-104`) | `brain_get_index` (`tools/get_index.py:25-45`) | **DRIFT** | TS declares `{path, content}`; backend emits `{domain, frontmatter, body}`. **Zero overlap on keys.** Both TS-required fields silently `undefined`; backend's `domain/frontmatter/body` invisible to TS. No active consumer (function unused outside `tools.ts`). |
+| inline @ `readNote()` (`tools.ts:107-115`) | `brain_read_note` (`tools/read_note.py:25-35`) | OK | Both sides: `{path, frontmatter, body}`. |
+| `SearchHit` + inline @ `search()` (`tools.ts:36-41, 123-126`) | `brain_search` (`tools/search.py:26-55`) | OK | Both sides: `{hits: SearchHit[], top_k_used}`; hit shape `{path, title, snippet, score}` exact agreement. |
+| `RecentEntry` + inline @ `recent()` (`tools.ts:55-58, 129-132`) | `brain_recent` (`tools/recent.py:34-63`) | **DRIFT** | T1 narrowed `RecentEntry` to `{path, modified_at}` correctly. **Outer-shape extra remains:** backend emits `{items, limit_used}`; TS declares `{items: RecentEntry[]}` with no index sig → `limit_used` invisible to TS. Practical severity nil (no consumer reads `limit_used`), but classification-strict DRIFT (extra-in-backend, no escape). |
+| `ChatThreadEntry` + inline @ `listThreads()` (`tools.ts:137-150`) | `brain_list_threads` (`tools/list_threads.py:67-138`) | OK | Both sides: `{threads: [{thread_id, path, domain, mode, turns, cost_usd, updated_at}]}`. |
+| inline @ `exportThread()` (`tools.ts:155-174`) | `brain_export_thread` (`tools/export_thread.py:50-76`) | OK | Both sides: `{thread_id, path, domain, markdown, filename, byte_length}`. |
+| inline @ `getBrainMd()` (`tools.ts:177-181`) | `brain_get_brain_md` (`tools/get_brain_md.py:20-28`) | **DRIFT** | TS declares `{path, content}`; backend emits `{exists, body}`. **Zero overlap on keys.** Both TS-required fields silently `undefined`; backend's `exists/body` invisible to TS. No active consumer in `apps/brain_web/src/`. |
+| inline @ `ingest()` (`tools.ts:185-202`) | `brain_ingest` (`tools/ingest.py:163-217`) | **DRIFT** | TS declares `{patch_id: string\|null, applied: boolean, domain: string\|null, [extra]}`. Three backend branches: error `{status, errors, note_path}`; applied `{status: "applied", note_path}`; pending `{status: "pending", patch_id, target_path}`. **No branch emits `applied` (boolean) or `domain`.** TS-required `applied`/`domain` silently `undefined`; `patch_id` only present in pending branch. Index sig absorbs backend extras. |
+| inline @ `classify()` (`tools.ts:206-219`) | `brain_classify` (`tools/classify.py:123-143`) | MINOR | TS `{domain, confidence, [extra]}`; backend `{domain, confidence, source_type, needs_user_pick}` (happy) or `{domain, confidence, reason}` (scope-filter). Extras absorbed by TS index sig. |
+| inline @ `bulkImport()` (`tools.ts:222-237`) | `brain_bulk_import` (`tools/bulk_import.py:158-241`) | **DRIFT** | TS declares `{plan: Array<...>, applied: boolean, [extra]}`. Backend branches emit `{status, reason, file_count}` (refused); `{status, file_count, skipped_count, items}` (planned, uses `items` NOT `plan`); `{status, applied: string[], quarantined, duplicate, failed}` (applied, uses `applied: string[]` NOT `applied: boolean`). **TS-required `plan` never emitted; `applied` type mismatch (`boolean` vs `string[]`).** Consumer at `components/bulk/step-pick-folder.tsx:138` already casts away TS shape and reads `data.items` raw, confirming the drift in practice. |
+| inline @ `proposeNote()` (`tools.ts:242-250`) | `brain_propose_note` (`tools/propose_note.py:92-99`) | **DRIFT** | TS `{patch_id, target_path}` (no index sig); backend `{status, patch_id, target_path}`. Backend-only `status` invisible to TS callers. TS-required fields all present in backend; severity informational only. |
+| `PendingPatch` + inline @ `listPendingPatches()` (`tools.ts:60-66, 253-256`) | `brain_list_pending_patches` (`tools/list_pending_patches.py:35-55`) | **DRIFT** | `PendingPatch` shape declares `{patch_id, target_path, reason, created_at, [extra]}` — index sig absorbs backend's `tool`/`mode` extras on the row level. **Outer shape `{patches: PendingPatch[]}` has no index sig; backend emits `{count, patches}` — `count` invisible to TS callers.** Severity informational only. |
+| inline @ `getPendingPatch()` (`tools.ts:265-276`) | `brain_get_pending_patch` (`tools/get_pending_patch.py:49-67`) | OK | Both sides: `{envelope: Record<...>, patchset: Record<...>}`. |
+| inline @ `applyPatch()` (`tools.ts:279-294`) | `brain_apply_patch` (`tools/apply_patch.py:114-122`) | MINOR | TS `{patch_id, undo_id, applied_files, [extra]}`; backend `{status, patch_id, undo_id, applied_files}`. Extra `status` absorbed by TS index sig. |
+| inline @ `rejectPatch()` (`tools.ts:297-301`) | `brain_reject_patch` (`tools/reject_patch.py:44-51`) | **DRIFT** | TS declares `{patch_id, rejected: boolean}` (no index sig); backend emits `{status: "rejected", patch_id, reason}`. **TS-required `rejected` (boolean) NEVER emitted by backend — silently `undefined`.** Backend-only `status` and `reason` invisible to TS. The TS `rejected: boolean` shape appears to be plan-author drift from an earlier sketch that never landed. |
+| inline @ `undoLast()` (`tools.ts:304-317`) | `brain_undo_last` (`tools/undo_last.py:59-73`) | **DRIFT** | TS declares `{undo_id, reverted_files, [extra]}`. Backend branches: `{status: "nothing_to_undo"}` (no undo_id, no reverted_files) and `{status: "reverted", undo_id}` (no reverted_files). **TS-required `reverted_files` NEVER emitted by backend** — silently `undefined`. `undo_id` is present only in the reverted branch (would also be undefined on nothing_to_undo). Index sig absorbs backend `status` extra. |
+| inline @ `costReport()` (`tools.ts:322-333`) | `brain_cost_report` (`tools/cost_report.py:28-50`) | **DRIFT** | TS declares `{total_usd, by_operation, [extra]}`; backend emits `{today_usd, month_usd, by_domain, by_mode}`. **TS-required `total_usd` and `by_operation` NEVER emitted by backend** — both silently `undefined`. Backend's actual cost shape (`today_usd/month_usd/by_domain/by_mode`) absorbed by TS index sig but invisible to type-aware callers. Plan-author drift from an earlier cost-report sketch. |
+| inline @ `lint()` (`tools.ts:336-347`) | `brain_lint` (`tools/lint.py:29-37`) | **DRIFT** | TS declares `{findings: Array<...>, [extra]}`; backend (stub, "not yet implemented") emits `{status: "not_implemented", message}`. **TS-required `findings` never emitted by stub.** Will become OK when Plan 09 lands the real lint engine and emits `findings`. Plan 09 implementers must align to the TS shape (or T3 narrows TS to current reality). |
+| inline @ `configGet()` (`tools.ts:350-353`) | `brain_config_get` (`tools/config_get.py:81-84`) | OK | Both sides: `{key, value}`. |
+| `RepairConfigStep` + `RepairConfigData` + inline @ `repairConfig()` (`tools.ts:370-379, 387-391, 400-401`) | `brain_repair_config` (`tools/repair_config.py:261-268`) | OK | Both sides: `{steps: RepairConfigStep[], repair_changes_pending, repaired_config}`; step shape `{step, status, message}` exact agreement. |
+| inline @ `repairConfigApply()` (`tools.ts:411-419`) | `brain_repair_config_apply` (`tools/repair_config_apply.py:146-153`) | OK | Both sides: `{status, path, config_version}`. |
+| inline @ `configSet()` (`tools.ts:422-426`) | `brain_config_set` (`tools/config_set.py:832-845, 901-910`) | **DRIFT** | TS declares `{key, value}` (no index sig). Backend branches emit `{status, key, value, persisted, note}` (always). **Backend-only `status`/`persisted`/`note` invisible to TS callers.** TS-required `key`/`value` present. Severity informational only. Also affects every `configSet`-routed wrapper (`setDomainOverride`, `setPrivacyRailed`, `setDomainBudget`, `setDomainRateLimit`, `setDomainAutonomy`, `setActiveDomain`, `setCrossDomainWarningAcknowledged`) which all return `Promise<ToolResponse<{key, value}>>` — same drift, single root in `configSet`. |
+| `RecentIngestEntry` + inline @ `recentIngests()` (`tools.ts:68-74, 644-647`) | `brain_recent_ingests` (`tools/recent_ingests.py:41-90`) | **DRIFT** | TS declares `{items: RecentIngestEntry[]}` and `RecentIngestEntry = {source, domain, status, at, [extra]}`. Backend emits `{ingests: [...]}` (NOT `items`) with row shape `{source, source_type, domain, status, classified_at, cost_usd, ...}` (NOT `at`). **Both TS-required keys (`items` outer, `at` inner) silently `undefined`.** Consumer `lib/state/inbox-store.ts:139` reads `data.items` AND `it.at` — both fall through to the empty-array / undefined fallback, producing silently-empty Inbox rows. **Highest-impact DRIFT in this audit** (same shape as the T1 doc-picker bug; live consumer affected). |
+| inline @ `createDomain()` (`tools.ts:650-667`) | `brain_create_domain` (`tools/create_domain.py:140-150`) | **DRIFT** | TS declares `{slug, name, accent_color, [extra]}` at top level. Backend emits `{status, domain: {slug, name, accent_color}, note}` — **TS-required `slug/name/accent_color` are NESTED under `domain` in backend**, not at top level. All three silently `undefined`. Index sig absorbs `status`/`domain`/`note` blindly. |
+| inline @ `renameDomain()` (`tools.ts:670-687`) | `brain_rename_domain` (`tools/rename_domain.py:287-300`) | MINOR | TS `{from, to, files_updated, [extra]}`; backend `{status, from, to, files_updated, wikilinks_rewritten, undo_id}`. Extras absorbed by TS index sig. |
+| inline @ `budgetOverride()` (`tools.ts:690-706`) | `brain_budget_override` (`tools/budget_override.py:79-93`) | **DRIFT** | TS declares `{amount_usd, duration_hours, expires_at, [extra]}`. Backend emits `{status, override_until, override_delta_usd, note}`. **All three TS-required fields (`amount_usd/duration_hours/expires_at`) NEVER emitted by backend** — silently `undefined`. Backend's `override_until`/`override_delta_usd` semantically equivalent but renamed; index sig absorbs them for `as`-cast reads. |
+| inline @ `forkThread()` (`tools.ts:716-723`) | `brain_fork_thread` (`tools/fork_thread.py:167-170`) | OK | Both sides: `{new_thread_id}`. |
+| inline @ `brainMcpInstall()` (`tools.ts:734-755`) | `brain_mcp_install` (`tools/mcp_install.py:75-83`) | OK | Both sides: `{status, config_path, backup_path, server_name}`; TS index sig harmless (no backend extras). |
+| inline @ `brainMcpUninstall()` (`tools.ts:761-778`) | `brain_mcp_uninstall` (`tools/mcp_uninstall.py:45-61`) | OK | TS optional `backup_path?` accommodates the not_installed branch (which omits it). |
+| inline @ `brainMcpStatus()` (`tools.ts:784-807`) | `brain_mcp_status` (`tools/mcp_status.py:49-60`) | OK | Both sides: `{status, config_path, config_exists, entry_present, executable_resolves, command, server_name}`. |
+| inline @ `brainMcpSelftest()` (`tools.ts:814-839`) | `brain_mcp_selftest` (`tools/mcp_selftest.py:45-62`) | OK | Both sides: `{status, ok, config_exists, entry_present, executable_resolves, command, config_path, server_name}`. |
+| inline @ `brainSetApiKey()` (`tools.ts:848-868`) | `brain_set_api_key` (`tools/set_api_key.py:76-85`) | OK | Both sides: `{status, provider, env_key, masked, path}`. |
+| inline @ `brainPingLlm()` (`tools.ts:876-895`) | `brain_ping_llm` (`tools/ping_llm.py:47-123`) | OK | TS optional `error?` matches: backend emits `error` only on failure branches. All other keys present in every branch. |
+| `BackupEntry` + inline @ `brainBackupCreate()` (`tools.ts:899-907, 910-933`) | `brain_backup_create` (`tools/backup_create.py:47-60`) | OK | Both sides: `{status, backup_id, path, trigger, created_at, size_bytes, file_count}`. |
+| `BackupEntry` + inline @ `brainBackupList()` (`tools.ts:936-938`) | `brain_backup_list` (`tools/backup_list.py:27-45`) | OK | Both sides: `{backups: BackupEntry[]}`; `BackupEntry` shape exact agreement with backend row dict. |
+| inline @ `brainBackupRestore()` (`tools.ts:945-961`) | `brain_backup_restore` (`tools/backup_restore.py:44-62`) | OK | Both sides: `{status, backup_id, trash_path}`; TS index sig harmless. |
+| inline @ `brainDeleteDomain()` (`tools.ts:970-990`) | `brain_delete_domain` (`tools/delete_domain.py:101-113`) | OK | Both sides: `{status, slug, trash_path, files_moved, undo_id}`. |
 
-Verdict legend: **OK** — exact agreement; **MINOR** — TS optionals
-backend doesn't emit, runtime degrades gracefully; **DRIFT** — T3 fix
-candidate.
+**Summary:** 19 OK, 2 MINOR, 15 DRIFT (15 rows are T3 fix candidates).
+
+**Drift-class breakdown** (helps T3 scope each):
+- **T1-class — TS-required fields missing/wrong-typed in backend** (silently `undefined` at runtime; can break live consumers): `getIndex`, `getBrainMd`, `ingest`, `bulkImport`, `rejectPatch`, `undoLast`, `costReport`, `lint`, `recentIngests`, `createDomain`, `budgetOverride`. **11 rows.**
+- **Extra-in-backend, no TS index-sig escape hatch** (backend emits keys TS can't read without cast; harmless to current callers): `recent` (outer), `proposeNote`, `listPendingPatches` (outer), `configSet`. **4 rows.**
+
+**Live-consumer-impact heat map** (consumers in `apps/brain_web/src/` that consume drifted fields):
+- `recentIngests` — `lib/state/inbox-store.ts:139` reads `data.items` (backend emits `ingests`) AND `it.at` (backend emits `classified_at`). Silently-empty Inbox rows. **HIGH (T1-shape live bug).**
+- `bulkImport` — `components/bulk/step-pick-folder.tsx:138` already casts away the typed shape with an inline comment acknowledging the discrepancy. **LOW (consumer worked around).**
+- All other DRIFT rows: no active consumer reading the drifted field, so no current runtime bug. **LOW.**
+
+Footnote on exclusions: `tools.ts` exports 47 const declarations (`grep -E "^export const " ... | wc -l` = 47). Excluded from the audit table: `AUTONOMY_CATEGORIES` (data tuple, not a wrapper), `ALL_TOOL_NAMES` (registry tuple), and 7 `configSet`-routed wrappers (`setDomainOverride`, `setPrivacyRailed`, `setDomainBudget`, `setDomainRateLimit`, `setDomainAutonomy`, `setActiveDomain`, `setCrossDomainWarningAcknowledged`) — they all return `Promise<ToolResponse<{key, value}>>` and inherit `configSet`'s DRIFT row; counting them separately would multiply the same finding 7×. That leaves 47 − 2 − 7 = 38 wrapper rows audited; **36 distinct backend-tool rows in the table** (some wrappers share a row when they consume the same handler, e.g., `BackupEntry` used by both `brainBackupCreate` and `brainBackupList` — listed separately because each has a distinct top-level wrapper signature).
+
+Spot-check pass (4 rows re-derived from backend after writing verdicts):
+- `recentIngests` row → re-read `tools/recent_ingests.py:65-90`: confirms `data={"ingests": ingests}` with row keys `source, source_type, domain, status, classified_at, cost_usd`. TS declares `{items, ...}` and `at`. Confirmed **DRIFT**.
+- `costReport` row → re-read `tools/cost_report.py:39-50`: confirms backend `{today_usd, month_usd, by_domain, by_mode}`. TS `{total_usd, by_operation}`. Confirmed **DRIFT**.
+- `getPendingPatch` row → re-read `tools/get_pending_patch.py:61-67`: confirms `{envelope, patchset}`. TS matches. Confirmed **OK**.
+- `forkThread` row → re-read `tools/fork_thread.py:167-170`: confirms `{new_thread_id}`. TS matches. Confirmed **OK**.
 
 ## T3 outcome
 
