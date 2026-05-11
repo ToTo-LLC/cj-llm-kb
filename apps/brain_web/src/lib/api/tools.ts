@@ -222,25 +222,40 @@ export const getBrainMd = (): Promise<
 
 // ---------- ingest tools (3) ----------
 
+/**
+ * Discriminated by `status`. Three branches, mirroring the backend handler
+ * at ``packages/brain_core/src/brain_core/tools/ingest.py:161-217``:
+ *  - ``"applied"``: vault written autonomously; ``note_path`` set.
+ *  - ``"pending"``: patch staged for approval; ``patch_id`` + ``target_path`` set.
+ *  - ``"quarantined" | "failed" | "skipped_duplicate"``: error/skip branch;
+ *    ``errors`` list set; ``note_path`` may be present for partial extraction.
+ *
+ * Plan 18 T3.5: TS interface narrowed from the pre-fix ``{patch_id, applied,
+ * domain, [extra]}`` shape (which never matched any backend branch — ``applied``
+ * and ``domain`` were never emitted, ``patch_id`` was only in the pending
+ * branch). Backend is source of truth.
+ *
+ * NOTE: there is an unrelated ``IngestStatus`` exported from
+ * ``lib/state/inbox-store.ts`` (a 7-value UI-internal lifecycle enum). The
+ * backend-status union here is kept inline in the variants to avoid the
+ * name collision.
+ */
+export type IngestResultData =
+  | { status: "applied"; note_path: string }
+  | { status: "pending"; patch_id: string; target_path: string }
+  | {
+      status: "quarantined" | "failed" | "skipped_duplicate";
+      errors: string[];
+      note_path: string | null;
+    };
+
 /** Ingest a URL, file path, or raw text. Default stages a patch. */
 export const ingest = (args: {
   source: string;
   autonomous?: boolean;
   domain_override?: string;
-}): Promise<
-  ToolResponse<{
-    patch_id: string | null;
-    applied: boolean;
-    domain: string | null;
-    [extra: string]: unknown;
-  }>
-> =>
-  callTool<{
-    patch_id: string | null;
-    applied: boolean;
-    domain: string | null;
-    [extra: string]: unknown;
-  }>("brain_ingest", args);
+}): Promise<ToolResponse<IngestResultData>> =>
+  callTool<IngestResultData>("brain_ingest", args);
 
 /** Classify a piece of content. Returns a domain + confidence score. */
 export const classify = (args: {
