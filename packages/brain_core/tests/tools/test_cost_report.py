@@ -64,3 +64,24 @@ async def test_returns_fixed_summary(tmp_path: Path) -> None:
     assert result.data["month_usd"] == 1.2345
     assert result.data["by_domain"] == {"research": 0.1234}
     assert "research=$0.1234" in result.text
+
+
+async def test_data_keys_pin(tmp_path: Path) -> None:
+    """Plan 18 T3.8 drift pin: backend handler must emit exactly these
+    keys in ``ToolResult.data`` (and the TS ``costReport()`` interface at
+    ``apps/brain_web/src/lib/api/tools.ts`` must mirror them). Single
+    branch — no alternate-shape error path.
+    """
+    ledger = _StubLedger(
+        summary_value=CostSummary(
+            today_usd=0.0,
+            month_usd=0.0,
+            by_domain={},
+            by_mode={},
+        )
+    )
+
+    result = await handle({}, _mk_ctx(tmp_path, ledger))
+
+    assert result.data is not None
+    assert set(result.data.keys()) == {"today_usd", "month_usd", "by_domain", "by_mode"}

@@ -403,18 +403,36 @@ export const undoLast = (
 
 // ---------- maintenance tools (4) ----------
 
-/** Summarise spend-to-date. Cumulative USD + per-operation break-down. */
+/**
+ * Summarise spend-to-date.
+ *
+ * Mirrors the `brain_cost_report` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/cost_report.py`); single
+ * branch — always emits `{today_usd, month_usd, by_domain, by_mode}`.
+ * `by_domain` and `by_mode` are dicts keyed by domain slug / chat mode
+ * string respectively (the "" key in `by_mode` captures NULL-mode
+ * rows — ingest / legacy — and the frontend renders that as "Other"
+ * per the backend's Plan 07 Task 3 comment).
+ *
+ * Plan 18 T3.8 narrowed this TS interface from the pre-fix
+ * `{total_usd, by_operation, [extra]}` shape (which never matched
+ * backend — both TS-required fields were plan-author drift from an
+ * earlier sketch that never landed). No active consumer at the time
+ * of the narrow.
+ */
 export const costReport = (): Promise<
   ToolResponse<{
-    total_usd: number;
-    by_operation: Record<string, number>;
-    [extra: string]: unknown;
+    today_usd: number;
+    month_usd: number;
+    by_domain: Record<string, number>;
+    by_mode: Record<string, number>;
   }>
 > =>
   callTool<{
-    total_usd: number;
-    by_operation: Record<string, number>;
-    [extra: string]: unknown;
+    today_usd: number;
+    month_usd: number;
+    by_domain: Record<string, number>;
+    by_mode: Record<string, number>;
   }>("brain_cost_report");
 
 /**
