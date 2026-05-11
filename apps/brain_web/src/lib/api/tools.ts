@@ -65,12 +65,25 @@ export interface PendingPatch {
   [extra: string]: unknown; // envelope may carry extra tool-specific fields
 }
 
+/**
+ * Mirrors a row in `brain_recent_ingests`'s `ToolResult.data.ingests`
+ * (see `packages/brain_core/src/brain_core/tools/recent_ingests.py`).
+ * Backend is source of truth; the Plan 18 T3.1 alignment narrowed `at`
+ * → `classified_at` and `items` → `ingests` (outer-shape rename below)
+ * and added explicit optional fields for the backend's other emitted
+ * keys (`source_type`, `cost_usd`, `patch_id`, `error`) so type-aware
+ * callers can read them without `as`-casts.
+ */
 export interface RecentIngestEntry {
   source: string;
+  source_type: string; // backend always emits (column from ingest_history)
   domain: string | null;
   status: string;
-  at: string;
-  [extra: string]: unknown;
+  classified_at: string; // ISO-8601 timestamp
+  cost_usd: number; // backend always emits (defaults to 0.0)
+  patch_id?: string; // backend conditionally emits (only when non-null)
+  error?: string; // backend conditionally emits (only when non-null)
+  [extra: string]: unknown; // keep escape hatch for future fields
 }
 
 // ---------- read tools (6) ----------
@@ -640,11 +653,18 @@ export const setCrossDomainWarningAcknowledged = (
 
 // ---------- Plan 07 Task 4 additions (4) ----------
 
-/** Recently ingested sources (feeds the inbox). */
+/**
+ * List recent ingest runs. Mirrors the `brain_recent_ingests` backend
+ * shape: `{ingests: RecentIngestEntry[]}`.
+ *
+ * Plan 18 T3.1: outer key narrowed from `items` to `ingests` to match
+ * the backend handler (see `recent_ingests.py:48-90`). The doc-picker
+ * sibling T1 fix used the same backend-is-source-of-truth direction.
+ */
 export const recentIngests = (
   args: { limit?: number } = {},
-): Promise<ToolResponse<{ items: RecentIngestEntry[] }>> =>
-  callTool<{ items: RecentIngestEntry[] }>("brain_recent_ingests", args);
+): Promise<ToolResponse<{ ingests: RecentIngestEntry[] }>> =>
+  callTool<{ ingests: RecentIngestEntry[] }>("brain_recent_ingests", args);
 
 /** Create a new domain with a slug, display name, and accent colour. */
 export const createDomain = (args: {

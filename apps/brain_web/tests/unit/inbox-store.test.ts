@@ -57,18 +57,22 @@ describe("useInboxStore", () => {
     recentIngestsMock.mockResolvedValue({
       text: "",
       data: {
-        items: [
+        ingests: [
           {
             source: "https://example.com/a",
+            source_type: "url",
             domain: "research",
             status: "done",
-            at: "2026-04-21T10:00:00Z",
+            classified_at: "2026-04-21T10:00:00Z",
+            cost_usd: 0,
           },
           {
             source: "https://example.com/b",
+            source_type: "url",
             domain: "work",
             status: "done",
-            at: "2026-04-21T11:00:00Z",
+            classified_at: "2026-04-21T11:00:00Z",
+            cost_usd: 0,
           },
         ],
       },
@@ -78,6 +82,34 @@ describe("useInboxStore", () => {
     expect(state.sources).toHaveLength(2);
     expect(state.sources[0].source).toBe("https://example.com/a");
     expect(state.sources[1].domain).toBe("work");
+  });
+
+  test("loadRecent() reads backend `ingests`/`classified_at`/`cost_usd` (Plan 18 T3.1 regression)", async () => {
+    // Mock the REAL backend shape — `ingests` not `items`, `classified_at` not `at`,
+    // `cost_usd` not `cost`. Plan 18 T3.1 narrowed the TS interface; this regression
+    // would fail RED against pre-fix code (consumer reads `data.items` = undefined →
+    // empty sources, and `it.cost` = undefined → silent zero cost).
+    recentIngestsMock.mockResolvedValue({
+      text: "",
+      data: {
+        ingests: [
+          {
+            source: "https://example.com/a",
+            source_type: "url",
+            domain: "research",
+            status: "done",
+            classified_at: "2026-04-21T10:00:00Z",
+            cost_usd: 0.0123,
+          },
+        ],
+      },
+    });
+    await useInboxStore.getState().loadRecent();
+    const state = useInboxStore.getState();
+    expect(state.sources).toHaveLength(1);
+    expect(state.sources[0].source).toBe("https://example.com/a");
+    expect(state.sources[0].at).toBe("2026-04-21T10:00:00Z");
+    expect(state.sources[0].cost).toBe(0.0123);
   });
 
   test("filter by tab returns the matching subset", () => {

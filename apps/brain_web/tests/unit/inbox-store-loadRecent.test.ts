@@ -44,18 +44,24 @@ function resetStore() {
   recentIngestsMock.mockReset();
 }
 
-/** Server-shape row as returned by ``brain_recent_ingests``. */
+/** Server-shape row as returned by ``brain_recent_ingests``. Mirrors
+ *  the real backend dict (see ``recent_ingests.py:65-79``): ``ingests``
+ *  outer key, ``classified_at`` / ``cost_usd`` / ``source_type`` inner
+ *  keys. Plan 18 T3.1 brought this in line with the backend after the
+ *  T2 drift audit. */
 function mkServerItem(
   patch_id: string,
   source: string,
-  at: string = "2026-04-21T10:00:00Z",
+  classified_at: string = "2026-04-21T10:00:00Z",
 ) {
   return {
     patch_id,
     source,
+    source_type: "url",
     domain: "research",
     status: "done",
-    at,
+    classified_at,
+    cost_usd: 0,
   };
 }
 
@@ -78,7 +84,7 @@ describe("useInboxStore.loadRecent — Plan 16 Task 1 id-keyed merge", () => {
     recentIngestsMock.mockResolvedValue({
       text: "",
       data: {
-        items: [
+        ingests: [
           mkServerItem("bar-id", "https://example.com/bar"),
           mkServerItem("baz-id", "https://example.com/baz"),
         ],
@@ -117,13 +123,15 @@ describe("useInboxStore.loadRecent — Plan 16 Task 1 id-keyed merge", () => {
     recentIngestsMock.mockResolvedValue({
       text: "",
       data: {
-        items: [
+        ingests: [
           {
             patch_id: "shared-id",
             source: "shared.md",
+            source_type: "file",
             domain: "research",
             status: "done",
-            at: "2026-04-21T11:00:00Z",
+            classified_at: "2026-04-21T11:00:00Z",
+            cost_usd: 0,
             title: "shared.md (server)",
             progress: 100,
           },
@@ -201,7 +209,7 @@ describe("useInboxStore.loadRecent — Plan 16 Task 1 id-keyed merge", () => {
     recentIngestsMock.mockResolvedValue({
       text: "",
       data: {
-        items: [mkServerItem("server-row", "https://example.com/server")],
+        ingests: [mkServerItem("server-row", "https://example.com/server")],
       },
     });
 
@@ -223,7 +231,7 @@ describe("useInboxStore.loadRecent — Plan 16 Task 1 id-keyed merge", () => {
     recentIngestsMock.mockResolvedValue({
       text: "",
       data: {
-        items: [
+        ingests: [
           mkServerItem("a", "https://example.com/a"),
           mkServerItem("b", "https://example.com/b"),
         ],

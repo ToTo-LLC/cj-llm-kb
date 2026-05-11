@@ -127,21 +127,25 @@ export const useInboxStore = create<InboxState>((set, get) => ({
 
   loadRecent: async () => {
     const res = await recentIngests({});
-    const data = (res.data ?? { items: [] }) as {
-      items: Array<{
+    const data = (res.data ?? { ingests: [] }) as {
+      ingests: Array<{
         source: string;
+        source_type: string;
         domain: string | null;
         status: string;
-        at: string;
+        classified_at: string;
+        cost_usd: number;
+        patch_id?: string;
+        error?: string;
         [extra: string]: unknown;
       }>;
     };
-    const items = (data.items ?? []).map(
+    const items = (data.ingests ?? []).map(
       (it, idx): IngestSource => ({
-        id: (it.patch_id as string) ?? `ingest-${it.at}-${idx}`,
+        id: it.patch_id ?? `ingest-${it.classified_at}-${idx}`,
         source: it.source,
-        title: (it.title as string) ?? inferTitle(it.source),
-        type: (it.type as IngestType) ?? inferType(it.source),
+        title: (it.title as string) ?? inferTitle(it.source), // title not emitted by backend — Task 25 sweep
+        type: (it.type as IngestType) ?? inferType(it.source), // type not emitted by backend — Task 25 sweep
         status: (it.status as IngestStatus) ?? "done",
         domain: it.domain ?? null,
         progress:
@@ -150,9 +154,9 @@ export const useInboxStore = create<InboxState>((set, get) => ({
             : it.status === "done"
               ? 100
               : 0,
-        at: it.at,
-        error: (it.error as string | undefined) ?? undefined,
-        cost: (it.cost as number | undefined) ?? undefined,
+        at: it.classified_at,
+        error: it.error,
+        cost: it.cost_usd,
       }),
     );
     // Plan 16 Task 1 (D1): id-keyed merge that preserves in-flight
