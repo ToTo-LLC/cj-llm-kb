@@ -471,7 +471,7 @@ fields without an `as`-cast). T3 fix candidates.
 | inline @ `brainBackupRestore()` (`tools.ts:945-961`) | `brain_backup_restore` (`tools/backup_restore.py:44-62`) | OK | Both sides: `{status, backup_id, trash_path}`; TS index sig harmless. |
 | inline @ `brainDeleteDomain()` (`tools.ts:970-990`) | `brain_delete_domain` (`tools/delete_domain.py:101-113`) | OK | Both sides: `{status, slug, trash_path, files_moved, undo_id}`. |
 
-**Summary:** 19 OK, 2 MINOR, 15 DRIFT (15 rows are T3 fix candidates).
+**Summary:** 19 OK, 4 MINOR, 15 DRIFT (15 rows are T3 fix candidates).
 
 **Drift-class breakdown** (helps T3 scope each):
 - **T1-class — TS-required fields missing/wrong-typed in backend** (silently `undefined` at runtime; can break live consumers): `getIndex`, `getBrainMd`, `ingest`, `bulkImport`, `rejectPatch`, `undoLast`, `costReport`, `lint`, `recentIngests`, `createDomain`, `budgetOverride`. **11 rows.**
@@ -482,7 +482,7 @@ fields without an `as`-cast). T3 fix candidates.
 - `bulkImport` — `components/bulk/step-pick-folder.tsx:138` already casts away the typed shape with an inline comment acknowledging the discrepancy. **LOW (consumer worked around).**
 - All other DRIFT rows: no active consumer reading the drifted field, so no current runtime bug. **LOW.**
 
-Footnote on exclusions: `tools.ts` exports 47 const declarations (`grep -E "^export const " ... | wc -l` = 47). Excluded from the audit table: `AUTONOMY_CATEGORIES` (data tuple, not a wrapper), `ALL_TOOL_NAMES` (registry tuple), and 7 `configSet`-routed wrappers (`setDomainOverride`, `setPrivacyRailed`, `setDomainBudget`, `setDomainRateLimit`, `setDomainAutonomy`, `setActiveDomain`, `setCrossDomainWarningAcknowledged`) — they all return `Promise<ToolResponse<{key, value}>>` and inherit `configSet`'s DRIFT row; counting them separately would multiply the same finding 7×. That leaves 47 − 2 − 7 = 38 wrapper rows audited; **36 distinct backend-tool rows in the table** (some wrappers share a row when they consume the same handler, e.g., `BackupEntry` used by both `brainBackupCreate` and `brainBackupList` — listed separately because each has a distinct top-level wrapper signature).
+Footnote on exclusions: `tools.ts` exports 47 const declarations (`grep -E "^export const " ... | wc -l` = 47). Excluded from the audit table: `AUTONOMY_CATEGORIES` (data tuple, not a wrapper), `ALL_TOOL_NAMES` (registry tuple), and 7 `configSet`-routed wrappers (`setDomainOverride`, `setPrivacyRailed`, `setDomainBudget`, `setDomainRateLimit`, `setDomainAutonomy`, `setActiveDomain`, `setCrossDomainWarningAcknowledged`) — they all return `Promise<ToolResponse<{key, value}>>` and inherit `configSet`'s DRIFT row; counting them separately would multiply the same finding 7×. That leaves 47 − 2 − 7 = 38 wrapper rows audited, each mapping to a distinct backend handler. (Some named TS interfaces — `BackupEntry`, `RecentEntry`, etc. — are reused by multiple wrappers; those reuses are listed in the relevant wrapper's row but don't add to the row count.)
 
 Spot-check pass (4 rows re-derived from backend after writing verdicts):
 - `recentIngests` row → re-read `tools/recent_ingests.py:65-90`: confirms `data={"ingests": ingests}` with row keys `source, source_type, domain, status, classified_at, cost_usd`. TS declares `{items, ...}` and `at`. Confirmed **DRIFT**.
