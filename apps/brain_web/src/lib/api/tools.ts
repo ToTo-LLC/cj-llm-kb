@@ -800,24 +800,33 @@ export const recentIngests = (
 ): Promise<ToolResponse<{ ingests: RecentIngestEntry[] }>> =>
   callTool<{ ingests: RecentIngestEntry[] }>("brain_recent_ingests", args);
 
-/** Create a new domain with a slug, display name, and accent colour. */
+/**
+ * Create a new domain with a slug, display name, and accent colour.
+ *
+ * Mirrors the `brain_create_domain` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/create_domain.py`). Single
+ * branch on success — invalid/existing slugs raise exceptions (not
+ * alternate-shape error branches). The new domain's fields are nested
+ * under `domain` in the backend payload; Plan 18 T3.10 narrowed this
+ * TS interface from the pre-fix top-level `{slug, name, accent_color}`
+ * shape (which never matched backend — top-level reads were all
+ * `undefined`) to the real nested shape.
+ */
 export const createDomain = (args: {
   slug: string;
   name: string;
   accent_color?: string;
 }): Promise<
   ToolResponse<{
-    slug: string;
-    name: string;
-    accent_color: string;
-    [extra: string]: unknown;
+    status: "created";
+    domain: { slug: string; name: string; accent_color: string };
+    note: string;
   }>
 > =>
   callTool<{
-    slug: string;
-    name: string;
-    accent_color: string;
-    [extra: string]: unknown;
+    status: "created";
+    domain: { slug: string; name: string; accent_color: string };
+    note: string;
   }>("brain_create_domain", args);
 
 /** Rename a domain slug. Optionally rewrites frontmatter ``domain:`` tags. */

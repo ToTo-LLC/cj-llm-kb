@@ -113,3 +113,17 @@ async def test_rejects_slug_already_in_config_domains(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError, match=r"Config\.domains"):
         await handle({"slug": "hobby", "name": "Hobby"}, ctx)
     assert not (tmp_path / "hobby").exists()
+
+
+async def test_data_keys_pin(tmp_path: Path) -> None:
+    """Plan 18 T3.10 drift pin: backend handler must emit exactly these
+    keys in ``ToolResult.data`` (and the TS ``createDomain()`` interface at
+    ``apps/brain_web/src/lib/api/tools.ts`` must mirror them, including
+    the nested ``domain`` object's shape). Single branch — invalid/existing
+    slugs raise exceptions, not alternate-shape variants.
+    """
+    result = await handle({"slug": "music", "name": "Music"}, _mk_ctx(tmp_path))
+    assert result.data is not None
+    assert set(result.data.keys()) == {"status", "domain", "note"}
+    assert set(result.data["domain"].keys()) == {"slug", "name", "accent_color"}
+    assert result.data["status"] == "created"

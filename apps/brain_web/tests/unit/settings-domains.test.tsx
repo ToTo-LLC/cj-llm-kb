@@ -61,7 +61,11 @@ beforeEach(() => {
   });
   createDomainMock.mockResolvedValue({
     text: "",
-    data: { slug: "hobby", name: "Hobby", accent_color: "#6677ee" },
+    data: {
+      status: "created",
+      domain: { slug: "hobby", name: "Hobby", accent_color: "#6677ee" },
+      note: "Slug appended to Config.domains and persisted to <vault>/.brain/config.json via save_config().",
+    },
   });
   brainDeleteDomainMock.mockResolvedValue({
     text: "deleted",
