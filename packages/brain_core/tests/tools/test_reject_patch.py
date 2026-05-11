@@ -56,3 +56,24 @@ async def test_reject_invokes_store_and_returns_metadata(tmp_path: Path) -> None
     assert result.data["status"] == "rejected"
     assert result.data["patch_id"] == "p-123"
     assert result.data["reason"] == "not needed"
+
+
+async def test_data_keys_pin(tmp_path: Path) -> None:
+    """Plan 18 T3.6 drift pin: backend handler must emit exactly these
+    keys in ``ToolResult.data`` (and the TS ``rejectPatch()`` interface at
+    ``apps/brain_web/src/lib/api/tools.ts`` must mirror them). Single
+    branch — backend has no alternate-shape error path; unknown patch_id
+    raises ``KeyError`` as an exception, not a data-shape variant.
+
+    If you change the key set here you MUST also update the TS interface
+    in the same commit, or typed consumers will silently desync from the
+    wire shape (the bug this test pins against).
+    """
+    store = _RecordingStore()
+    result = await handle(
+        {"patch_id": "p-123", "reason": "not needed"},
+        _mk_ctx(tmp_path, store),
+    )
+
+    assert result.data is not None
+    assert set(result.data.keys()) == {"status", "patch_id", "reason"}

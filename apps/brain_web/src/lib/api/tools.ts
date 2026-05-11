@@ -349,12 +349,29 @@ export const applyPatch = (args: {
     [extra: string]: unknown;
   }>("brain_apply_patch", args);
 
-/** Reject a staged patch with a human-readable reason. */
+/**
+ * Reject a staged patch with a human-readable reason.
+ *
+ * Mirrors the `brain_reject_patch` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/reject_patch.py`). Backend
+ * has a single branch — `data = {status: "rejected", patch_id, reason}` —
+ * with the `reason` being the same human-readable string the caller
+ * supplied as input (now persisted to the rejected envelope on disk).
+ * Plan 18 T3.6 narrowed this TS interface from the pre-fix
+ * `{patch_id, rejected: boolean}` shape (which never matched backend —
+ * `rejected: boolean` was plan-author drift from an earlier sketch
+ * that never landed).
+ */
 export const rejectPatch = (args: {
   patch_id: string;
   reason: string;
-}): Promise<ToolResponse<{ patch_id: string; rejected: boolean }>> =>
-  callTool<{ patch_id: string; rejected: boolean }>("brain_reject_patch", args);
+}): Promise<
+  ToolResponse<{ status: "rejected"; patch_id: string; reason: string }>
+> =>
+  callTool<{ status: "rejected"; patch_id: string; reason: string }>(
+    "brain_reject_patch",
+    args,
+  );
 
 /** Revert the most recent applied write (or a specific ``undo_id``). */
 export const undoLast = (

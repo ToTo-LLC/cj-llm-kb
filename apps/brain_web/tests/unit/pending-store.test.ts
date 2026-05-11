@@ -133,7 +133,7 @@ describe("usePendingStore", () => {
     });
     rejectPatchMock.mockResolvedValue({
       text: "",
-      data: { patch_id: "p-2", rejected: true },
+      data: { status: "rejected", patch_id: "p-2", reason: "wrong domain" },
     });
     await usePendingStore.getState().reject("p-2", "wrong domain");
     const state = usePendingStore.getState();
