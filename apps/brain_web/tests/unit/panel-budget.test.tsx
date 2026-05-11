@@ -205,7 +205,7 @@ describe("PanelBudget — Save button", () => {
 });
 
 describe("PanelBudget — invalid input", () => {
-  test("shows a danger toast and does NOT call setDailyCap when validation fails (empty → 0 bypasses, negative triggers)", async () => {
+  test("shows a danger toast without calling setDailyCap for a negative value (store not yet loaded)", async () => {
     const user = userEvent.setup();
     mockBudgetNotLoaded();
 
