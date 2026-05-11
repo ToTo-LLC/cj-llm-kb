@@ -6,7 +6,7 @@ Settable keys split into two groups:
 
 * **Persisted keys.** Keys that resolve against a real
   :class:`brain_core.config.schema.Config` field path (e.g.
-  ``budget.daily_usd``, ``log_llm_payloads``, ``autonomous.ingest``,
+  ``budget.daily_usd``, ``log_llm_payloads``, ``autonomous.research.new_files``,
   ``handlers.url.timeout_seconds``, ``budget.override_until``,
   ``budget.override_delta_usd``). These are mutated on ``ctx.config`` in
   place and persisted to ``<vault>/.brain/config.json`` via

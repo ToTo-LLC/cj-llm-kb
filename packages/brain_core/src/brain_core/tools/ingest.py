@@ -189,7 +189,7 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     assert note_path is not None
     # Plan 07 Task 1: stamp the INGEST category so the autonomy gate in
     # brain_apply_patch can opt this patch into auto-apply when the user
-    # has set ``autonomous.ingest = true``. The pipeline itself stays
+    # has set ``autonomous.<slug>.new_files = true``. The pipeline itself stays
     # category-agnostic (default OTHER) — the tool layer is where the
     # semantic label lives.
     patchset.category = PatchCategory.INGEST
