@@ -553,10 +553,9 @@ describe("PanelDomainsRow — Plan 16 Task 8 (D8)", () => {
     });
 
     test("hydrates input from the persisted providers entry for this slug", async () => {
-      // configGet is called twice on mount (budget + rate-limit
-      // subsections). Differentiate by key so the rate-limit hydrate
-      // sees a populated payload while the budget hydrate sees the
-      // default empty entry.
+      // After T4 migration, configGet is only called by the rate-limit
+      // subsection (providers key). Branch defensively so future callers
+      // with different keys still receive a sensible default.
       configGetMock.mockImplementation(async (args: { key: string }) => {
         if (args.key === "providers") {
           return {
