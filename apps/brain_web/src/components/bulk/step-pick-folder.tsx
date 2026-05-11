@@ -128,18 +128,30 @@ export function StepPickFolder(): React.ReactElement {
       setLoading(true);
       try {
         const res = await bulkImport({ folder: folderPath, dry_run: true });
-        // ``brain_bulk_import`` ships its per-file breakdown under
-        // ``data.items`` (verified in
-        // ``packages/brain_core/src/brain_core/tools/bulk_import.py:182``).
-        // The previous ``data.plan ?? data.items`` fallback was a
-        // safeguard from a Plan 07 sketch that never landed — issue #7
-        // in the v0.1.0 known-issues backlog tracked the cleanup. Now a
-        // single ``items`` read; the backend is the source of truth.
-        const rawPlan = (res.data as { items?: unknown })?.items;
-        const plan = Array.isArray(rawPlan)
-          ? (rawPlan as Array<Record<string, unknown>>)
-          : [];
-        pickFolder(folderPath, planToFiles(plan));
+        const data = res.data;
+        // Plan 18 T3.9: discriminated ``status === "planned"`` narrows
+        // ``data.items`` to ``BulkImportPlannedItem[]``. The refused branch
+        // is unreachable with ``dry_run=true`` (handler requires
+        // ``not dry_run``); the applied branch is unreachable with
+        // ``dry_run=true``. So ``status === "planned"`` is the expected
+        // outcome — anything else surfaces a toast and bails.
+        if (data?.status !== "planned") {
+          pushToast({
+            lead: "Dry-run unexpected.",
+            msg: `Got status "${data?.status ?? "unknown"}"; expected "planned".`,
+            variant: "warn",
+          });
+          return;
+        }
+        // ``planToFiles`` accepts the legacy ``Array<Record<string, unknown>>``
+        // shape; the narrower ``BulkImportPlannedItem[]`` is structurally
+        // compatible (each item has the keys ``planToFiles`` probes for),
+        // so a widening cast is sufficient. Refactoring ``planToFiles`` to
+        // take the named interface is a separate cleanup.
+        pickFolder(
+          folderPath,
+          planToFiles(data.items as unknown as Array<Record<string, unknown>>),
+        );
       } catch (err) {
         pushToast({
           lead: "Dry-run failed.",

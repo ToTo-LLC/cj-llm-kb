@@ -274,23 +274,61 @@ export const classify = (args: {
     [extra: string]: unknown;
   }>("brain_classify", args);
 
+/** One item in the planned branch's ``items`` array. */
+export interface BulkImportPlannedItem {
+  path: string;
+  slug: string;
+  classified_domain: string;
+  confidence: number;
+}
+
+/** One row in the applied branch's ``failed`` array. */
+export interface BulkImportFailedRow {
+  path: string;
+  errors: string[];
+}
+
+/**
+ * Discriminated by ``status``. Three branches, mirroring the backend
+ * handler at ``packages/brain_core/src/brain_core/tools/bulk_import.py:150-241``:
+ *  - ``"refused"``: folder exceeded the large-folder threshold without an
+ *    explicit ``max_files`` cap; ONLY reachable when ``dry_run=false``.
+ *  - ``"planned"``: dry-run succeeded; ``items`` lists the per-file plan.
+ *    ``dry_run=true`` callers always land here (or surface an exception).
+ *  - ``"applied"``: real apply succeeded; the 4 result arrays partition
+ *    the input set by per-file outcome.
+ *
+ * Plan 18 T3.9 narrowed this TS interface from the pre-fix
+ * ``{plan: Array<Record<string, unknown>>, applied: boolean, [extra]}``
+ * shape (which never matched any backend branch — ``plan`` was never
+ * emitted; ``applied`` was emitted as ``string[]`` not ``boolean``). The
+ * ``step-pick-folder.tsx`` consumer's pre-fix workaround cast
+ * (``as { items?: unknown }``) is now eliminated — the typed
+ * discriminated union handles narrowing directly.
+ */
+export type BulkImportData =
+  | { status: "refused"; reason: string; file_count: number }
+  | {
+      status: "planned";
+      file_count: number;
+      skipped_count: number;
+      items: BulkImportPlannedItem[];
+    }
+  | {
+      status: "applied";
+      applied: string[];
+      quarantined: string[];
+      duplicate: string[];
+      failed: BulkImportFailedRow[];
+    };
+
 /** Bulk-import a folder. ``dry_run`` defaults to true. */
 export const bulkImport = (args: {
   folder: string;
   dry_run?: boolean;
   max_files?: number;
-}): Promise<
-  ToolResponse<{
-    plan: Array<Record<string, unknown>>;
-    applied: boolean;
-    [extra: string]: unknown;
-  }>
-> =>
-  callTool<{
-    plan: Array<Record<string, unknown>>;
-    applied: boolean;
-    [extra: string]: unknown;
-  }>("brain_bulk_import", args);
+}): Promise<ToolResponse<BulkImportData>> =>
+  callTool<BulkImportData>("brain_bulk_import", args);
 
 // ---------- write / patch tools (5) ----------
 
