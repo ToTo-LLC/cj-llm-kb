@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Any
 
 import structlog
 from brain_core.config.hot_reload import ConfigWatcher
@@ -39,7 +40,7 @@ except PackageNotFoundError:  # pragma: no cover — fallback for source tree w/
 _lifespan_logger = structlog.get_logger(__name__)
 
 
-def _on_config_change(config_path: Path, app_state: object, vault_root: Path) -> None:
+def _on_config_change(config_path: Path, app_state: Any, vault_root: Path) -> None:
     """Hot-reload callback: invalidate cache then push new Config onto AppContext.
 
     Called by the :class:`~brain_core.config.hot_reload.ConfigWatcher` whenever
@@ -75,7 +76,7 @@ def _on_config_change(config_path: Path, app_state: object, vault_root: Path) ->
             env=os.environ,
             cli_overrides={"vault_path": vault_root},
         )
-        tool_ctx = app_state.ctx.tool_ctx  # type: ignore[attr-defined]
+        tool_ctx = app_state.ctx.tool_ctx
         object.__setattr__(tool_ctx, "config", new_config)
         _lifespan_logger.info("config_hot_reloaded", config_path=str(config_path))
     except Exception as exc:
