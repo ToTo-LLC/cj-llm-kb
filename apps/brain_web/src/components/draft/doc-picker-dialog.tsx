@@ -14,13 +14,26 @@ import { cn } from "@/lib/utils";
  *
  * Modal for picking a vault document to open in Draft mode. Fetches
  * recent docs via ``brain_recent`` (up to 200, filtered by active
- * scope), renders a case-insensitive substring filter against both path
- * and domain, and offers a "start a blank scratch doc" option below the
- * divider that materialises as ``<scope[0]>/scratch/<yyyy-mm-dd>-untitled.md``.
+ * scope), renders a case-insensitive substring filter on the row path
+ * (which carries the domain slug as its first segment, so a query like
+ * ``"research"`` still matches via path), and offers a "start a blank
+ * scratch doc" option below the divider that materialises as
+ * ``<scope[0]>/scratch/<yyyy-mm-dd>-untitled.md``.
  *
  * Proper fuzzy ranking (Levenshtein / FZF-style) is a Task 25 sweep
  * item. Substring is plenty for the ~200-item ceiling this picker
  * operates on.
+ *
+ * Plan 18 T1 narrowed ``RecentEntry`` to ``{path, modified_at}`` and
+ * fixed two latent bugs in this picker:
+ *   - the scope filter now matches on path-prefix (``scope.some(s =>
+ *     it.path.startsWith(s + "/"))``) rather than ``it.domain`` (which
+ *     was always ``undefined`` at runtime, so the filter silently
+ *     dropped every row when scope was non-empty).
+ *   - the search filter dropped a redundant ``it.domain`` clause that
+ *     threw ``TypeError: Cannot read properties of undefined`` the
+ *     moment the user typed anything (the path already contains the
+ *     domain slug, so the OR clause was strictly redundant).
  *
  * Keyboard model:
  *   - Filter input autofocuses.
@@ -83,9 +96,14 @@ export function DocPickerDialog({
         // Scope filter is a cheap safety net — the backend already
         // respects scope_guard, but filtering client-side keeps out
         // stale cached rows that might straddle a scope change.
+        // Plan 18 T1: path-prefix is the source of truth for which
+        // domain a row belongs to; the prior ``scope.includes(it.domain)``
+        // depended on a ``domain`` field the backend never emits.
         const filtered =
           scope.length > 0
-            ? all.filter((it) => scope.includes(it.domain))
+            ? all.filter((it) =>
+                scope.some((s) => it.path.startsWith(s + "/")),
+              )
             : all;
         setItems(filtered);
       })
@@ -102,10 +120,11 @@ export function DocPickerDialog({
   const matches = React.useMemo(() => {
     const n = q.trim().toLowerCase();
     if (!n) return items;
-    return items.filter(
-      (it) =>
-        it.path.toLowerCase().includes(n) || it.domain.toLowerCase().includes(n),
-    );
+    // Plan 18 T1: the path's first segment IS the domain slug
+    // (e.g., ``research/foo.md``), so a query of ``"research"`` still
+    // matches via path. The prior redundant ``|| it.domain.toLowerCase()``
+    // clause threw TypeError because the backend never emits ``domain``.
+    return items.filter((it) => it.path.toLowerCase().includes(n));
   }, [q, items]);
 
   // Clamp the highlight whenever the filter changes so an offscreen
@@ -185,6 +204,11 @@ export function DocPickerDialog({
             const parts = d.path.split("/");
             const slug = parts[parts.length - 1];
             const dir = parts.slice(0, -1).join("/") + "/";
+            // Plan 18 T1: derive ``domain`` from the path's first segment.
+            // The backend's ``brain_recent`` row shape is ``{path,
+            // modified_at}`` only; richer display fields are reconstructed
+            // at the call site (see browse-screen.tsx for the same pattern).
+            const domain = parts[0] ?? "";
             const words = (d as RecentEntry & { words?: number }).words ?? 0;
             const isHot = i === highlight;
             return (
@@ -210,14 +234,14 @@ export function DocPickerDialog({
                 <span
                   className={cn(
                     "rounded-full border border-[var(--hairline)] px-2 py-0.5 text-[10px]",
-                    `dom-${d.domain}`,
+                    `dom-${domain}`,
                   )}
                 >
-                  {d.domain}
+                  {domain}
                 </span>
                 <span className="shrink-0 font-mono text-[10px] text-[var(--text-dim)]">
                   {words > 0 ? `${words}w · ` : ""}
-                  {relativeTime(d.modified)}
+                  {relativeTime(d.modified_at)}
                 </span>
               </button>
             );

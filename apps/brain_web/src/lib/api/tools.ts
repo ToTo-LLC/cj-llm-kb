@@ -40,11 +40,21 @@ export interface SearchHit {
   score: number;
 }
 
+/**
+ * One row from the ``brain_recent`` handler.
+ *
+ * Mirrors the backend row shape post-Plan-17 T16 — only ``path`` and
+ * ``modified_at`` are emitted (see
+ * ``packages/brain_core/src/brain_core/tools/recent.py``). Callers that
+ * need a richer display shape (title / domain / etc.) reconstruct it
+ * locally from the path; see ``browse-screen.tsx`` for the canonical
+ * example (``slugOf`` + ``domainOf`` helpers). Plan 18 T1 narrowed this
+ * type from a wider drifted shape that had silently masked a runtime
+ * ``TypeError`` in the doc-picker scope/search filters.
+ */
 export interface RecentEntry {
   path: string;
-  title: string;
-  modified: string; // ISO-8601 timestamp
-  domain: string;
+  modified_at: string; // ISO-8601 timestamp
 }
 
 export interface PendingPatch {

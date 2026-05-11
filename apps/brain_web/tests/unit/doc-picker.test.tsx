@@ -6,13 +6,20 @@ import "@testing-library/jest-dom/vitest";
 /**
  * DocPickerDialog (Plan 07 Task 19) — modal for selecting a vault
  * document to open in Draft mode. Fetches recent docs via the
- * ``brain_recent`` typed tool (mocked here), renders a fuzzy (substring)
- * filter, and offers a "start a blank scratch doc" option below the
- * divider.
+ * ``brain_recent`` typed tool (mocked here), renders a substring filter
+ * on the row path, and offers a "start a blank scratch doc" option
+ * below the divider.
+ *
+ * Plan 18 T1 narrowed ``RecentEntry`` to the actual backend shape
+ * (``{path, modified_at}`` only) and fixed two latent bugs in the
+ * picker (path-prefix scope filter, dropped redundant search clause).
+ * The ``seed()`` mock below emits ONLY the real backend shape — earlier
+ * the mock seeded ``title`` / ``domain`` / ``modified`` which papered
+ * over the runtime ``TypeError`` users hit when typing in the filter.
  *
  * Task 25 sweeps proper fuzzy / Levenshtein ranking. For Task 19 the
- * filter is a case-insensitive substring match over both path and
- * domain, which is already plenty to test the interaction surface.
+ * filter is a case-insensitive substring match on the row path, which
+ * already carries the domain slug as its first segment.
  */
 
 const { recentMock } = vi.hoisted(() => ({ recentMock: vi.fn() }));
@@ -25,27 +32,26 @@ import { DocPickerDialog } from "@/components/draft/doc-picker-dialog";
 import { useAppStore } from "@/lib/state/app-store";
 
 function seed() {
+  // Plan 18 T1: mirror the REAL ``brain_recent`` backend row shape —
+  // ``{path, modified_at}`` only. Pre-T1 this mock seeded ``title`` /
+  // ``domain`` / ``modified`` fields the backend never emits, which
+  // silently masked the runtime TypeError in the doc-picker scope /
+  // search filters. Regression tests below depend on this shape.
   recentMock.mockResolvedValue({
     text: "",
     data: {
       items: [
         {
           path: "research/notes/fisher-ury-interests.md",
-          title: "fisher-ury-interests",
-          modified: "2026-04-18T10:00:00Z",
-          domain: "research",
+          modified_at: "2026-04-18T10:00:00Z",
         },
         {
           path: "research/synthesis/silent-buyer-synthesis.md",
-          title: "silent-buyer-synthesis",
-          modified: "2026-04-14T10:00:00Z",
-          domain: "research",
+          modified_at: "2026-04-14T10:00:00Z",
         },
         {
           path: "work/people/helios-champion.md",
-          title: "helios-champion",
-          modified: "2026-04-12T10:00:00Z",
-          domain: "work",
+          modified_at: "2026-04-12T10:00:00Z",
         },
       ],
     },
@@ -162,5 +168,65 @@ describe("DocPickerDialog", () => {
     expect(onPick.mock.calls[0]![0]).toBe(
       "research/notes/fisher-ury-interests.md",
     );
+  });
+
+  test("scope filter keeps research-prefixed rows and drops work-prefixed rows (regression: path-prefix not it.domain)", async () => {
+    // Plan 18 T1 regression: pre-fix, scope filtering used
+    // ``scope.includes(it.domain)`` where ``it.domain`` was undefined
+    // (the backend never emits a ``domain`` field). With a non-empty
+    // scope, EVERY row got filtered out — the user saw an empty picker.
+    // Post-fix, scope is matched via path-prefix so only
+    // ``research/*`` rows render here.
+    useAppStore.setState({
+      theme: "dark",
+      density: "comfortable",
+      mode: "draft",
+      scope: ["research"],
+      view: "chat",
+      railOpen: true,
+      activeThreadId: null,
+      streaming: false,
+    });
+    render(
+      <DocPickerDialog
+        kind="doc-picker"
+        onPick={vi.fn()}
+        onNewBlank={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByText("silent-buyer-synthesis.md");
+    expect(screen.getByText("fisher-ury-interests.md")).toBeInTheDocument();
+    expect(screen.getByText("silent-buyer-synthesis.md")).toBeInTheDocument();
+    expect(screen.queryByText("helios-champion.md")).not.toBeInTheDocument();
+  });
+
+  test("search filter does not throw TypeError on rows without a domain field (regression: drop redundant clause)", async () => {
+    // Plan 18 T1 regression: pre-fix, typing into the filter input
+    // ran ``it.domain.toLowerCase()`` on every row, throwing
+    // ``TypeError: Cannot read properties of undefined`` immediately
+    // (the backend never emits a ``domain`` field). Post-fix the
+    // domain-side clause is gone — the path already carries the domain
+    // slug as its first segment, so a query like "buy" still matches
+    // ``silent-buyer-synthesis.md`` via path.
+    const user = userEvent.setup();
+    render(
+      <DocPickerDialog
+        kind="doc-picker"
+        onPick={vi.fn()}
+        onNewBlank={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByText("silent-buyer-synthesis.md");
+    const input = screen.getByPlaceholderText(/filter by path or domain/i);
+    // The typing itself must not throw; the matching row must remain;
+    // the non-matching rows must be filtered out.
+    await user.type(input, "buy");
+    await waitFor(() => {
+      expect(screen.queryByText("fisher-ury-interests.md")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("silent-buyer-synthesis.md")).toBeInTheDocument();
+    expect(screen.queryByText("helios-champion.md")).not.toBeInTheDocument();
   });
 });

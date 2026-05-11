@@ -9,7 +9,6 @@ import {
   proposeNote,
   readNote,
   recent,
-  type RecentEntry,
 } from "@/lib/api/tools";
 import { useAppStore } from "@/lib/state/app-store";
 import { useBrowseStore } from "@/lib/state/browse-store";
@@ -122,6 +121,21 @@ function domainOf(path: string): string {
   return path.split("/")[0] ?? "research";
 }
 
+/**
+ * Local display shape for a recent-notes row after path-side
+ * reconstruction (Plan 18 T1). The backend's ``brain_recent`` handler
+ * emits ``{path, modified_at}`` only — we derive ``title`` (slug of the
+ * filename) and ``domain`` (first path segment) here so the FileTree
+ * downstream consumer has the richer shape it expects without forcing
+ * the typed wrapper (``RecentEntry``) to drift from the wire shape.
+ */
+type BrowseRowDisplay = {
+  path: string;
+  title: string;
+  modified: string;
+  domain: string;
+};
+
 function readTime(body: string): number {
   const words = body.trim().split(/\s+/).length;
   return Math.max(1, Math.round(words / 200));
@@ -233,26 +247,24 @@ export function BrowseScreen({
               .then((r) => {
                 // Plan 17 Task 16: ``brain_recent`` emits ``data.items``
                 // directly (Plan 14 Task 11 multi-source semantics).
-                // Rows arrive as ``{path, modified_at}`` so we reconstruct
-                // the ``title`` + ``domain`` fields from the path to
-                // satisfy ``RecentEntry``.
+                // Rows arrive as ``{path, modified_at}`` (RecentEntry is
+                // narrowed to that shape post-Plan-18 T1) so we reconstruct
+                // the ``title`` + ``domain`` fields from the path here into
+                // a local ``BrowseRowDisplay`` shape — the typed wrapper
+                // stays aligned with the wire shape; the richer display
+                // shape lives at the call site that needs it.
                 const rows = r.data?.items ?? [];
-                const items: RecentEntry[] = rows.map((row) => {
-                  const raw = row as Partial<RecentEntry> & {
-                    modified_at?: string;
-                  };
-                  return {
-                    path: raw.path ?? "",
-                    title: raw.title ?? slugOf(raw.path ?? ""),
-                    modified: raw.modified ?? raw.modified_at ?? "",
-                    domain: raw.domain ?? domainOf(raw.path ?? ""),
-                  };
-                });
+                const items: BrowseRowDisplay[] = rows.map((row) => ({
+                  path: row.path,
+                  title: slugOf(row.path),
+                  modified: row.modified_at,
+                  domain: domainOf(row.path),
+                }));
                 return { domain: d, items };
               })
               .catch(() => ({
                 domain: d,
-                items: [] as RecentEntry[],
+                items: [] as BrowseRowDisplay[],
               })),
           ),
         );
