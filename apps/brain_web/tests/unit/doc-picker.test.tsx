@@ -54,6 +54,13 @@ function seed() {
           modified_at: "2026-04-12T10:00:00Z",
         },
       ],
+      // Matches the backend handler's data shape (see
+      // packages/brain_core/src/brain_core/tools/recent.py); the picker
+      // calls ``recent({ limit: 200 })`` which the handler clamps to
+      // _MAX_LIMIT (50) — the mock mirrors the request value here, not
+      // the clamp, so future regressions that read ``limit_used`` aren't
+      // silently masked.
+      limit_used: 200,
     },
   });
 }
@@ -94,7 +101,7 @@ describe("DocPickerDialog", () => {
     expect(screen.getByText("fisher-ury-interests.md")).toBeInTheDocument();
     expect(screen.getByText("helios-champion.md")).toBeInTheDocument();
 
-    const input = screen.getByPlaceholderText(/filter by path or domain/i);
+    const input = screen.getByPlaceholderText(/filter by path/i);
     await user.type(input, "helios");
 
     // Only the matching row remains.
@@ -219,7 +226,7 @@ describe("DocPickerDialog", () => {
       />,
     );
     await screen.findByText("silent-buyer-synthesis.md");
-    const input = screen.getByPlaceholderText(/filter by path or domain/i);
+    const input = screen.getByPlaceholderText(/filter by path/i);
     // The typing itself must not throw; the matching row must remain;
     // the non-matching rows must be filtered out.
     await user.type(input, "buy");

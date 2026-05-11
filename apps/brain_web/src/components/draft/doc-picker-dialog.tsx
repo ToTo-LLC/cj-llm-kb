@@ -177,7 +177,7 @@ export function DocPickerDialog({
       <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--hairline)] bg-[var(--surface-1)] px-2">
         <Search className="h-3.5 w-3.5 text-[var(--text-muted)]" />
         <Input
-          placeholder="filter by path or domain… (try 'synthesis' or 'helios')"
+          placeholder="filter by path… (try 'synthesis' or 'helios')"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={handleKeyDown}

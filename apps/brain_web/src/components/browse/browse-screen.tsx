@@ -245,14 +245,8 @@ export function BrowseScreen({
             // request below the schema cap.
             recent({ domain: d, limit: 50 })
               .then((r) => {
-                // Plan 17 Task 16: ``brain_recent`` emits ``data.items``
-                // directly (Plan 14 Task 11 multi-source semantics).
-                // Rows arrive as ``{path, modified_at}`` (RecentEntry is
-                // narrowed to that shape post-Plan-18 T1) so we reconstruct
-                // the ``title`` + ``domain`` fields from the path here into
-                // a local ``BrowseRowDisplay`` shape — the typed wrapper
-                // stays aligned with the wire shape; the richer display
-                // shape lives at the call site that needs it.
+                // Reconstruct BrowseRowDisplay from the narrow
+                // {path, modified_at} backend payload — see the type's JSDoc.
                 const rows = r.data?.items ?? [];
                 const items: BrowseRowDisplay[] = rows.map((row) => ({
                   path: row.path,
