@@ -91,67 +91,60 @@ def _on_config_change(config_path: Path, app_state: Any, vault_root: Path) -> No
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build AppContext at startup; hold it open for the app's lifetime.
 
-    Task 7 adds the token-rotation step: generate (or honor the
-    ``token_override`` injected by tests), write to
-    ``<vault>/.brain/run/api-secret.txt`` with mode 0600, and stash on
-    ``ctx.token`` so Task 9's ``require_token`` dependency can read it back.
+    Startup sequence:
+        1. Mint (or honor a test-injected ``token_override``) the API token
+           and write it to ``<vault>/.brain/run/api-secret.txt`` (mode 0600).
+        2. Resolve the live ``Config`` from ``<vault>/.brain/config.json``
+           via :func:`resolve_config` (cached loader with backup-fallback).
+           ``vault_path`` flows in through ``cli_overrides`` — it is the
+           chicken-and-egg field the persisted blob deliberately omits.
+        3. Construct :class:`AnthropicProvider` when ``ANTHROPIC_API_KEY``
+           is set; otherwise leave ``llm=None`` so :func:`build_app_context`
+           falls back to ``FakeLLMProvider``.
+        4. Build the full :class:`AppContext` (StateDB, VaultWriter,
+           retrieval, cost ledger, rate limiter, embedded ToolContext) and
+           stash it on ``app.state.ctx`` for ``Depends(get_ctx)``.
+        5. Pre-compile one Pydantic model per tool ``INPUT_SCHEMA`` so the
+           dispatcher validates request bodies at the edge. Schema failures
+           raise at boot, not on first request.
+        6. Start a :class:`ConfigWatcher` on the config file so disk edits
+           propagate to in-process holders of ``ctx.config``.
 
-    Reads the constructor args stashed on app.state by ``create_app``, builds
-    the full ctx (StateDB, VaultWriter, retrieval, cost ledger, rate limiter,
-    embedded ToolContext, etc.), and stashes the result on ``app.state.ctx``.
-    FastAPI routes read it back via ``Depends(get_ctx)``.
+    Shutdown sequence:
+        - Stop the ``ConfigWatcher`` first so its observer thread joins
+          cleanly (``stop()`` is idempotent and swallows its own errors).
+
+    Hot-reload contract:
+        See :func:`_on_config_change` for the in-place mutation pattern
+        used to update the frozen ``ToolContext.config`` when the watcher
+        fires. brain_mcp runs the same watcher independently — there is
+        no IPC between the two processes; the loader cache is per-process.
+
+    History:
+        Plan 11 T7 threaded ``Config`` through ``ToolContext`` so mutation
+        tools (config_set, create_domain, etc.) persist via ``save_config``
+        instead of hitting the no-op ``ctx.config is None`` branch. Plan 16
+        T34/T35/T39.5 layered on the cached loader, the file watcher, and
+        live AnthropicProvider construction. Tests run without the API key
+        so they keep getting the FakeLLMProvider.
     """
     from brain_api.auth import generate_token, write_token_file
 
     token = app.state.token_override or generate_token()
     write_token_file(app.state.vault_root, token)
 
-    # Plan 11 Task 7 polish: load the live Config from
-    # ``<vault>/.brain/config.json`` and thread it through to ToolContext so
-    # mutation tools (config_set, create_domain, rename_domain,
-    # delete_domain, budget_override) can persist their changes via
-    # ``save_config``. Without this, every Plan 11 mutation dispatched via
-    # brain_web → brain_api would land on the ``ctx.config is None`` no-op
-    # branch — the toast would say "saved" but the disk write never happens.
-    #
-    # ``resolve_config`` (Plan 16 T34) wraps ``load_config``'s Plan 11 D7
-    # fallback chain (config.json → config.json.bak → ``Config()``
-    # defaults) with a single-process cache layer. First boot is a cache
-    # miss that calls ``load_config`` and populates the cache; subsequent
-    # in-process callers (e.g. tool dispatchers wired via T34.5+) get
-    # cache hits, and T35's ``ConfigWatcher`` (started below) invalidates
-    # the cache on disk-change so post-edit reads pick up new state.
-    # ``vault_path`` is supplied via ``cli_overrides`` rather than the
-    # persisted blob — it's the chicken-and-egg field the loader's
-    # whitelist deliberately excludes.
     config = resolve_config(
         config_file=app.state.vault_root / ".brain" / "config.json",
         env=os.environ,
         cli_overrides={"vault_path": app.state.vault_root},
     )
 
-    # Plan 16 Task 39.5: construct a real :class:`AnthropicProvider` when
-    # an API key is set in the environment. Without this, every brain_api
-    # instance would default to ``FakeLLMProvider`` (the safe-for-tests
-    # fallback baked into ``build_app_context``) and brain_web users would
-    # get scripted fake responses in production.
-    #
-    # ``brain_cli`` reads ``ANTHROPIC_API_KEY`` from the env directly
-    # (see ``brain_cli/session_factory.py::_build_anthropic_provider``);
-    # we follow the same pattern here. ``brain start`` and the install
-    # scripts surface the variable to the launched process; users running
-    # ``uvicorn`` directly export it manually. Tests run without the var
-    # set so they keep getting the FakeLLMProvider via ``llm=None``.
-    #
-    # The provider receives the resolved Config so its T31 per-domain
-    # rate-limit gate (``Config.providers["anthropic"].rate_limit_per_domain``)
-    # fires end-to-end — same wiring shape as
-    # ``session_factory._build_anthropic_provider(config)``.
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     llm: LLMProvider | None
     if api_key:
         from brain_core.llm.providers.anthropic import AnthropicProvider
 
+        # Pass `config` so the T31 per-domain rate-limit gate fires end-to-end.
         llm = AnthropicProvider(api_key=api_key, config=config)
         _lifespan_logger.info("anthropic_provider_initialized")
     else:
@@ -167,25 +160,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.ctx = ctx
 
-    # Task 11: build one Pydantic model per tool INPUT_SCHEMA so the dispatcher
-    # can validate request bodies at the edge. Any unsupported schema feature
-    # raises ``UnsupportedSchemaError`` HERE (at boot), not on the first
-    # request — fail-loud is correct for a tool-author bug.
     app.state.tool_models = {
         name: build_model_from_schema(name, module.INPUT_SCHEMA)
         for name, module in ctx.tool_by_name.items()
     }
 
-    # Plan 16 Task 35 / D28 step 3 of 3: cross-process config hot-reload.
-    # Watch ``<vault>/.brain/config.json`` and invalidate the loader's
-    # in-memory cache on filesystem event so the NEXT ``resolve_config``
-    # call (e.g. from a tool dispatcher holding a stale ``ctx.config``)
-    # re-loads from disk. Symmetric architecture: brain_mcp runs the same
-    # watcher independently — there is no IPC between the two processes.
-    #
-    # Wrap in try/except: a watcher failure must NOT block app startup.
-    # T34's lazy peek inside ``resolve_config`` remains the safety net,
-    # so the app keeps functioning even if the watcher silently dies.
+    # Watcher failure must NOT block startup — resolve_config's lazy peek
+    # (T34) remains the safety net if the observer thread dies.
     config_path = app.state.vault_root / ".brain" / "config.json"
     config_watcher: ConfigWatcher | None = None
     try:
@@ -207,8 +188,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        # Stop the watcher BEFORE other teardown so its observer thread
-        # joins cleanly. ``stop()`` is idempotent and never raises out.
+        # Stop watcher BEFORE other teardown so its observer thread joins cleanly.
         if config_watcher is not None:
             config_watcher.stop()
 
