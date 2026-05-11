@@ -358,3 +358,54 @@ async def test_apply_save_failure_reverts_in_memory_mutation(
     assert ctx.config.web_port == 4317
     # No config.json written (boom raised before any disk artifact).
     assert not (tmp_path / ".brain" / "config.json").exists()
+
+
+async def test_apply_save_failure_reverts_under_handler_local_patch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Belt-and-suspenders companion to ``test_apply_save_failure_reverts_in_memory_mutation``.
+
+    Plan 17 T17 senior review (severity HIGH) flagged that patching at
+    ``brain_core.config.writer.save_config`` is brittle: it only fires
+    because ``persist_config_or_revert`` happens to look up
+    ``save_config`` from its own module's namespace at call time. A
+    future refactor that introduces a direct ``from brain_core.config.writer
+    import save_config`` binding inside the handler would silently bypass
+    the existing test's monkeypatch — the test would revert to RED for
+    the WRONG reason ("patch missed"), not because revert is absent.
+
+    This belt-and-suspenders test patches BOTH the writer module's
+    ``save_config`` (current call site inside ``persist_config_or_revert``)
+    AND the handler module's namespace if a same-named binding ever
+    re-appears there. Either way, the patch fires, so the revert
+    invariant is decoupled from where the call site looks up
+    ``save_config``.
+
+    Captured in tasks/lessons.md under "monkeypatch-vs-import-binding".
+    """
+    import brain_core.tools.repair_config_apply as handler_mod
+
+    in_memory = Config(active_domain="research", web_port=4317)
+    snapshot_dump = in_memory.model_dump()
+    repaired_payload = Config(active_domain="research", web_port=5500).persisted_dict()
+
+    def boom(_config: Config, _vault_root: Path, **_kw: object) -> Path:
+        raise ConfigPersistenceError("disk failed", cause="io_error")
+
+    # Primary call site (today): persist_config_or_revert calls save_config
+    # via its own module's namespace.
+    monkeypatch.setattr("brain_core.config.writer.save_config", boom)
+    # Belt-and-suspenders: if a future refactor reintroduces a direct
+    # ``save_config`` binding inside the handler module, patch that too.
+    # ``raising=False`` keeps the test green today (no such binding exists)
+    # and future-proofs against a regression.
+    monkeypatch.setattr(handler_mod, "save_config", boom, raising=False)
+
+    ctx = _mk_ctx(tmp_path, config=in_memory)
+
+    with pytest.raises(ConfigPersistenceError, match="disk failed"):
+        await apply_handle({"repaired_config": repaired_payload}, ctx)
+
+    assert ctx.config.model_dump() == snapshot_dump
+    assert ctx.config.web_port == 4317
+    assert not (tmp_path / ".brain" / "config.json").exists()
