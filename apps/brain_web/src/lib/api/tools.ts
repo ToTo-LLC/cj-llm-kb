@@ -110,11 +110,30 @@ export const listDomains = (): Promise<
     active_domain?: string;
   }>("brain_list_domains");
 
-/** Read ``<domain>/index.md``. ``domain`` defaults to the first allowed domain. */
+/**
+ * Read `<domain>/index.md`. `domain` defaults to the first allowed domain.
+ *
+ * Mirrors the `brain_get_index` backend handler (see
+ * `packages/brain_core/src/brain_core/tools/get_index.py`); both the
+ * happy path and the missing-file branch emit `{domain, frontmatter, body}`.
+ * Plan 18 T3.2 narrowed the TS interface from `{path, content}` (which
+ * never matched backend) to the real shape. No active consumer at the
+ * time of the narrow.
+ */
 export const getIndex = (
   args: { domain?: string } = {},
-): Promise<ToolResponse<{ path: string; content: string }>> =>
-  callTool<{ path: string; content: string }>("brain_get_index", args);
+): Promise<
+  ToolResponse<{
+    domain: string;
+    frontmatter: Record<string, unknown>;
+    body: string;
+  }>
+> =>
+  callTool<{
+    domain: string;
+    frontmatter: Record<string, unknown>;
+    body: string;
+  }>("brain_get_index", args);
 
 /** Read a note by vault-relative path. */
 export const readNote = (
