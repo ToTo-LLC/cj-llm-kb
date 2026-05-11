@@ -81,7 +81,11 @@ describe("PendingScreen — handleUndoLast (Plan 18 T3.7)", () => {
     listPendingPatchesMock.mockResolvedValue({ text: "", data: { patches: [] } });
   });
 
-  test("reverted branch: toast names the undo_id and reloads pending", async () => {
+  test("reverted branch: generic success toast and reloads pending", async () => {
+    // Mock still returns a realistic ``undo_id`` — the discriminated
+    // union is load-bearing for the handler's branch selection — but
+    // the consumer toast no longer surfaces the raw timestamp (Plan 18
+    // T3.7 review nit: drop user-unfriendly undo_id from UX).
     undoLastMock.mockResolvedValue({
       text: "reverted undo_id=20260511T120000",
       data: { status: "reverted", undo_id: "20260511T120000" },
@@ -108,7 +112,10 @@ describe("PendingScreen — handleUndoLast (Plan 18 T3.7)", () => {
     expect(toasts.length).toBeGreaterThanOrEqual(1);
     const latest = toasts[toasts.length - 1];
     expect(latest.lead).toMatch(/undone/i);
-    expect(latest.msg).toMatch(/reverted change 20260511T120000\./i);
+    expect(latest.msg).toMatch(/reverted the last change/i);
+    // Defence-in-depth pin: the raw undo_id timestamp must NOT leak
+    // into user-facing toast copy.
+    expect(latest.msg).not.toMatch(/20260511T120000/);
     expect(latest.variant).toBe("success");
 
     // Successful undo triggers a vault reload: listPendingPatches called

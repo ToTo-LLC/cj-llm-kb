@@ -135,12 +135,11 @@ export function PendingScreen(): React.ReactElement {
       }
       // status === "reverted" — successful undo. Backend doesn't report
       // a file count (Plan 18 T3.7 — `reverted_files` was never emitted),
-      // so the toast acknowledges the undo by undo_id instead.
+      // and the raw `undo_id` is a UTC-microsecond timestamp the user
+      // never chose, so the toast just confirms the action generically.
       pushToast({
         lead: "Undone.",
-        msg: data?.undo_id
-          ? `Reverted change ${data.undo_id}.`
-          : "Reverted the last change.",
+        msg: "Reverted the last change.",
         variant: "success",
       });
       await loadPending();
