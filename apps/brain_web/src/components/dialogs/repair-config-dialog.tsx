@@ -49,13 +49,22 @@ import { Modal } from "./modal";
  *
  * Accessibility:
  *   - Modal focus trap + Esc-close (Radix primitive — Modal wrapper).
- *   - Tab order: Re-run → step rows (focusable for screen readers) →
- *     Re-apply → Cancel. Footer order in the JSX is the natural source.
+ *   - Tab order: step rows (focusable for screen readers, only present
+ *     after a run) → Re-run → Re-apply → Cancel. Body comes before footer
+ *     in the DOM under Radix DialogContent, so step rows naturally tab
+ *     first; footer order is the second source. Cancel is last per the
+ *     convention that the escape-hatch sits at the end of the tab cycle
+ *     (Plan 17 T18 — corrected from a previous comment that claimed
+ *     ``Re-run → step rows → Re-apply → Cancel``, which is unreachable
+ *     under Radix's body-then-footer traversal).
  *   - ``role="status"`` + ``aria-live="polite"`` on the steps panel so
  *     screen readers announce results without yanking focus.
  *   - ``aria-busy`` on the dialog body while ``isRunning || isApplying``.
  *   - ``--ok`` / ``--warn`` / ``--danger`` tokens (no hex literals;
- *     Plan 16 T13 stylelint rule blocks them).
+ *     Plan 16 T13 stylelint rule blocks them). Plan 17 T18 dropped the
+ *     hex fallbacks inside ``var()`` calls — the tokens are defined at
+ *     ``:root`` in ``styles/tokens.css`` so the fallback never fires and
+ *     dead hex literals defeat the lint rule's intent.
  *
  * The legacy ``onRunRepair`` prop is kept for source-compat with Task 9
  * tests that exercise the SCAFFOLD shape (the bare close-on-click). When
@@ -109,6 +118,22 @@ export function RepairConfigDialog({
   const [state, setState] = React.useState<DialogState>(INITIAL_STATE);
   const pushToast = useSystemStore((s) => s.pushToast);
 
+  // Plan 17 T18: mountedRef guards post-``await`` ``setState`` calls in
+  // the async handlers below. If the dialog is closed (unmount) while
+  // the RPC is in flight, React 18 emits a noisy warning and React 19
+  // upgrades that to a hard error path. The tools client doesn't expose
+  // an AbortSignal so a request cancel isn't available — we just drop
+  // the response on the floor by gating the setState call on
+  // ``mountedRef.current``. Side-effect callbacks (``pushToast``,
+  // ``onClose``, ``onRunRepair``) are parent-owned and safe to fire.
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // Reset dialog state every time it opens. Keeps stale results from a
   // prior session out of the panel — the user expects "Repair config"
   // to start clean each time, just like ``brain doctor`` does.
@@ -120,6 +145,7 @@ export function RepairConfigDialog({
     setState((prev) => ({ ...prev, isRunning: true, lastError: null }));
     try {
       const response = await repairConfig();
+      if (!mountedRef.current) return;
       const data = response.data;
       if (!data) {
         setState((prev) => ({
@@ -139,6 +165,7 @@ export function RepairConfigDialog({
         repairedConfig: data.repaired_config,
       }));
     } catch (err) {
+      if (!mountedRef.current) return;
       setState((prev) => ({
         ...prev,
         isRunning: false,
@@ -153,6 +180,8 @@ export function RepairConfigDialog({
     setState((prev) => ({ ...prev, isApplying: true, lastError: null }));
     try {
       await repairConfigApply(state.repairedConfig);
+      // Parent-owned side effects (toast + close callbacks) are safe to
+      // fire even after unmount — they don't touch local state.
       pushToast({
         lead: "Config repaired.",
         msg: "Wrote the recovered config back to disk.",
@@ -161,6 +190,7 @@ export function RepairConfigDialog({
       onRunRepair?.();
       onClose();
     } catch (err) {
+      if (!mountedRef.current) return;
       setState((prev) => ({
         ...prev,
         isApplying: false,
@@ -180,10 +210,13 @@ export function RepairConfigDialog({
       description="If your config.json is corrupted, brain falls back to .bak then defaults."
       width={560}
       footer={
+        // Footer DOM order: Re-run → Re-apply → Cancel. Cancel is last so
+        // it lands at the end of the tab cycle (convention for escape-
+        // hatch controls). Step rows in the body tab BEFORE this footer
+        // by virtue of body-then-footer DOM order under Radix
+        // DialogContent. See the header comment for the full tab-order
+        // contract. (Plan 17 T18.)
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
           <Button
             variant="outline"
             onClick={handleRun}
@@ -205,6 +238,9 @@ export function RepairConfigDialog({
               />
             ) : null}
             Re-apply
+          </Button>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
           </Button>
         </>
       }
@@ -249,7 +285,7 @@ export function RepairConfigDialog({
         {state.lastError ? (
           <p
             role="alert"
-            className="mt-3 rounded-md border border-[var(--hairline-strong)] bg-[var(--surface-2)] p-3 text-xs text-[var(--danger,_#FF4503)]"
+            className="mt-3 rounded-md border border-[var(--hairline-strong)] bg-[var(--surface-2)] p-3 text-xs text-[var(--danger)]"
           >
             {state.lastError}
           </p>
@@ -286,9 +322,11 @@ const STEP_LABELS: Record<RepairConfigStep["step"], string> = {
 
 function StepRow({ step }: StepRowProps): React.ReactElement {
   // Per token rules: read --ok / --warn / --danger from CSS vars; never
-  // hex literals (Plan 16 T13 stylelint rule). Fallbacks on the
-  // CSS-var() call are belt-and-braces in case the consumer renders
-  // outside the global token cascade (story / standalone). Each row is
+  // hex literals. Plan 17 T18 dropped the hex fallbacks (previously
+  // ``var(--ok, #96B6A6)``) — the tokens are defined at ``:root`` in
+  // ``styles/tokens.css`` so the fallback never fires, and JS-string hex
+  // literals slip past the Plan 16 T13 stylelint rule
+  // (``color-no-hex``), defeating the rule's intent. Each row is
   // ``tabIndex=0`` so keyboard users can step through results — the spec
   // explicitly calls for this in the Tab order.
   const label = STEP_LABELS[step.step] ?? step.step;
@@ -322,7 +360,7 @@ const ICON_BY_STATUS: Record<
   RepairConfigStep["status"],
   { Icon: typeof CheckCircle2; color: string }
 > = {
-  success: { Icon: CheckCircle2, color: "var(--ok, #96B6A6)" },
-  warning: { Icon: AlertTriangle, color: "var(--warn, #FDEB9E)" },
-  error: { Icon: XCircle, color: "var(--danger, #FF4503)" },
+  success: { Icon: CheckCircle2, color: "var(--ok)" },
+  warning: { Icon: AlertTriangle, color: "var(--warn)" },
+  error: { Icon: XCircle, color: "var(--danger)" },
 };
