@@ -66,7 +66,7 @@ describe("DropZone", () => {
   test("upload success does NOT write res.domain into the inbox row (Plan 19 T2)", async () => {
     // Reset the inbox store to a known empty state so we can read the
     // row we drop in for this test only.
-    useInboxStore.setState({ sources: [], activeTab: "all" });
+    useInboxStore.setState({ sources: [], activeTab: "progress" });
 
     // The backend's ``UploadResponse`` only emits ``{patch_id: str}`` —
     // ``domain`` is NEVER present. Plan 18 T1-class regression: the
