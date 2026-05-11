@@ -39,6 +39,53 @@ except PackageNotFoundError:  # pragma: no cover — fallback for source tree w/
 _lifespan_logger = structlog.get_logger(__name__)
 
 
+def _on_config_change(config_path: Path, app_state: object, vault_root: Path) -> None:
+    """Hot-reload callback: invalidate cache then push new Config onto AppContext.
+
+    Called by the :class:`~brain_core.config.hot_reload.ConfigWatcher` whenever
+    ``<vault>/.brain/config.json`` changes on disk.  Two things happen in order:
+
+    1. :func:`~brain_core.config.loader.invalidate_cache_for` evicts the
+       in-memory snapshot so the ``resolve_config`` call below gets a fresh read.
+    2. :func:`~brain_core.config.loader.resolve_config` re-loads from disk and
+       the resulting :class:`~brain_core.config.schema.Config` is written onto
+       ``app_state.ctx.tool_ctx.config`` via ``object.__setattr__``.  Both
+       ``AppContext`` and ``ToolContext`` are ``frozen=True`` dataclasses; the
+       setattr bypass is the canonical pattern for in-place mutation without
+       replacing the container object (preserving identity guarantees for callers
+       that hold a reference to ``ctx`` or ``ctx.tool_ctx``).
+
+    Failures in resolve/update are swallowed with a ``structlog.warning`` — a
+    transient bad write to ``config.json`` must NOT crash the running server.
+    The stale config remains in place until the next successful reload.
+
+    Plan 16 T39.5 used the same ``object.__setattr__`` pattern for brain_mcp's
+    ``_reset_ctx_cache``; this extends it to brain_api's stateful AppContext.
+
+    Args:
+        config_path: Path to ``<vault>/.brain/config.json``.
+        app_state: The ``app.state`` object (holds ``.ctx``).
+        vault_root: Vault root; forwarded to ``resolve_config`` as the
+            ``cli_overrides["vault_path"]`` chicken-and-egg field.
+    """
+    invalidate_cache_for(config_path)
+    try:
+        new_config = resolve_config(
+            config_file=config_path,
+            env=os.environ,
+            cli_overrides={"vault_path": vault_root},
+        )
+        tool_ctx = app_state.ctx.tool_ctx  # type: ignore[attr-defined]
+        object.__setattr__(tool_ctx, "config", new_config)
+        _lifespan_logger.info("config_hot_reloaded", config_path=str(config_path))
+    except Exception as exc:
+        _lifespan_logger.warning(
+            "config_hot_reload_failed",
+            error=str(exc),
+            config_path=str(config_path),
+        )
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build AppContext at startup; hold it open for the app's lifetime.
@@ -143,7 +190,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         config_watcher = ConfigWatcher(
             config_path=config_path,
-            on_change=lambda: invalidate_cache_for(config_path),
+            on_change=lambda: _on_config_change(
+                config_path, app.state, app.state.vault_root
+            ),
         )
         config_watcher.start()
     except Exception as exc:  # pragma: no cover — defensive
