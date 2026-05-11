@@ -530,27 +530,64 @@ NOT roll back the triggering field mutation.
 closing as already-done are valid outcomes when the premise has
 shifted).
 
-## Plan 19 candidate scope (placeholder)
+## Plan 19 candidate scope
 
-To be filled in at T5 closure. Expected content: the 4 preserved
-NOT-DOING carry-forwards (seedBrainMd rule-of-three; per-thread
-cross-domain NO; topbar scope chip drift watch; PEP 703 wait-for-3.14)
-plus anything that emerges during Plan 18 execution that's too narrow
-to land inline.
+Filled in at T5 closure. The canonical record is the tail block of
+`tasks/todo.md`; this section is a brief pointer. Tracks:
 
-## Review (pending)
+- **Track A** — REST-endpoint drift parallel to T2's MCP-tool audit
+  (`/api/upload` UploadResult; consider full REST-surface audit pass).
+- **Track B** — UX fallout from Plan 18 narrows (`cost === 0`
+  ingest-row badge suppression).
+- **Track C** — 4 informational extra-in-backend DRIFTs deferred
+  from T2 (`recent` outer / `proposeNote` / `listPendingPatches`
+  outer / `configSet`).
+- **Track D** — `planToFiles` type-tighten (accept
+  `BulkImportPlannedItem[]` directly).
+- **Preserved Plan 17 / earlier carry-forwards** —
+  `seedBrainMd`/`seedScope` rule-of-three; per-thread cross-domain
+  confirmation (architectural NO per spec §3 / Plan 16 D36);
+  topbar scope chip drift watch (lesson-only); PEP 703 for
+  `_cached_ctx` (3.14 timeline trigger).
 
-To be filled in on closure following Plan 11..17 format:
-- **Tag:** `plan-18-typed-surface-drift-closure` (cut on green demo).
-- **Closes:** every item in the Plan 17 candidate scope tail block of
-  `tasks/todo.md` (preserved here for traceability).
-- **Bumps:** `RecentEntry` shape narrows in `tools.ts`; doc-picker bug
-  closed; `tools.ts` typed-surface audit findings recorded inline;
-  T4 close-as-ALREADY-DONE evidence inline; zero new dependencies;
-  no schema changes.
-- **Verification:** `scripts/demo-plan-18.py` → `PLAN 18 DEMO OK`;
-  pytest + vitest + Playwright + Mac+Windows CI green.
-- **Backlog forward:** Plan 19 candidate scope per Task 5 step 3.
+## Review
+
+- **Tag:** `plan-18-typed-surface-drift-closure` (cut on green demo
+  by the user after final approval).
+- **Closes:** every item in the Plan 17 candidate scope tail block
+  of `tasks/todo.md` (preserved here for traceability): T1 closed
+  the `recent()` typed-wrapper drift + the surfaced `doc-picker-dialog.tsx`
+  MEDIUM-severity production bug; T2 produced 38-row sibling-drift
+  audit (19 OK / 4 MINOR / 15 DRIFT); T3 closed the 11 T1-class
+  DRIFTs (recentIngests / getIndex / getBrainMd / lint / ingest /
+  rejectPatch / undoLast / costReport / bulkImport / createDomain /
+  budgetOverride) with TS narrows + Python key-set pins; T4 closed
+  the T36 stale-docstring residual as ALREADY-DONE.
+- **Bumps:**
+  - `RecentEntry` narrowed in `tools.ts` to `{path, modified_at}` (T1).
+  - 11 typed wrappers narrowed to backend reality across `tools.ts`
+    (T3.1-T3.11), 3 of which use discriminated-union types
+    (`IngestResultData` / `UndoLastData` / `BulkImportData`).
+  - 3 live consumer bugs closed: Inbox silently-empty rows
+    (T3.1 recentIngests); undo toast always "Reverted 0 file(s)."
+    (T3.7); budget-override toast computed from prop default
+    not backend value (T3.11).
+  - 11 Python key-set pin tests added under
+    `packages/brain_core/tests/tools/` (single + multi-branch
+    variants).
+  - T2 audit findings recorded inline at `## T2 audit findings`.
+  - T4 ALREADY-DONE evidence recorded inline at `## T4 outcome`.
+  - 4 informational extra-in-backend DRIFTs (recent outer /
+    proposeNote / listPendingPatches outer / configSet) deferred
+    to Plan 19 per user adjudication of T2's surprise finding count.
+  - Zero new dependencies; no schema changes; no spec text changes.
+- **Verification:** `scripts/demo-plan-18.py` → `PLAN 18 DEMO OK`
+  (16 gates); pytest + vitest + Playwright green on the implementer's
+  local Mac (Windows CI cut at user-tag + push time per D7).
+- **Backlog forward:** Plan 19 candidate scope per the tail block
+  of `tasks/todo.md` (Track A REST drift / Track B UX fallout /
+  Track C 4 deferred extras / Track D `planToFiles` type-tighten /
+  preserved Plan 17 carry-forwards).
 
 ---
 
