@@ -73,6 +73,24 @@ jobs:
       - name: Type-check brain_core
         run: uv run mypy packages/brain_core/src
 
+      # Plan 17 Task 11: brain_api mypy --strict hard-fail gate. Mirrors the
+      # brain_core step above. ``--strict`` enables the full bundle (typed
+      # returns, no untyped defs, no implicit Optional, no implicit reexport,
+      # warn-unused-ignores, etc.). Runs against ``src`` AND ``tests`` so
+      # annotation drift in fixtures/tests is caught alongside production
+      # code.
+      #
+      # ``working-directory`` is required (not used by the brain_core step):
+      # ``packages/brain_api/pyproject.toml`` has ``explicit_package_bases =
+      # true`` (the duplicate ``prompts/`` directory between brain_api/tests/
+      # and brain_mcp/tests/ collides without it) AND ``mypy_path = "tests"``
+      # (for the ``_ws_helpers`` bare import). Both settings resolve relative
+      # to the config-file directory, so mypy must be invoked from
+      # ``packages/brain_api/`` for them to point at the right paths.
+      - name: Type-check brain_api
+        working-directory: packages/brain_api
+        run: uv run mypy --strict src tests
+
       - name: Test
         run: uv run pytest packages/brain_core --cov=brain_core --cov-report=term-missing
 
