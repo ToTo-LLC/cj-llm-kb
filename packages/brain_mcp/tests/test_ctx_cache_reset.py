@@ -29,10 +29,10 @@ from pathlib import Path
 
 import pytest
 from brain_core.config.hot_reload import ConfigWatcher
-from brain_core.config.loader import invalidate_cache_for
 from brain_core.config.schema import Config
 from brain_core.tools.base import ToolContext
 from brain_mcp import server as server_module
+from brain_mcp.__main__ import _on_config_change
 from brain_mcp.server import _reset_ctx_cache, create_server
 
 
@@ -112,8 +112,7 @@ def test_watcher_chained_callback_clears_cache_end_to_end(
     fired = threading.Event()
 
     def _on_change() -> None:
-        invalidate_cache_for(config_path)
-        _reset_ctx_cache()
+        _on_config_change(config_path)
         fired.set()
 
     watcher = ConfigWatcher(

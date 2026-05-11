@@ -30,6 +30,12 @@ from brain_mcp.server import _reset_ctx_cache, create_server
 _logger = structlog.get_logger(__name__)
 
 
+def _on_config_change(config_path: Path) -> None:
+    """Hot-reload callback: invalidate the loader cache and clear the MCP ToolContext singleton."""
+    invalidate_cache_for(config_path)
+    _reset_ctx_cache()
+
+
 async def _run() -> None:
     vault_root = Path(os.environ.get("BRAIN_VAULT_ROOT", Path.home() / "Documents" / "brain"))
     allowed_domains = tuple(
@@ -55,15 +61,11 @@ async def _run() -> None:
     # only benefitted the FIRST tool call per process.
     config_path = vault_root / ".brain" / "config.json"
 
-    def _on_config_change() -> None:
-        invalidate_cache_for(config_path)
-        _reset_ctx_cache()
-
     config_watcher: ConfigWatcher | None = None
     try:
         config_watcher = ConfigWatcher(
             config_path=config_path,
-            on_change=_on_config_change,
+            on_change=lambda: _on_config_change(config_path),
         )
         config_watcher.start()
     except Exception as exc:  # pragma: no cover — defensive
