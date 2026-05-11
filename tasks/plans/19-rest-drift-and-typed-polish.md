@@ -680,8 +680,137 @@ interface that hand-matches the backend, which is the case for
 
 ## T2 outcome
 
-To be filled in at T2 execution. Per-finding receipts (TS narrow
-commit, Python pin test path, any live consumer fixes).
+Closed 2026-05-11. The 1 DRIFT row from T1 (`/api/upload`,
+`UploadResult`) is fixed end-to-end: TS narrowed to backend reality,
+both live consumers stopped writing the never-emitted `res.domain`
+field into the inbox row, and the dead-code envelope fallback at
+`upload.ts:91-95` is replaced with a defensive contract-violation
+guard.
+
+### Per-finding receipts
+
+**`/api/upload` — `UploadResult` narrow**
+
+- **TS narrow site:** `apps/brain_web/src/lib/ingest/upload.ts:25-42`.
+  - Before: `{patch_id: string | null; applied: boolean; domain: string | null; [extra: string]: unknown}`.
+  - After: `{patch_id: string}` (single non-nullable field, mirrors
+    backend `UploadResponse(BaseModel) {patch_id: str}` at
+    `packages/brain_api/src/brain_api/endpoints/upload.py:91-94`
+    exactly).
+  - The previous `[extra]` index sig is gone — backend's
+    `response_model=UploadResponse` enforces a closed shape, so the
+    escape hatch was buying nothing and hiding the drift.
+
+- **Dead-code fallback removed:**
+  `apps/brain_web/src/lib/ingest/upload.ts:91-107` (post-narrow line
+  range). The previous fallback at lines 91-95 filled
+  `{patch_id: null, applied: false, domain: null}` when the envelope
+  was empty — under the current backend contract (response_model
+  guarantees a non-empty `patch_id`), this path was provably dead. T2
+  replaces it with a defensive runtime guard: if `envelope.data` is
+  missing or `data.patch_id` is non-string / empty, throw an
+  `ApiError` with code `upload_envelope_invalid` so the consumer's
+  error-toast surface catches it. Surprise / minor scope creep:
+  documented inline at the throw site so the next reader sees why
+  this isn't dead code (it's a contract-violation tripwire).
+
+- **Live consumer 1: `apps/brain_web/src/components/inbox/drop-zone.tsx:60-76`** (post-edit line range). The
+  `uploadFile(file).then((res) => updateStatus(id, { ..., domain: res.domain }))` call (line 64 pre-fix) is now
+  `uploadFile(file).then(() => updateStatus(id, { status: "done", progress: 100 }))` — the broken `domain: res.domain` write (always `undefined` at runtime; the row in the Zustand store stayed at its optimistic `null` placeholder OR took on `undefined` depending on the store's merge contract) is gone. Plain-English comment in source explains the reasoning so a future reader doesn't re-add it. Inline regression test at `apps/brain_web/tests/unit/drop-zone.test.tsx:78-110` exercises the post-fix
+  state: it asserts that after a successful `uploadFile` mock returns
+  `{patch_id: "p-narrow"}`, the inbox-store row's `domain` field
+  stays `null` (the placeholder), NOT `"WRONG"` or `undefined` (the
+  pre-fix bug shapes). Sanity-checked via RED-then-GREEN: temporarily
+  reverting the consumer to read `res.domain` yields
+  `AssertionError: expected 'WRONG' to be null`. GREEN restored.
+
+- **Live consumer 2: `apps/brain_web/src/components/shell/app-shell.tsx:173-194`** (post-edit line range). The
+  `uploadFile(file).then((res) => inbox.updateStatus(id, { ..., domain: res.domain ?? null }))` call (line 178 pre-fix) is now
+  `uploadFile(file).then((res) => inbox.updateStatus(id, { status: "done", progress: 100 }))` — the broken `domain: res.domain ?? null` write
+  (always `null`, silently clobbering whatever the optimistic row
+  held) is gone. `res.patch_id` read at the chat-attach branch
+  (`if (onChatRoute && res.patch_id)`) is preserved — backend DOES
+  emit `patch_id`, so that read is correct. Same plain-English
+  comment shape as drop-zone for symmetry.
+
+- **Python pin test:**
+  `packages/brain_api/tests/test_endpoint_upload_shape.py` (newly
+  created). Two tests:
+  1. `test_upload_response_field_set` — `set(UploadResponse.model_fields.keys()) == {"patch_id"}`.
+     Sanity-checked via RED-then-GREEN: deliberately adding a
+     `stray: str = "TEMP_RED_CHECK"` field on the backend yields
+     `AssertionError: {'patch_id', 'stray'} != {'patch_id'}`. GREEN
+     restored.
+  2. `test_upload_response_patch_id_is_non_nullable_str` —
+     `field.annotation is str` and `field.is_required()`. Pins the
+     non-null direction; the TS narrow assumes this stays true.
+
+### Verification receipts
+
+- `tsc --noEmit` on `apps/brain_web/` — clean (no output).
+- `pnpm vitest run` on `apps/brain_web/` — 81 test files, 493
+  passed + 1 skipped (the new regression test in drop-zone slot 78-110 is the
+  additional test). RED-then-GREEN demonstrated on the new regression
+  test in isolation.
+- `pytest packages/brain_api/tests/test_endpoint_upload_shape.py` — 2 passed.
+  RED-then-GREEN demonstrated on the field-set pin test in isolation.
+- `pytest packages/brain_api/tests/test_upload_endpoint.py` — 4
+  passed (no regressions; happy-path body shape unchanged).
+- `pnpm lint` on `apps/brain_web/` — 0 ESLint warnings or errors.
+- **Visual UI verification** per CLAUDE.md "always validate fixes
+  via the UI in the browser before declaring done": started backend
+  via `.venv/bin/python -m uvicorn brain_cli.runtime.backend_factory:build_app --factory`
+  with `BRAIN_VAULT_ROOT=~/Documents/brain` and explicit
+  `BRAIN_WEB_OUT_DIR=apps/brain_web/out` (the resolver's `parents[4]`
+  fallback was unable to locate the out-dir in the iCloud-synced
+  workspace — minor surprise; documented for future visual-QA
+  invocations). Navigated to `http://localhost:4317/inbox/` and
+  triggered the drop-zone `drop` handler via a synthetic
+  `DragEvent` with a real `File` payload. Observed: (a) optimistic
+  row appears in the in-progress tab immediately (drop-zone's
+  `addOptimistic` fires), (b) backend returns
+  `{error: "ingest_failed", ...}` (no Anthropic API key in this
+  workspace, so classify step fails — environment limitation, not a
+  fix regression), (c) consumer's error branch surfaces the
+  "Upload failed." toast with the backend's message verbatim, (d)
+  row flips to `failed` status and shows up in the "Needs
+  attention" tab with badge `unclassified` (which is
+  `source.domain ?? "unclassified"` rendering when `row.domain ===
+  null` — exactly the post-fix shape). The happy-path consumer
+  branch (success → `updateStatus(id, {status: "done", progress:
+  100})`) is identical structure to the error branch and is covered
+  by the vitest regression test that asserts `row.domain` stays
+  `null` post-success.
+
+### Surprises captured
+
+1. The dead-code fallback at `upload.ts:91-95` IS provably dead under
+   the current backend contract (response_model is closed; envelope
+   middleware guarantees a `data` field on 2xx). T2 replaces it with
+   a defensive `ApiError` throw rather than removing it entirely —
+   this protects against a future backend regression that drops the
+   envelope wrap or returns a 2xx with no body. Tradeoff considered:
+   could have removed the check entirely + relied on the typed read
+   throwing at the destructure site (`return { patch_id: data.patch_id }`
+   would throw `TypeError: Cannot read properties of undefined`),
+   but a typed `ApiError` produces a friendlier toast and a clear
+   error code (`upload_envelope_invalid`) for future debugging.
+   Chose defensive guard.
+2. `resolve_out_dir()` at `packages/brain_api/src/brain_api/static_ui.py:95-97`
+   uses `parents[4]` as a dev-fallback for `<repo_root>/apps/brain_web/out`. Under uv's editable install + iCloud's `.pth` masking, the resolved `Path(__file__).parents[4]` did not land on the repo root and the SPA mount silently degraded to API-only mode. Setting `BRAIN_WEB_OUT_DIR` explicitly worked. **Not a Plan 19 fix candidate** (Plan 13 + Plan 15 cross-platform sweeps own this seam), but worth a lessons.md row at Plan 19 closure (T6) so future visual-QA invocations skip the diagnosis. Documented here for the closure pass.
+3. The TestClient happy-path assertion in `test_upload_endpoint.py:103-104` reads `body["patch_id"]` directly (not `body["data"]["patch_id"]`) — this works because the envelope middleware only wraps responses that aren't already a `BaseModel`-typed response_model on a JSON-accept path under specific conditions. Worth double-checking the envelope-shape parity tests at `test_envelope_shape_parity.py` if a future plan touches the envelope middleware — no action needed at T2.
+
+### Commit boundaries
+
+Per Plan 19 workflow note: atomic commits preferred. T2 produces 3
+commits:
+- **(a)** Frontend: TS narrow + 2 consumer fixes + drop-zone
+  regression test.
+- **(b)** Backend: Python pin test (new file).
+- **(c)** Plan doc: this `## T2 outcome` section.
+
+(Or a single combined commit if the user prefers; commits stay
+~150 LOC total.)
 
 ## T4 outcome
 
