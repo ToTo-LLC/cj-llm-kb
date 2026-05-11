@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { configSet } from "@/lib/api/tools";
+import {
+  useDomainOverridesStore,
+  type DomainOverrideField,
+} from "@/lib/state/domain-overrides-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
 /**
@@ -124,15 +128,31 @@ export function DomainOverrideForm({
   const tempValid = isValidTemperature(temperature);
   const maxTokensValid = isValidMaxTokens(maxTokens);
 
+  // The four LLM override fields are owned by domain-overrides-store;
+  // autonomous_mode is intentionally excluded from DomainOverrideEntry
+  // (Plan 16 / store design note) and must write via configSet directly.
+  const STORE_FIELDS = new Set<string>([
+    "classify_model",
+    "default_model",
+    "temperature",
+    "max_output_tokens",
+  ]);
+
   const saveField = async (
     field: keyof DomainOverrideValues,
     value: string | number | boolean | null,
   ) => {
     try {
-      await configSet({
-        key: `domain_overrides.${slug}.${field}`,
-        value,
-      });
+      if (STORE_FIELDS.has(field)) {
+        await useDomainOverridesStore.getState().setOverrideField(
+          slug,
+          field as DomainOverrideField,
+          value as string | number | null,
+        );
+      } else {
+        // autonomous_mode — not in DomainOverrideEntry; write via configSet directly.
+        await configSet({ key: `domain_overrides.${slug}.${field}`, value });
+      }
       pushToast({
         lead: value === null ? "Reset to global." : "Override saved.",
         msg: `domain_overrides.${slug}.${field} → ${
