@@ -126,6 +126,48 @@ describe("SourceRow", () => {
     expect(screen.queryByText(/·\s*\$/)).not.toBeInTheDocument();
   });
 
+  // Plan 24 T5: new SourceType values (`docx`, `pptx`) need a dedicated
+  // icon + label in the type badge. The badge has two readable
+  // surfaces: the label text (DOCX / PPTX) AND the Lucide icon
+  // (FileText for docx, Presentation for pptx). We assert on the
+  // label here AND the icon's testid so a future swap of either side
+  // fails RED instead of silently degrading to a generic FILE row.
+  test("docx type renders the DOCX label with the FileText icon", () => {
+    render(
+      <SourceRow
+        source={mkSource({
+          type: "docx",
+          status: "done",
+          progress: 100,
+          domain: "research",
+          title: "Q4-strategy.docx",
+        })}
+      />,
+    );
+    expect(screen.getByText(/^DOCX$/)).toBeInTheDocument();
+    // Distinct testid added in TypeIcon for the docx case — guarantees
+    // the FileText branch ran, not a fall-through to FileIcon.
+    expect(screen.getByTestId("type-icon-docx")).toBeInTheDocument();
+  });
+
+  test("pptx type renders the PPTX label with the Presentation icon", () => {
+    render(
+      <SourceRow
+        source={mkSource({
+          type: "pptx",
+          status: "done",
+          progress: 100,
+          domain: "research",
+          title: "all-hands-2026.pptx",
+        })}
+      />,
+    );
+    expect(screen.getByText(/^PPTX$/)).toBeInTheDocument();
+    // Distinct testid for the pptx case — Presentation glyph is the
+    // intended visual differentiator from .docx in mixed inboxes.
+    expect(screen.getByTestId("type-icon-pptx")).toBeInTheDocument();
+  });
+
   test("failed status renders the error line AND a Retry button", () => {
     const onRetry = vi.fn();
     render(

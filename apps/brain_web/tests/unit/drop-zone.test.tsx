@@ -110,4 +110,54 @@ describe("DropZone", () => {
     fireEvent.click(screen.getByRole("button", { name: /browse files/i }));
     expect(clickSpy).toHaveBeenCalled();
   });
+
+  // Plan 24 T5: the hidden ``<input type="file">`` carries an
+  // ``accept`` attribute that filters the native picker to the
+  // supported formats. The docx + pptx Office Open XML MIME types
+  // and their extensions are the Plan 24 additions — assert both
+  // are present so a regression that drops the helper or rewires
+  // the input forgetting ``accept`` fails RED.
+  test("hidden file input advertises .docx + .pptx in its accept attribute", () => {
+    const { container } = render(<DropZone />);
+    const input = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    const accept = input!.getAttribute("accept") ?? "";
+    // Office Open XML MIMEs.
+    expect(accept).toContain(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    expect(accept).toContain(
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    );
+    // Extensions — needed by Safari + some Windows picker variants.
+    expect(accept).toContain(".docx");
+    expect(accept).toContain(".pptx");
+  });
+
+  test("drop forwards a .docx file to uploadFile() (Plan 24 T5)", () => {
+    // End-to-end wiring smoke: a .docx file with the canonical
+    // wordprocessingml MIME type lands at ``uploadFile`` unchanged.
+    // The drag-drop path is deliberately permissive (the input's
+    // accept attribute only governs the native picker), so the
+    // backend remains the validation gate; this test pins the
+    // handler-doesn't-filter-out behaviour.
+    render(<DropZone />);
+    const root = screen.getByTestId("drop-zone");
+    const file = new File(["fake docx bytes"], "strategy.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+
+    fireEvent.drop(root, {
+      dataTransfer: { files: [file], types: ["Files"] },
+    });
+
+    expect(uploadFileMock).toHaveBeenCalledTimes(1);
+    const arg = uploadFileMock.mock.calls[0][0] as File;
+    expect(arg.name).toBe("strategy.docx");
+    expect(arg.type).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+  });
 });
