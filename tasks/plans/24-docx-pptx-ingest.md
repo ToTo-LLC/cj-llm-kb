@@ -644,6 +644,41 @@ tasks/
 _Filled in at each task close. Standard receipt format mirrors Plan
 19-23._
 
+### T0 outcome — Spec + SourceType + cost-ledger schema
+
+**Status:** DONE
+
+**Files modified/created:**
+- `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` — 3 edits (§5 handlers table +2 rows, §5 new "Image OCR rules" subsection, §10 safety rails +1 bullet). Net +9 lines.
+- `packages/brain_core/src/brain_core/ingest/types.py` — SourceType enum +DOCX +PPTX (2 members inserted between TRANSCRIPT and TWEET; file-based-handlers grouping, not alphabetical — matches existing convention where TWEET is the url-based outlier at the end). Net +2 lines.
+- `packages/brain_core/tests/ingest/test_source_type_pin.py` — NEW (44 lines). Field-set strict equality pin + string-value pin.
+- `packages/brain_core/tests/ingest/test_types.py` — removed the weak `test_source_type_values` (3 lines) to avoid duplication with the new pin file; left a pointer comment.
+
+**Spec edit locations (post-apply line numbers):**
+- §5 handlers table — lines 239-240 (docx + pptx rows inserted after transcript, before tweet).
+- §5 "Image OCR rules" subsection — lines 245-251 (between handlers table and "Bulk import" subsection).
+- §10 "Vision OCR cost metering" bullet — line 568 (after the Plan 22 watched-folders bullet at line 567).
+
+**SourceType order:** file-based-handlers grouping (TEXT, URL, PDF, EMAIL, TRANSCRIPT, **DOCX, PPTX**, TWEET). Rationale: existing order is not alphabetical (URL precedes PDF). It groups file-based handlers first with TWEET — the url-based outlier — at the end. Inserting DOCX/PPTX after TRANSCRIPT (also a file-based, also python-docx-using) and before TWEET preserves that grouping.
+
+**Pin test file:** `packages/brain_core/tests/ingest/test_source_type_pin.py` (new file, not extended). The existing `test_types.py` had a weak 3-assertion smoke test that is now fully superseded by the strict field-set pin; removed to avoid duplication.
+
+**Test count + pass/fail:**
+- New tests: 2 (both PASSED) — `test_source_type_enum_field_set` + `test_source_type_string_values_match`.
+- Brain_core full suite baseline (pre-T0): 1162 collected.
+- Brain_core full suite post-T0: 1163 collected (+1 net = -1 weak removed + 2 pin tests added). Run: 1158 passed, 5 skipped, 0 failed, 12.97s.
+
+**Commit SHAs:** (filled in below)
+
+**Self-review findings:**
+- ✅ All 3 spec edits land at the right locations — grep regex confirms (`docx |`, `pptx |`, `Image OCR rules`, `Vision OCR cost metering`).
+- ✅ No internal spec contradictions. The new prose explicitly references CLAUDE.md non-negotiable #4 (LLMProvider abstraction) and #6 (vault is source of truth — vision calls go through the same scope_guard'd handler paths via SourceHandler protocol). `op="ocr"` is a NEW operation type for `costs.sqlite` — no collision with existing ops (`classify`, `summarize`, `integrate`, `chat`, `autotitle`, etc.).
+- ✅ SourceType pin fails RED if any enum member is added, removed, or renamed — strict set-equality, not subset. String-value pin also catches a slug-rename (e.g., changing `"docx"` to `"word_doc"`).
+- ✅ No code outside spec + enum + test touched. No other `SourceType` consumer in the codebase needed a partial pattern match update — verified by grep (the enum is consumed via direct member access in handlers; new members don't break existing call sites).
+- ⚠️ Note for T1 reviewer: §5 handlers table now has TWO rows referencing `python-docx` (transcript + docx). The transcript row's `Notes` column says "strips timestamps, preserves speakers" and the docx row's `Notes` column clarifies "TranscriptDOCXHandler claims transcript-stem .docx first; DocxHandler is the fall-through" — capturing the claim-order contract from Plan 24 D3. T1 reviewer should confirm the dispatcher honors this claim ordering.
+
+**Concerns:** None blocking. The spec edit references `Plan 24 T3` (vision_extract addition) and `Plan 24 T4` (pipeline pass) in advance of those tasks landing — standard pattern matching Plan 22 T0 forward-references to T1/T2/T3.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
