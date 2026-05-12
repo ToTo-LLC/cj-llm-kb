@@ -2190,6 +2190,196 @@ the patch won't fire and the test will fail loudly.
   in brain_mcp _cached_ctx (D7 symmetric watcher)`
 - _(docs commit SHA backfilled by the docs commit itself)_
 
+### T9 outcome — Backup trigger swap + initial-sync cost-estimate gate
+
+**What landed:**
+
+Extended ``BackupTrigger`` with a new value
+``"pre_watched_folder_sync"``, swapped the T5 ``"manual"`` stub in
+``brain_watch_folder`` for the new trigger, and added an informational
+classify-only cost estimate that surfaces in both ``ToolResult.text``
+(human-readable) and ``ToolResult.data["cost_estimate"]`` (structured
+4-key payload) BEFORE the initial sync's bulk import runs. Per D3 the
+estimate is informational only — there is NO refusal threshold. The
+rate-limit + per-domain budget caps (Plan 16 T26-T32) remain the hard
+ceilings; T9 just gives the user a projection of the classify spend
+they're about to authorize.
+
+**Files modified:**
+
+- `packages/brain_core/src/brain_core/backup.py` (+5 LOC effective):
+  extended the ``BackupTrigger`` Literal, the ``_VALID_TRIGGERS``
+  frozenset, and the ``_FILENAME_RE`` regex (so ``brain_backup_list``
+  enumerates the new trigger's snapshots correctly). Docstring
+  trigger list updated.
+- `packages/brain_core/src/brain_core/tools/backup_create.py` (+5 LOC):
+  extended the tool-surface ``_VALID_TRIGGERS`` tuple. The
+  ``INPUT_SCHEMA`` enum derives from this tuple, so the new value
+  flows through to the OpenAPI surface automatically.
+- `packages/brain_core/src/brain_core/tools/watch_folder.py`
+  (~+85 LOC):
+  - Module docstring updated: T5 "stubbed manual + TODO" paragraph
+    replaced with a permanent description of the new trigger + the
+    D3 cost-estimate contract.
+  - Added ``_CLASSIFY_TOKEN_COST = 1000`` and
+    ``_CLASSIFY_MAX_OUTPUT_TOKENS = 256`` constants — mirrors
+    ``bulk_import.py:_CLASSIFY_TOKEN_COST`` so both tools project the
+    same per-file classifier spend.
+  - Added ``_estimate_initial_sync_cost(folder, classify_model) ->
+    (file_count, tokens, usd | None)`` helper. Walks the folder the
+    same way ``BulkImporter.plan`` does (``rglob`` + ``is_file``
+    + ``is_symlink`` filter); estimates USD via
+    ``BudgetEnforcer.estimate_cost`` and returns ``None`` for the USD
+    field when the classify model has no pricing entry (forward-compat
+    for a model swap that lands ahead of pricing).
+  - Resolves the classify model via ``resolve_llm_config(cfg, None)``
+    (mirrors ``_build_pipeline``) so the estimate matches the model
+    the bulk import will actually call.
+  - Cost estimate fires BEFORE the backup + plan/apply (so the user
+    sees the projection even on a backup-or-pipeline failure).
+  - Swapped ``create_snapshot(ctx.vault_root, trigger="manual")``
+    for ``trigger="pre_watched_folder_sync"`` and dropped the T5
+    TODO comment. Kept the narrow ``try/except (FileNotFoundError,
+    ValueError)`` wrapper — backup remains best-effort.
+  - Extended both return branches (``status="watched"`` and
+    ``status="already_watched"``) to include the new
+    ``cost_estimate`` key (``None`` on the no-sync paths). text
+    readout format: ``" | initial sync estimate: ~N files, ~$X.XXXX
+    (classify only; summarize+integrate cost is per-file
+    post-classify)"``.
+- `packages/brain_core/tests/tools/test_watch_folder.py` (+200 LOC):
+  - Updated module docstring with the T9 pin section.
+  - Extended ``test_data_shape_pin_initial_sync_false`` to pin the
+    new 5-key shape ``{status, folder, domain, initial_sync_summary,
+    cost_estimate}``.
+  - Extended ``test_already_watched_returns_idempotent_status`` to
+    pin ``cost_estimate is None`` on the idempotent short-circuit.
+  - Added 8 new T9 pin tests:
+    1. ``test_pre_watched_folder_sync_in_backup_create_valid_triggers``
+       — tool-surface tuple includes the new trigger.
+    2. ``test_pre_watched_folder_sync_in_backup_module_valid_triggers``
+       — backup module frozenset AND filename regex include the new
+       trigger.
+    3. ``test_estimate_initial_sync_cost_token_calc`` — tokens =
+       ``file_count × _CLASSIFY_TOKEN_COST``; USD matches the
+       Haiku pricing formula.
+    4. ``test_estimate_initial_sync_cost_unknown_model_returns_none``
+       — forward-compat: unknown classify model returns ``None`` USD
+       without raising.
+    5. ``test_initial_sync_calls_backup_with_pre_watched_folder_sync_trigger``
+       — monkeypatches ``create_snapshot`` and asserts trigger="pre_watched_folder_sync".
+    6. ``test_initial_sync_surfaces_cost_estimate_in_text_and_data``
+       — text contains "initial sync estimate", "N files",
+       "classify only"; data["cost_estimate"] has the 4-key payload.
+    7. ``test_initial_sync_does_not_refuse_on_large_folder`` — D3 pin:
+       200 files (> ``bulk_import._LARGE_FOLDER_THRESHOLD=20``) still
+       go through; no "refused" status leak.
+    8. ``test_cost_estimate_omitted_when_initial_sync_false`` —
+       ``cost_estimate is None`` and text omits the readout on the
+       no-sync path.
+  - Added ``_FakeBulkImporter`` (mirroring
+    ``test_bulk_import._FakeBulkImporter``) + ``_install_fakes``
+    helper that wires fakes for ``BulkImporter``, ``_build_pipeline``,
+    and ``create_snapshot``.
+
+**Decisions resolved in scope:**
+
+- **D3** — no hard initial-sync cap; cost estimate informational
+  only. Verified by ``test_initial_sync_does_not_refuse_on_large_folder``
+  (200 files = 10× ``bulk_import._LARGE_FOLDER_THRESHOLD`` and the
+  call still succeeds with ``status="watched"``).
+- **D11** — no new dependencies. Uses ``BudgetEnforcer.estimate_cost``,
+  ``resolve_llm_config``, and existing ``rglob``-based folder walk.
+
+**Verification receipts:**
+
+```bash
+# T9-scoped tests (backup_create + watch_folder = 21 tests)
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:... \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/tools/test_backup_create.py \
+  packages/brain_core/tests/tools/test_watch_folder.py -v
+# 21 passed (5 backup_create + 8 T5 watch + 8 new T9)
+
+# Full brain_core suite
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:... \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# 1136 passed, 5 skipped (baseline 1128 + 8 new T9 = 1136; no regressions)
+
+# mypy on modified files
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:... \
+  uv run --package brain_core mypy \
+  packages/brain_core/src/brain_core/tools/watch_folder.py \
+  packages/brain_core/src/brain_core/tools/backup_create.py \
+  packages/brain_core/src/brain_core/backup.py
+# Success: no issues found in 3 source files
+```
+
+**Concerns / forward notes:**
+
+1. **Estimate over-counts vs ``BulkImporter.plan`` walker** —
+   ``_estimate_initial_sync_cost`` uses a simple ``rglob`` +
+   ``is_file`` + ``is_symlink`` filter and does NOT skip dotfiles
+   the way ``BulkImporter.plan`` does. This is deliberate: a
+   conservative over-count is acceptable; under-count would be a
+   bug. The mismatch is pinned in
+   ``test_estimate_initial_sync_cost_token_calc`` so the conservative-
+   ceiling contract is explicit. A future tightening (skip dotfiles
+   to match the plan walker) would require re-pinning this test.
+2. **Cross-package shape consumers** — ``brain_api`` and ``brain_mcp``
+   reference ``brain_watch_folder`` by name in their watcher-startup
+   tests but don't pin the data shape, so the new ``cost_estimate``
+   key landed without cross-package test drift. The frontend
+   wrapper (Plan 22 T12+) will need to read the new key.
+3. **Pre-existing brain_api test failure**
+   (``test_lists_thirty_six_tools_after_issue_17``) — already failed
+   on ``main`` before T9 (count pin of 38 vs actual 45 from T5's 7
+   new tools). NOT a T9 regression; flagged for Plan 22 closure (T17)
+   alongside the other `brain_api` count bumps.
+
+**T5 TODO marker resolution:**
+
+The T5 ``TODO(Plan 22 T9)`` comment in
+``watch_folder.py`` was REMOVED (not replaced). The block was
+rewritten with a permanent comment describing the contract:
+``# Pre-sync backup with the distinct trigger so the Settings page
+can group "pre-watched-folder-sync" snapshots separately from manual
+/ daily / pre-bulk-import``. The trigger string ``"pre_watched_folder_sync"``
+is greppable across the repo: ``backup.py`` (Literal + frozenset +
+regex), ``backup_create.py`` (tuple), ``watch_folder.py`` (call
+site), test pins, plan-doc.
+
+**Cost-estimate format used:**
+
+Text format (single-line, anchor phrases pinned in tests):
+```
+watched <folder> → <domain> (synced N/M files) | initial sync estimate: ~K files, ~$X.XXXX (classify only; summarize+integrate cost is per-file post-classify)
+```
+
+Structured ``data["cost_estimate"]`` (4 keys):
+```python
+{
+    "file_count": int,
+    "estimated_tokens": int,
+    "estimated_usd": float | None,  # None when classify_model has no pricing row
+    "classify_model": str,
+}
+```
+
+**Pricing constant used:**
+
+Routed through ``BudgetEnforcer.estimate_cost`` — single source of
+truth for pricing in ``brain_core/cost/budget.py:_PRICING``. No
+duplicate constants in ``watch_folder.py``. The fallback classify
+model when ``Config.llm`` is missing is ``claude-haiku-4-5-20251001``
+(matches ``bulk_import.py`` and ``_build_pipeline``).
+
+**Commits:**
+
+- `9a34853` — `feat(plan-22): T9 — pre_watched_folder_sync backup
+  trigger + informational cost estimate`
+- _(docs commit SHA backfilled by the docs commit itself)_
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
