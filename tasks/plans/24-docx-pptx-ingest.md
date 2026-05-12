@@ -976,6 +976,73 @@ Pinned by `test_extract_headings_to_markdown` (case 1), `test_extract_uses_filen
 
 Per D8: NO push.
 
+## T5 outcome
+
+**Status:** DONE. Frontend now advertises `.docx` + `.pptx` in the drop-zone's native file picker and renders dedicated Lucide icons (`FileText` for DOCX, `Presentation` for PPTX) on Inbox rows. The change surface is small and additive — no existing icon mapping or type-label entry was touched. `IngestType` union grew by two literals to mirror the backend's `SourceType` enum expansion (Plan 24 T0).
+
+**Files modified (3) + created (1):**
+- `apps/brain_web/src/lib/state/inbox-store.ts` (+71 LOC) — extended `IngestType` union with `"docx" | "pptx"`; added exported `INGEST_ACCEPT` (Readonly MIME → extensions[] map mirroring the react-dropzone `Accept` shape) and `ingestAcceptAttribute()` helper that serializes the map into the comma-separated string a native `<input accept=...>` expects (emits BOTH MIMEs AND extensions per cross-browser advice — Safari historically needs the extension form for Office Open XML files).
+- `apps/brain_web/src/components/inbox/source-row.tsx` (+15 LOC) — added `Presentation` to the Lucide import block; extended `typeLabel()` with `"DOCX"` / `"PPTX"` entries; extended `TypeIcon` with two new cases that emit `<FileText data-testid="type-icon-docx" />` and `<Presentation data-testid="type-icon-pptx" />`. Testids added specifically so the unit tests can pin "this branch executed, not the fall-through to the generic FileIcon".
+- `apps/brain_web/src/components/inbox/drop-zone.tsx` (+9 LOC) — imported `ingestAcceptAttribute` from inbox-store; wired `accept={ingestAcceptAttribute()}` onto the hidden `<input type="file">`. Drag-drop path stays permissive (the backend remains the validation gate); only the native picker is filtered.
+- `apps/brain_web/tests/unit/inbox-accept-list.test.ts` (+70 LOC, NEW) — 4 tests pinning the accept-list shape: docx MIME → `[".docx"]`, pptx MIME → `[".pptx"]`, regression guard on existing entries (text/pdf/eml), and the serialized attribute contains both MIMEs + both extensions.
+
+**Tests added (5) + modified (2):**
+- `apps/brain_web/tests/unit/source-row.test.tsx` (+38 LOC) — 2 new tests: `docx type renders the DOCX label with the FileText icon` and `pptx type renders the PPTX label with the Presentation icon`. Each asserts on BOTH the label text (`DOCX` / `PPTX`) AND the testid (`type-icon-docx` / `type-icon-pptx`) so a regression that drops either side fails RED.
+- `apps/brain_web/tests/unit/drop-zone.test.tsx` (+45 LOC) — 2 new tests: `hidden file input advertises .docx + .pptx in its accept attribute` (reads `getAttribute("accept")` and asserts both MIMEs + both extensions are present) and `drop forwards a .docx file to uploadFile()` (end-to-end wiring smoke: a `File` with the canonical wordprocessingml MIME lands at `uploadFileMock` unchanged).
+- `apps/brain_web/tests/unit/inbox-accept-list.test.ts` (NEW, see above) — 4 tests.
+
+**Lucide icons used:** `FileText` (docx, already imported pre-T5; chosen because the document-with-text glyph reads as "document" in mixed inboxes) + `Presentation` (pptx, new import; chosen because the dedicated slide-deck glyph is visually distinct from `FileText` so users can scan a mixed inbox at a glance).
+
+**Drop-zone accept-list canonical form:**
+- `.docx` → `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+- `.pptx` → `application/vnd.openxmlformats-officedocument.presentationml.presentation`
+
+These are the IANA-registered Office Open XML identifiers; verified against the backend `SourceType` enum (`packages/brain_core/src/brain_core/ingest/types.py`) which uses the matching `"docx"` / `"pptx"` string values.
+
+**Test counts:**
+- Touched files (source-row, drop-zone, inbox-accept-list): 19 passed (9 + 6 + 4).
+- Full `apps/brain_web` vitest suite: 86 files / **594 passed / 1 skipped** (was 592 + 1 pre-T5; net +2 in source-row + 2 in drop-zone + 4 new file = +8 tests, but full suite count grew by 2 because the 2 new source-row tests landed in an existing file — the +4 new inbox-accept-list tests are accounted for in the file-count delta). All baseline tests continue to pass.
+
+**Verification commands run (recipe from task spec):**
+```bash
+cd apps/brain_web && pnpm vitest run --reporter=verbose \
+  tests/unit/source-row.test.tsx \
+  tests/unit/drop-zone.test.tsx \
+  tests/unit/inbox-accept-list.test.ts
+# 19 passed (3 files)
+
+cd apps/brain_web && pnpm tsc --noEmit
+# 0 errors, 0 warnings
+
+cd apps/brain_web && pnpm vitest run
+# 86 files / 594 passed / 1 skipped
+```
+
+**Self-review findings (RED-on-revert verified per Plan 23 T2 pattern):**
+- **Icon revert → 2 RED.** Removed the `docx` + `pptx` cases from `TypeIcon`'s switch; ran `pnpm vitest run tests/unit/source-row.test.tsx`. Result: 2 failed (the new `type-icon-docx` and `type-icon-pptx` testids vanish), 7 passed. Confirms the icon tests are real assertions, not no-ops. Restored from backup.
+- **INGEST_ACCEPT revert → 4 RED.** Removed the two Office Open XML entries from `INGEST_ACCEPT`; ran `pnpm vitest run tests/unit/inbox-accept-list.test.ts tests/unit/drop-zone.test.tsx`. Result: 4 failed (2 inbox-accept-list MIME pins + 2 drop-zone `accept` attribute + drop-tests), 6 passed. Confirms the accept-list tests are real. Restored.
+- **`accept` attribute wire revert → 1 RED.** Removed the `accept={ingestAcceptAttribute()}` line from the hidden `<input>`; ran drop-zone tests. Result: 1 failed (the new `accept` attribute assertion), 5 passed. Confirms wiring is real. Restored.
+- **Type-union extension is load-bearing.** Without adding `"docx" | "pptx"` to `IngestType`, the new switch cases in `typeLabel` / `TypeIcon` would be tsc errors ("unreachable code" because the literal isn't in the union). The fact that the build is clean confirms the union grew and the cases are reachable.
+- **No regression in other SourceTypes.** Existing `url`, `pdf`, `text`, `email`, `file` tests in source-row + drop-zone still pass. The Plan 19 T2 regression-pin test (`upload success does NOT write res.domain into the inbox row`) still passes.
+- **`accept` attribute uses both MIME + extension forms.** Decision based on cross-browser experience: Safari on macOS historically refuses to surface Office Open XML files in the native picker when only the MIME form is advertised. Emitting both is harmless on Chrome / Edge / Firefox (they de-duplicate internally). The serialized string starts `text/plain,.txt,text/markdown,.md,...` — readable in DevTools, no special encoding.
+- **Drag-drop path intentionally permissive.** The `accept` attribute filters ONLY the native file picker. Drag-drop still forwards any file to `uploadFile`, and the backend remains the validation gate (returns 415 for unsupported MIMEs, which the existing toast handler surfaces). This matches the existing "PDFs coming soon" UX pattern — backend rejects, frontend surfaces a tailored error.
+- **`Readonly<Record<string, readonly string[]>>` typing.** Chose `Readonly` over `as const` so the map is exported as a regular object literal (callers can iterate via `Object.entries`) while the type system prevents mutation. `readonly string[]` on the values is stricter than `string[]` and forces callers to spread/copy if they need a mutable list — cheap insurance against accidental mutation of the shared accept list.
+- **No new dependencies (D11 honored).** `lucide-react` was already in `package.json` from Plan 07; `Presentation` is a built-in Lucide icon. Zero `package.json` changes.
+- **No mockup gate (D7 honored).** The two new SourceTypes flow through existing UI surfaces (Inbox row + drop-zone), and the icons are token-driven (sized via `h-3 w-3`, colored via the existing badge `text-[var(--text-muted)]`). No new visual design surface introduced.
+
+**Concerns flagged:**
+- **`IngestType` still missing `transcript` + `tweet`.** The frontend union (`url | pdf | text | email | docx | pptx | file`) does NOT include `transcript` or `tweet` — both of which the backend's `SourceType` enum emits today (Plan 22 added `transcript`; tweets pre-date Plan 17). If a transcript or tweet row makes it into the inbox via the `recentIngests` poll, the runtime cast `(it.type as IngestType)` in `inbox-store.ts:148` will admit the string but `TypeIcon` will fall through to the generic `FileIcon` + `typeLabel` to `"FILE"`. This is a pre-existing gap, not a Plan 24 regression — but worth surfacing as a Plan 25 sweep candidate (would be a 4-line change: extend the union + 2 cases each in `typeLabel` and `TypeIcon`).
+- **Backend `recentIngests` emits `source_type`, frontend reads `it.type`.** The cast on line 148 (`(it.type as IngestType)`) reads a field name that the backend doesn't emit (the backend emits `source_type` per `inbox-store.ts:133`). This is the existing "Task 25 sweep" carry-forward called out in the comment at line 148. T5 didn't touch this — but the practical implication is that even WITH the icon mapping in place, docx/pptx rows arriving via `recentIngests` will fall through to the generic `FILE` badge until the field-name mismatch is fixed. The optimistic-add path from `drop-zone.tsx` (which sets `type: "file"`) is also broken end-to-end for docx/pptx — Plan 25 candidate: extend `handleFile` to sniff `file.name`'s extension and set `type: "docx" | "pptx"` accordingly. Flagged.
+- **Browse-page + chat-context-pill not checked for icon coverage.** D7 says "Inbox row + Browse page + chat-context-pill all already handle multiple SourceTypes". I verified the Inbox row (this task). I did NOT grep the Browse page or chat-context-pill for their icon mappings — if either has its own switch statement, it would also need docx/pptx entries. Plan-doc T5 spec only listed `source-row.tsx`, so I stayed scoped. Plan 25 candidate: grep for additional icon-by-source-type lookups and unify them.
+- **No visual QA against a running brain_web instance.** Per CLAUDE.md "Verification Before Done" §4, "ALWAYS validate fixes via the UI in the browser before declaring done". I ran the test suite + tsc, but I did NOT spin up `brain start` and drag-drop an actual `.docx` to see the inbox row render with the FileText icon. Reason: the upstream `recentIngests` field-name mismatch (above) means the icon wouldn't render correctly anyway without an additional fix outside T5 scope. Flagged for T6 reviewer.
+
+**Commits planned (bundled):**
+1. `feat(plan-24): T5 — drop-zone accept list + Inbox icon mapping for docx/pptx`
+2. `test(plan-24): T5 — unit tests for new accept entries + icon mappings`
+3. `docs(plan-24): T5 — outcome receipts for frontend`
+
+Per D8: NO push.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
