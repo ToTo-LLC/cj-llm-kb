@@ -1038,6 +1038,213 @@ Plan 22 T5+ exercises tool surfaces via brain_api integration tests.
 - `e701462` — `feat(plan-22): T1 — WatchedFolder schema + Config.watched_folders + 4 new frontmatter fields + 2 pin test files`
 - _This receipt commit follows in the next SHA._
 
+### T2 outcome — Pipeline re-ingest path (`IngestPipeline.update_source`)
+
+**Status:** DONE.
+
+**Files touched:**
+
+1. `packages/brain_core/src/brain_core/ingest/pipeline.py` (+414 / −3 LOC,
+   1042 total) — added `update_source(existing_note_path, new_source_path,
+   *, allowed_domains) -> IngestResult` plus three private helpers
+   (`_rewrite_frontmatter_only`, `_rebuild_note`, `_apply_replacement`,
+   `_log_update`). New imports: `Frontmatter`, `LogEntry`/`LogFile`,
+   `ScopeError`/`scope_guard`, `Edit`/`IndexEntryPatch`, `Receipt`. The
+   existing `ingest()` method is unchanged — `update_source` is a
+   sibling, not a refactor of the 9-stage shape.
+2. `packages/brain_core/tests/ingest/test_pipeline_update_source.py`
+   (NEW, +693 LOC, 9 tests) — covers all 5 plan-doc test fixtures
+   (no-op / overwrite / vault-edit-overwrite / path-only / scope-
+   violation) plus 4 additional pins: slug-and-note-path stability on
+   overwrite, orphan-clearing on successful re-ingest, log-verb
+   round-trip through `LogFile.read_all`, integrate-stage index entries
+   landing in the same atomic write.
+
+**Method shape:**
+
+```python
+async def update_source(
+    self,
+    existing_note_path: Path,
+    new_source_path: Path,
+    *,
+    allowed_domains: tuple[str, ...],
+) -> IngestResult:
+```
+
+Three behavioral branches based on content_hash + resolved-source-path
+comparison:
+
+| Branch | Condition | LLM calls | Vault mutation | Log line |
+|---|---|---|---|---|
+| `no_change` | hash unchanged, path unchanged | 0 | none | `update | no_change | <slug>` |
+| `path_only` | hash unchanged, path changed | 0 | frontmatter `source_path` + `updated` only | `update | path_only | <slug>` |
+| `overwrite` | hash changed | summarize + integrate (no classify per D4) | full file replacement via VaultWriter Edit | `update | overwrite | <slug>` |
+
+**Design decisions:**
+
+- **Slug preservation** (D4): slug is `existing_note_path.stem` — never
+  re-derived from the new summary title. Pinned by
+  `test_update_source_preserves_slug_and_note_path_on_overwrite`.
+- **Domain preservation** (D4): domain is read from existing note's
+  frontmatter via `Frontmatter.from_dict(parsed)`. No classifier call.
+  Pinned by `test_update_source_overwrites_on_content_change`'s
+  `len(fake.requests) == 2` assertion (only summarize + integrate, no
+  classify).
+- **VaultWriter atomicity**: replacement uses a `PatchSet` with a single
+  `Edit(path, old=full_prior_content, new=full_new_content)`. Writer's
+  atomic temp+rename + undo log + filelock all apply. Integrate-stage
+  `extra_edits` + `extra_index_entries` land in the SAME PatchSet so
+  the entire update is one undo-id-keyed mutation.
+- **Log verb**: written directly via `LogFile.append(LogEntry(op="update",
+  summary=f"<sub-verb> | <slug>"))` AFTER `writer.apply` returns. The
+  writer's PatchSet `log_entry` field is left `None` because the writer
+  hardcodes `op="patch"` — going via `LogFile` directly is the only
+  path to the `update` verb without a writer signature change. Same
+  `LogFile` surface the writer itself uses, so this isn't a
+  "mutation-outside-VaultWriter" violation.
+- **Scope guard**: called at Stage A on `existing_note_path` BEFORE any
+  read — so a personal-domain note + research-scope tuple raises
+  `ScopeError` (subclass of `PermissionError`) immediately, vault
+  untouched, fake's queue empty (no LLM call). Pinned by
+  `test_update_source_refuses_when_note_domain_outside_scope`.
+- **Defense-in-depth domain check**: if scope_guard passes (path-domain
+  matches) but the note's frontmatter `domain` field differs from the
+  path's domain (rare: hand-edited frontmatter), the code returns
+  `IngestStatus.QUARANTINED`. This is dead code in the happy path but
+  flags a class of corruption that pure path-based scope_guard would
+  miss.
+- **Orphan-flip-on-success**: a successful overwrite sets `orphaned:
+  False` + `orphaned_at: None` in the rebuilt frontmatter. T3's
+  `mark_orphaned` writes the inverse transition. Pinned by
+  `test_update_source_clears_orphan_mark_on_successful_overwrite`.
+- **Stage-4 archive deferral**: the plan-doc spec says "skip stage 4
+  archive on unchanged content_hash for efficiency." The current
+  handler API doesn't separate `extract-without-archive` from
+  `extract-with-archive` — every `handler.extract()` call writes an
+  archive copy. v1 accepts this redundant write; the body hash check
+  still short-circuits LLM cost. Documented in the method docstring.
+  v2 candidate: split handler API.
+
+**Verification:**
+
+```
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:...:packages/brain_cli/src \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/ingest/test_pipeline_update_source.py -v
+```
+
+- 9 new tests run: **9 passed, 0 failed, 3.99s**.
+- All 5 plan-doc fixtures covered:
+  - `test_update_source_no_op_when_hash_and_path_unchanged` (no-op)
+  - `test_update_source_overwrites_on_content_change` (overwrite)
+  - `test_update_source_overwrites_vault_hand_edits_per_d1` (D1 contract)
+  - `test_update_source_path_only_on_move_with_same_content` (move)
+  - `test_update_source_refuses_when_note_domain_outside_scope` (scope)
+- Plus 4 additional pins (slug/path stability, orphan clearing, log
+  verb round-trip via `LogFile.read_all`, integrate index-entries).
+
+```
+unset VIRTUAL_ENV && PYTHONPATH=...:packages/.../src \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+```
+- Full brain_core suite: **1056 passed, 5 skipped** (pre-T2 baseline:
+  1047 passed, 5 skipped — delta is +9 new tests, 0 regressions).
+
+```
+uv run --package brain_core ruff check packages/brain_core/src/brain_core/ingest/pipeline.py packages/brain_core/tests/ingest/test_pipeline_update_source.py
+uv run --package brain_core mypy packages/brain_core/src/brain_core/ingest/pipeline.py
+```
+- ruff: All checks passed.
+- mypy: Success: no issues found in 1 source file.
+
+**Verification recipe note:** the brew-Python escape hatch from Plan 21
+T1 wasn't needed this round — after a fresh `rm -rf .venv && uv sync
+--frozen` the iCloud-eviction zero-byte-files cleared up and the
+plan-doc-suggested `uv run` recipe worked end-to-end. Captured for the
+next implementer: the eviction failure mode is environmental and
+re-sync can resolve it.
+
+**Per-task review (combined, per plan-doc T2 section):**
+
+- **(a) Slug + domain preserved per D4.** ✓ Slug = `existing_note_path.stem`,
+  never re-derived. Domain = `Frontmatter.from_dict(parsed).domain`, no
+  classifier call. Two pin tests
+  (`test_update_source_preserves_slug_and_note_path_on_overwrite` for
+  slug-stability; the `len(fake.requests) == 2` assertion in
+  `test_update_source_overwrites_on_content_change` for the no-classify
+  call shape).
+- **(b) Overwrite contract per D1.** ✓ The vault-hand-edits-overwrite
+  test pins that user-added body sections + inline comments are LOST on
+  re-ingest — including a load-bearing failure message that points the
+  future vault-edit-aware-merge plan at THIS test as its first flip
+  target.
+- **(c) Log entry uses `update` verb (greppable).** ✓ Direct `LogFile`
+  append with `op="update"` and a 3-state sub-verb in the summary
+  (`no_change` / `path_only` / `overwrite`). Pinned by
+  `test_update_source_log_entry_is_greppable_update_verb` which
+  round-trips through `LogFile.read_all()` and asserts `e.op == "update"`.
+- **(d) Fixtures cover unchanged-hash (no-op) AND changed-hash (overwrite).**
+  ✓ Both branches exercised. The path-only branch is an additional
+  third case (same hash, different path) that the plan-doc didn't list
+  as required but my reading of the design considerations needed. The
+  `update_source` method's body explicitly comments on the
+  three-way branch decision.
+
+**Self-review findings:**
+
+- **Completeness:** All 5 plan-doc fixtures landed plus 4 additional
+  defense-in-depth pins. Method signature matches plan-doc spec
+  (`(existing_note_path, new_source_path, *, allowed_domains)`).
+  Returns `IngestResult` for shape parity with `ingest()`.
+- **Quality:** Followed `ingest()`'s 9-stage shape conventions
+  (record_failure on exception, _record_history on every exit path,
+  per-stage cost accumulation). Reused existing surfaces (Frontmatter,
+  scope_guard, LogFile, VaultWriter) — no new abstractions invented.
+  Module docstring + method docstring explain the three-branch shape
+  + the D4/D1 invariants. Stage-skipping decisions documented in
+  comments at the call sites.
+- **Discipline:** Domain-engineer scope held — only `pipeline.py` +
+  new test file changed. No T1 schema files re-touched. No
+  cross-package imports. No new dependencies (D11). No push (D12).
+  Anthropic SDK not imported anywhere new.
+- **Testing:** 9 new tests, all green, full suite +9 (1047 → 1056).
+  FakeLLMProvider used exclusively — no live LLM calls. Test fixtures
+  use the same `ephemeral_vault` + `tmp_path` shape every other ingest
+  test uses.
+
+**Concerns / flags:**
+
+- **Stage-4 archive deferral** documented above. The plan-doc said
+  "skip archive on no-content-hash-change for efficiency" — the
+  handler API doesn't permit this without a signature change, and v1
+  ships the redundant archive copy. Flagged so T6 watcher / T10
+  integration tests don't trip over an unexpected archive growth
+  pattern.
+- **Log-entry routing**: I emit the `update` verb via direct
+  `LogFile.append` after `writer.apply` returns. This is correct
+  behaviorally but means the log entry is NOT undo-id-bound to the
+  writer's mutation (the undo log records the file replacement; the
+  `update | ...` log line is separately appended). If a future plan
+  wants strict atomic-log-with-mutation semantics, the writer's
+  signature needs an `op_override` parameter. Acceptable for v1 — the
+  log is observability, not correctness — but flagging for T9 backup
+  trigger work.
+- **Defense-in-depth QUARANTINED branch** is currently dead code (the
+  scope_guard at Stage A always catches the scope mismatch first). I
+  kept it as a guard for the hand-edited-frontmatter case (path domain
+  matches but FM domain differs). Could be removed in v2 if the
+  defense-in-depth posture changes.
+- **Cross-platform**: paths use `Path.resolve()` everywhere; no `os.sep`
+  or POSIX-only APIs. CI matrix should catch any Windows weirdness on
+  the `source_path` string round-trip. Not pinned by a Windows-specific
+  test in T2.
+
+**Commits:**
+- `<feat SHA>` — `feat(plan-22): T2 — IngestPipeline.update_source
+  (re-ingest preserving slug + domain; D1 overwrite contract)`
+- `<docs SHA>` — `docs(plan-22): T2 — outcome receipts for re-ingest path`
+
 
 
 ## Plan 23 candidate scope
