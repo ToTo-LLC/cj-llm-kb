@@ -67,6 +67,28 @@ _DYNAMIC_PLACEHOLDERS: dict[str, str] = {
 _SETTINGS_FALLBACK = "settings/general/index.html"
 
 
+def _find_repo_root(start: Path, *, marker: str = ".git") -> Path | None:
+    """Walk up from ``start`` looking for ``marker``.
+
+    Returns the first ancestor directory containing ``marker``, or
+    ``None`` if walk-up reaches the filesystem root without a hit.
+    ``marker`` may be a file name OR a directory name — pathlib's
+    ``exists()`` covers both.
+
+    Used by :func:`resolve_out_dir` to find the repo root via a
+    content-based marker (`.git` by default) rather than the
+    brittle depth-based ``Path(__file__).resolve().parents[N]``
+    approach that breaks under uv editable install + iCloud `.pth`
+    masking (auto-memory ``feedback_brain_web_out_dir.md`` —
+    Plan 19 T2 surprise #2 / Plan 21 T1 fix).
+    """
+    current = start if start.is_dir() else start.parent
+    for ancestor in (current, *current.parents):
+        if (ancestor / marker).exists():
+            return ancestor
+    return None
+
+
 def resolve_out_dir() -> Path:
     """Return the directory holding the Next.js static export.
 
@@ -90,11 +112,21 @@ def resolve_out_dir() -> Path:
     if install_dir:
         candidates.append(Path(install_dir) / "web" / "out")
 
-    # Repo dev-fallback: packages/brain_api/src/brain_api/static_ui.py
-    # → parents[4] is the repo root.
+    # Repo dev-fallback: walk up from this file looking for the .git
+    # directory (workspace root marker). Robust against editable
+    # install / iCloud `.pth` masking / symlinks where the depth
+    # assumption (parents[4]) doesn't hold. See Plan 21 T1 / auto-
+    # memory `feedback_brain_web_out_dir.md`.
     here = Path(__file__).resolve()
-    repo_root = here.parents[4]
-    candidates.append(repo_root / "apps" / "brain_web" / "out")
+    repo_root = _find_repo_root(here)
+    if repo_root is not None:
+        candidates.append(repo_root / "apps" / "brain_web" / "out")
+    # Secondary fallback: preserve prior `.parents[4]` behavior so
+    # tarball-extracted source dirs (no .git) keep working.
+    try:
+        candidates.append(here.parents[4] / "apps" / "brain_web" / "out")
+    except IndexError:
+        pass  # parents[4] beyond root; skip silently.
 
     for candidate in candidates:
         if candidate.is_dir() and (candidate / "index.html").exists():
