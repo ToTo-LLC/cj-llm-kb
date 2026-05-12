@@ -3114,6 +3114,95 @@ Likely v2 candidates surfacing from Plan 22 execution:
 - Auto-classify mode for watched folders (D4 punts to classify-once-
   preserve).
 
+## T14 outcome
+
+**Status:** DONE — Topbar status indicator wired per `docs/design/plan-22/topbar-status.md`. Self-hides on empty vault, shows watched count (Eye, `--text-muted`) + orphan count (AlertTriangle, `--warn`) per the state table, click-through routes to `/settings/orphans` (high-attention path) when orphan_count > 0 else `/settings/watched-folders`. Subscribes to `useWatchedFoldersStore` — no extra fetch; reflects T12 store mutations automatically.
+
+### Files
+
+- `apps/brain_web/src/components/shell/watched-folders-topbar-indicator.tsx` (CREATED, ~230 LOC) — standalone component per T11 mockup recommendation. Exports `WatchedFoldersTopbarIndicator` + `composeIndicatorCopy` (pure-function helper for tooltip + aria-label strings, unit-testable without rendering).
+- `apps/brain_web/src/components/shell/topbar.tsx` (MODIFIED, +13 LOC) — imported and mounted between `ConnectionIndicator` and Theme toggle per Q2=2.A (right side, between vault-state affordances and global controls).
+- `apps/brain_web/tests/unit/topbar-watched-status.test.tsx` (CREATED, ~360 LOC, 16 tests).
+
+### Aggregation pattern
+
+```ts
+const folders = useWatchedFoldersStore((s) => s.folders);
+const error   = useWatchedFoldersStore((s) => s.error);
+const { watchedCount, orphanCount } = React.useMemo(() => ({
+  watchedCount: folders.length,
+  orphanCount:  folders.reduce((a, f) => a + f.orphan_count, 0),
+}), [folders]);
+```
+
+Individual selectors (not a tuple selector with custom equality) — zustand's referential equality on each slice is enough; the memo on `folders` re-runs only when the array reference flips (refresh / optimistic remove).
+
+### Click-through routing
+
+- `orphan_count > 0` → `/settings/orphans` (D-mockup high-attention path)
+- `orphan_count === 0` → `/settings/watched-folders`
+- error state → `/settings/watched-folders` AND fires `store.refresh()` on click (concurrent kick-off with the route change so the panel hydrates fresh)
+
+### Empty-state treatment
+
+**Hidden** (returns `null`) when `watched_count === 0 && orphan_count === 0 && !hasError`. Per mockup §"Empty state" reconsideration: "layout jitter is actually FINE here because the indicator's appearance is itself a meaningful event" — when a user enables their first watched folder, the slide-in is the affordance. Implementation: `null` return; no entrance transition yet (mockup notes 200ms ease-out is a "nice to have" — left to a polish pass if e2e shows the abrupt appearance is jarring).
+
+### Accessibility
+
+- Trigger is a real `<a>` (Next.js `Link` + Radix `asChild` slot) → keyboard-focusable, Enter/Space activates by default.
+- `aria-label` spells out the full state ("3 folders watched, 2 orphaned notes need attention. Open Settings to manage.") so screen-readers get one announcement, not icon-by-icon.
+- Sibling `<span role="status" aria-live="polite" aria-atomic="true" className="sr-only">` announces mid-session changes (e.g. watcher event flips orphan_count 0 → 1) — the trigger's `aria-label` change wouldn't re-announce.
+- Icons all `aria-hidden="true"`; numeric counts carry the meaning textually.
+- Plural-aware microcopy: "1 folder watched" vs "3 folders watched", "1 orphaned note needs" vs "2 orphaned notes need".
+- Color is NOT the only signal: `Eye` vs `AlertTriangle` are visually distinct shapes; light/dark mode color contrast is documented in the mockup §"Accessibility annotations" — the `--warn` token theme-flips to `--danger` in light mode to clear AA 4.5:1.
+
+### Component extraction
+
+Standalone `WatchedFoldersTopbarIndicator` in a sibling file (not inline JSX in topbar.tsx) per T11 mockup §"Surface intent": "New component `WatchedFoldersTopbarIndicator` lives in `apps/brain_web/src/components/shell/topbar.tsx` (or split into a sibling file per the topbar refactor pattern)". Sibling-file path chosen to (a) keep `topbar.tsx` lean (currently ~430 LOC; adding 100+ inline would push past the readable-file threshold), (b) match the existing `connection-indicator.tsx` standalone pattern, (c) export the pure `composeIndicatorCopy` for unit-testing without React render overhead.
+
+### Tests (16 cases, all pass)
+
+1. `composeIndicatorCopy` pinning × 6: plural/singular permutations, error state.
+2. Render: empty state → `null`; watched-only segment; combined state routes to `/settings/orphans`; orphans-only data path noted as unreachable from this store alone (documented).
+3. Error state: glyph + retry copy + click fires `refresh()`. Suppresses jsdom's "Not implemented: navigation" noise.
+4. Live updates: zustand subscription — mutating store mid-render flips aria-label, count, AND href. Hidden → visible mount transition.
+5. Accessibility: sr-only live region present with `role=status`, `aria-live=polite`, `aria-atomic=true`; trigger is `<a>` with `aria-label`; all icons `aria-hidden=true`.
+
+### Verification
+
+```
+$ pnpm vitest run tests/unit/topbar-watched-status.test.tsx
+ Test Files  1 passed (1)
+      Tests  16 passed (16)
+
+$ pnpm tsc --noEmit
+(clean)
+
+$ pnpm vitest run
+ Test Files  84 passed (84)
+      Tests  556 passed | 1 skipped (557)
+```
+
+No tsc errors; no vitest regressions; the new file uses no `any` casts.
+
+### Mockup fidelity
+
+- Token-faithful: every color references CSS variables (`--text-muted`, `--text-dim`, `--warn`, `--danger`, `--surface-2`, `--surface-3`, `--hairline`, `--tt-cyan`).
+- Icon set: Lucide `Eye` + `AlertTriangle` per mockup anatomy.
+- Pill geometry: `h-7`, `rounded-full`, `gap-1.5`, `px-2.5` — matches the mockup's ~28px height + `--r-pill` radius + `--surface-2` background.
+- Tooltip: Radix `Tooltip` with `delayDuration={260}` per mockup §"Hover".
+- Plural-aware microcopy: verbatim from mockup §"Microcopy".
+
+### Concerns / follow-ups (non-blocking)
+
+1. **Orphans-only state coverage gap.** The mockup describes a state where watched_count=0 AND orphan_count>0 (user unwatched the folder but orphans persist per D2). The current data path (folders.length for watched_count, sum of folders[*].orphan_count for orphan_count) makes this state unreachable: unwatching drops the folder from `Config.watched_folders` → drops from `list_watched_folders` response → loses its orphan_count contribution. Truly reaching this state requires subscribing to the orphans store too (`useOrphansStore.orphans.length` as a fallback when folders.length=0). Documented in the test file; tracked as a polish-pass item. Render branch IS in place — only the data path is gapped.
+2. **Entrance transition.** Mockup §"Implementation guidance" reconsideration calls for a 200ms ease-out slide-in when the indicator appears mid-session. Current implementation just `null`-returns the hidden state, so the appearance is instantaneous. Tracked for visual polish.
+3. **Click-while-error navigates AND refreshes.** In error state, the click both fires `refresh()` AND navigates to `/settings/watched-folders`. The mockup §"Interaction" line ("On click in error state, fire `store.refresh()` directly (no navigation)") suggests no-navigate. Current implementation lets the user land on the panel that surfaces the canonical retry banner — defensible since both surfaces ultimately do the same thing (`refresh()`). If e2e shows this is confusing, add `e.preventDefault()` in the error-state click branch.
+
+### Commit cadence
+
+Bundled — feat + test + docs in one commit per the plan-19 / T13 outcome shape.
+
 ## Review
 
 _Filled in at T18 close. Tag SHA + closure summary + bumps + verification

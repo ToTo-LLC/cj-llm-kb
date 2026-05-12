@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConnectionIndicator } from "@/components/system/connection-indicator";
+import { WatchedFoldersTopbarIndicator } from "@/components/shell/watched-folders-topbar-indicator";
 
 // Version surfaced in the topbar's brand chip. Sourced verbatim from the
 // monorepo's shipped tag (``v0.1.0``); update when cutting a new release.
@@ -388,6 +389,17 @@ export function Topbar() {
 
       {/* Connection pip — hidden when WS is "ok" (Plan 07 Task 12). */}
       <ConnectionIndicator />
+
+      {/* Watched-folders status indicator (Plan 22 T14) — placed right
+          side, between the vault-state affordances (scope chip /
+          autonomy / connection) and the global controls (theme / rail
+          / settings) per Q2=2.A. Self-hides when 0 watched + 0 orphans
+          + no error so the topbar layout stays tight on a fresh vault.
+          Subscribes to useWatchedFoldersStore directly — no fetch
+          here. The first hydrating call lives in the Settings panel
+          + Bulk Import success-screen mount paths; the indicator is a
+          pure subscriber. */}
+      <WatchedFoldersTopbarIndicator />
 
       {/* Theme / Rail / Settings — iconified per the v4 mockup. Sun
           shown when theme is dark (click → light), Moon when light
