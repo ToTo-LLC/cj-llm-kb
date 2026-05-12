@@ -236,9 +236,19 @@ Universal pipeline: any source arriving through any entry point (file drop, web 
 | pdf | `pymupdf` | text only; scanned PDFs flagged `needs_ocr`, skipped |
 | email (pasted) | stdlib `email.parser` heuristic | treat as text with metadata extraction |
 | transcript .txt / .vtt / .srt / .docx | stdlib / `webvtt-py` / `python-docx` | strips timestamps, preserves speakers |
+| docx | `python-docx` (existing — also used by TranscriptDOCXHandler) | generic Word document (TranscriptDOCXHandler claims transcript-stem .docx first; DocxHandler is the fall-through); paragraphs + headings + tables → markdown; embedded images OCR'd via Claude Vision (Plan 24 T4 pipeline pass) |
+| pptx | `python-pptx>=0.6` (NEW dep — first since Plan 16 watchdog) | PowerPoint slide deck; slide titles + bullets + speaker notes → markdown sections; every embedded image OCR'd via Claude Vision (Plan 24 T4 pipeline pass) |
 | tweet url | `httpx` against `https://cdn.syndication.twimg.com/tweet-result?id=<id>` | marked `fragile: true`; clear error path |
 
 All handlers implement a `SourceHandler` Protocol (`classify / fetch / extract`) and are registered in `HANDLERS: dict[str, SourceHandler]`. Adding types later is one new file.
+
+### Image OCR rules
+
+For `.docx` and `.pptx` ingest (Plan 24), every embedded image in the source document is sent through `LLMProvider.vision_extract` (added in Plan 24 T3). Extracted text is inlined into the note body as `[Image: <text>]` blocks (or `[Image (slide N): <text>]` for `.pptx` to preserve slide context). The vision call is metered through `PerDomainBudgetGuard` with `op="ocr"` in the cost ledger — same gating that fires for classify / summarize / integrate. Image-heavy docs that exhaust the per-domain budget pause mid-ingest; user raises the cap and resumes.
+
+OCR provider is Anthropic (Claude Vision) via the existing `LLMProvider` abstraction per CLAUDE.md non-negotiable #4 — no new SDK dependency; the vision API uses the existing `anthropic` SDK's image content blocks. Future providers (OpenAI Vision, Google Gemini, etc.) implement `LLMProvider.vision_extract` the same way; the call sites remain provider-agnostic.
+
+OCR is **always-on** for embedded images (no threshold gating) per Plan 24 D5 — applies even to text-rich docs. The cost rail is the safety net: a 50-slide image-heavy deck might cost ~$0.15 in OCR spend (~$0.003/image Sonnet vision), well below typical daily budget caps. Users who want to disable OCR for specific folders can lower the per-domain budget cap to zero before ingest (existing budget rail mechanism).
 
 ### Bulk import
 
@@ -555,6 +565,7 @@ The vault is sacred.
 - Pre-operation hardlink snapshots for ops touching ≥10 files; 7-day retention
 - Domain firewall: single `scope_guard(path, allowed_domains)` function; all vault I/O passes through it
 - **Watched folders**: opt-in only (`brain_watch_folder` is an explicit user action, never auto-triggered); backup trigger `pre_watched_folder_sync` runs before initial sync writes any vault content; orphan marks are non-destructive (`orphaned: true` in frontmatter; user adjudicates delete via `brain_delete_orphan` with `typed_confirm=true`); `scope_guard(..., include_orphans=False)` filters orphans from default queries (default behavior is to hide orphans; an explicit `include_orphans=True` keyword surfaces them for the Orphan management screen). Plan 22 lands the watched-folders subsystem; see §5 "Watched folders" subsection for the full contract.
+- **Vision OCR cost metering** (Plan 24 T3): every `LLMProvider.vision_extract` call records an `op="ocr"` row in `costs.sqlite` with input + output token counts. The same `PerDomainBudgetGuard.check_for(domain, config)` gate that fires for classify/summarize/integrate also fires for OCR — image-heavy `.docx` or `.pptx` ingests that would exceed the per-domain budget cap pause before vision spend, mirroring the `bulk_import` pre-check pattern. Users can audit OCR-specific spend by filtering `costs.sqlite` rows where `op="ocr"`.
 - **Canonical Config entry point** (Plan 16 T34 / T34.5 / T35; Plan 17 T14): `brain_core.config.loader.resolve_config(...)` is the only sanctioned call site for obtaining a `Config`. `load_config(...)` is the underlying primitive that `resolve_config` wraps on cache misses; direct `load_config` calls are reserved for the loader itself. New code paths MUST go through `resolve_config` so they participate in the `ConfigWatcher`-driven cross-process invalidation (T35) layered over T34's lazy version-peek — bypassing it produces stale-config bugs on hot-reload (a user edits `config.json` via Settings, the watcher invalidates, but a caller holding a `load_config` result never sees the new state). Long-running consumers each hold ONE live shared `Config` reference: `app_state.ctx.tool_ctx.config` (brain_api lifespan), `session.app_config` (brain_cli chat command, via `build_session(app_config=...)`), `_cached_ctx.config` (brain_mcp server) — refreshed on the next `resolve_config` call after a `ConfigWatcher` event or a `_peek_config_version` mismatch.
 
 ### Testing strategy
