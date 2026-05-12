@@ -679,6 +679,65 @@ _Filled in at each task close. Standard receipt format mirrors Plan
 
 **Concerns:** None blocking. The spec edit references `Plan 24 T3` (vision_extract addition) and `Plan 24 T4` (pipeline pass) in advance of those tasks landing — standard pattern matching Plan 22 T0 forward-references to T1/T2/T3.
 
+### T1 outcome — DocxHandler (generic Word document)
+
+**Status:** DONE
+
+**Files created/modified:**
+- `packages/brain_core/src/brain_core/ingest/handlers/docx.py` — NEW (190 lines). `DocxHandler` class + 3 private helpers (`_iter_body_blocks`, `_table_to_gfm_markdown`, `_extract_inline_image`).
+- `packages/brain_core/src/brain_core/ingest/dispatcher.py` — MODIFIED (+5 lines net). Added `DocxHandler` import + registration AFTER `TranscriptDOCXHandler` (per D3) + 5-line docstring update describing the D3 fall-through position.
+- `packages/brain_core/tests/ingest/handlers/__init__.py` — NEW (empty marker so pytest treats `handlers/` as a package).
+- `packages/brain_core/tests/ingest/handlers/test_docx.py` — NEW (267 lines). 12 tests across two sections: dispatcher routing (4 tests) + extraction (8 tests). Hermetic — all fixtures built at runtime via `python-docx` + a 56-line stdlib-only PNG builder (no PIL dep, no binary fixtures committed).
+
+**python-docx image-extraction API used:**
+The roundabout path the plan-doc warned about: `InlineShape._inline.graphic.graphicData.pic.blipFill.blip.embed` returns the relationship ID; `doc.part.related_parts[rId]` resolves to the `ImagePart` exposing `.blob` (bytes) and `.content_type` (MIME). `WD_INLINE_SHAPE.PICTURE` filters out charts / SmartArt / linked pictures. `AttributeError`/`KeyError` defended against so a malformed shape skips rather than failing the whole extract.
+
+**TranscriptDOCXHandler.can_handle pattern:**
+Currently broad: `spec.suffix.lower() == ".docx" and spec.exists()` — claims ALL existing `.docx`. DocxHandler is therefore unreachable via the default chain TODAY; it's a forward-compat fall-through for when TranscriptDOCXHandler is later narrowed to a stem convention. The two routing tests reflect this: `test_dispatcher_routes_transcript_docx_first` uses the default chain (transcript handler wins); `test_dispatcher_routes_generic_docx_to_docx_handler` passes an explicit handler list omitting the transcript handler to prove DocxHandler claims correctly when reached. A third test (`test_docx_handler_registered_after_transcript_docx`) pins the actual `_default_handlers()` ordering so D3's claim ordering can't silently regress.
+
+**Document-order interleave:**
+Used `doc.element.body.iterchildren()` walking `<w:p>` and `<w:tbl>` so a table inserted between two paragraphs renders where the author put it (default `doc.paragraphs` + `doc.tables` would bunch all tables at the end). `_iter_body_blocks` constructs `Paragraph(child, doc)` / `Table(child, doc)` — Document-as-parent (not the body XML) so `.style` lookups don't crash on `'CT_Body' object has no attribute 'part'`. Discovered RED in the first test run; fix landed in `_iter_body_blocks`.
+
+**`extras["images"]` shape (T4 contract):**
+```python
+{"blob": <bytes>, "content_type": "image/png", "index": 0}
+```
+List of these in `extras["images"]` — pinned by `test_extract_collects_inline_images`. `index` is the inline-shape index (matches docx authoring order); T4's OCR pass will emit `[Image: <ocr-text>]` blocks in order.
+
+**GFM markdown table format:**
+Row 0 as header (Word convention), GFM `| --- |` separator, pipe-escape + newline-flatten per cell. Single-row tables still emit the separator (well-formed table). Empty tables (0 rows) emit nothing.
+
+**Title fallback chain (per plan §T1.3):**
+1. First Heading 1 / Title text → `# {text}` paragraph.
+2. Else first non-empty paragraph text.
+3. Else `spec.stem` (filename without extension).
+Pinned by `test_extract_headings_to_markdown` (case 1), `test_extract_uses_filename_stem_when_no_title` (case 2), `test_extract_empty_docx` (case 3).
+
+**Test count + pass/fail:**
+- 12 new tests, all PASSED on first complete run after the `_iter_body_blocks` parent fix.
+- Brain_core full suite baseline (T0): 1163 collected (1158 passed, 5 skipped).
+- Brain_core full suite post-T1: 1175 collected (1170 passed, 5 skipped). Net +12 = exactly the 12 new tests.
+- Mypy clean on `docx.py` + `dispatcher.py`.
+- Ruff clean (auto-fixed one blank-line ordering nit in the test file).
+
+**Commit SHAs:** (filled in below)
+
+**Self-review findings:**
+- DocxHandler is registered AFTER TranscriptDOCXHandler in `_default_handlers()` — verified by `test_docx_handler_registered_after_transcript_docx`. D3 honored.
+- Generic .docx dispatched correctly via the explicit-chain routing test. The plan-doc's "Transcript wins by default" invariant is also pinned.
+- Heading + table + image extraction all green.
+- `extras["images"]` shape matches T4 consumer contract (verified manually against the plan-doc §T4 OCR-block-format prose; T4's integration test will pin the consumption side).
+- `source_type=SourceType.DOCX` — pinned by `test_extract_paragraphs_preserved`.
+- Full brain_core suite stays green (1170 passed; baseline 1158 + 12 new).
+- Cross-platform: `pathlib.Path` throughout, `Path.suffix.lower()` for case-insensitive routing, `shutil.copy2` for archive (Windows-safe). No POSIX-only calls.
+- Hermetic tests: zero binary `.docx` fixtures committed; tests build their inputs from `python-docx` + a 56-line stdlib PNG builder.
+- `_extract_inline_image` defensively catches `AttributeError` / `KeyError` so a malformed shape doesn't blow the whole extract.
+- Plan-doc test-path discrepancy: plan-doc cites `tests/ingest/handlers/test_docx.py` (new subdir); existing convention is `tests/ingest/test_handler_<type>.py`. I followed the plan-doc literally (created the new `handlers/` subdir + `__init__.py`). If T2 reviewer prefers the existing convention, both T1 + T2 tests can move with no test-code change. Note for T2: T2's `test_pptx.py` lands in the same new `handlers/` subdir per plan-doc consistency.
+
+**Concerns:**
+- **Plan-doc test path drift (minor).** The new `handlers/` subdir under `tests/ingest/` deviates from the established `test_handler_<type>.py` flat-naming pattern. The plan-doc explicitly cites the new path in both §T1 and the file inventory; I followed it. T2 will lay down `test_pptx.py` in the same new subdir for consistency. If the convention should be `test_handler_docx.py` flat, T1 + T2 tests can be renamed with no code-side change. Flagging for plan-author awareness; not blocking T1 acceptance.
+- **TranscriptDOCXHandler is unchanged.** It still claims ALL `.docx` files. DocxHandler is unreachable via the default chain TODAY. This is the explicit Plan 24 D3 + plan-doc §T1.2 contract ("DocxHandler is the fall-through ... TranscriptDOCXHandler claims first if applicable") — but the practical implication is generic .docx files currently route to `transcript` SourceType, not `docx`. If the user wants generic .docx to actually flow through DocxHandler today, TranscriptDOCXHandler.can_handle needs narrowing (e.g., a stem convention or a content-sniff). That's out of scope per D3-as-locked; calling it out so T4/T5 integration testing of `docx` SourceType end-to-end uses the explicit-chain pattern from `test_dispatcher_routes_generic_docx_to_docx_handler` until/unless TranscriptDOCXHandler narrows.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards

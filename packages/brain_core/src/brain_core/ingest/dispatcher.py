@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from brain_core.ingest.handlers.base import SourceHandler
+from brain_core.ingest.handlers.docx import DocxHandler
 from brain_core.ingest.handlers.email import EmailHandler
 from brain_core.ingest.handlers.pdf import PDFHandler
 from brain_core.ingest.handlers.text import TextHandler
@@ -35,6 +36,10 @@ def _default_handlers(cfg: HandlersConfig | None = None) -> list[SourceHandler]:
       handler; tweet must win.
     - Transcript handlers (vtt, docx, text) before PDFHandler/EmailHandler/TextHandler:
       they target more specific extensions or stem conventions.
+    - DocxHandler is the .docx fall-through (Plan 24 D3): registered AFTER
+      TranscriptDOCXHandler so transcript-flavored .docx still routes to the
+      transcript handler. Placed before TranscriptTextHandler/PDFHandler to
+      keep the .docx claim contiguous with TranscriptDOCXHandler.
     - TextHandler is last: it's the broadest file-level catch.
 
     ``cfg`` (issue #23) feeds per-handler tunables (URL/Tweet timeouts, PDF
@@ -47,6 +52,7 @@ def _default_handlers(cfg: HandlersConfig | None = None) -> list[SourceHandler]:
         URLHandler(timeout_seconds=cfg.url.timeout_seconds) if cfg else URLHandler(),
         TranscriptVTTHandler(),
         TranscriptDOCXHandler(),
+        DocxHandler(),
         TranscriptTextHandler(),
         PDFHandler(min_chars=cfg.pdf.min_chars) if cfg else PDFHandler(),
         EmailHandler(),
