@@ -11,6 +11,12 @@ against the embedded :class:`brain_core.tools.base.ToolContext`, and
 the live :class:`Config` on ``app.state.ctx.tool_ctx.config`` mutates
 in place so subsequent calls see the new ``watched_folders`` row.
 
+**Plan 22 T10.5 update**: the initial-sync test now also pins that
+each per-item ingested source note carries ``source_path`` +
+``watched_folder_id`` frontmatter — proves the
+``BulkImporter.apply(watched_folder_id=...)`` kwarg threading lands
+through end-to-end from the API transport.
+
 Four scenarios:
 
 * **api_watch_folder** — POST ``brain_watch_folder`` with
@@ -355,6 +361,33 @@ def test_api_watch_folder_initial_sync_imports_files(
     )
     titles = {note.stem for note in notes}
     assert titles == {"alpha", "beta"}
+
+    # Plan 22 T10.5: each note must carry the watched-context
+    # frontmatter so the T6 :class:`WatchedFolderWatcher` can map
+    # subsequent modify/delete events back to the right vault note.
+    # Pre-T10.5 the initial-sync path silently dropped these fields,
+    # so subsequent watcher events on the imported files would have
+    # produced duplicate notes (modify) or silently no-opped (delete).
+    from brain_core.vault.frontmatter import parse_frontmatter
+
+    recorded_source_paths = set()
+    for note_path in notes:
+        fm, _body = parse_frontmatter(note_path.read_text(encoding="utf-8"))
+        assert fm["watched_folder_id"] == str(folder), (
+            f"note {note_path.name} missing watched_folder_id: {fm!r}"
+        )
+        assert fm["source_path"] is not None, (
+            f"note {note_path.name} missing source_path: {fm!r}"
+        )
+        recorded_source_paths.add(fm["source_path"])
+    expected_source_paths = {
+        str((folder / "alpha.txt").resolve()),
+        str((folder / "beta.txt").resolve()),
+    }
+    assert recorded_source_paths == expected_source_paths, (
+        f"per-item source_path threading wrong: got {recorded_source_paths!r}, "
+        f"expected {expected_source_paths!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

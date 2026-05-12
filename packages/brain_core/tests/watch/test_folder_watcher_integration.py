@@ -305,17 +305,18 @@ async def test_e2e_create_writes_source_note_with_watch_frontmatter(
     fires end-to-end on a real filesystem event and writes the source
     note with the classified domain.
 
-    **v1 gap (intentional, pinned here):** the pipeline's Stage 7
-    ``_build_source_note`` does NOT populate ``source_path`` or
-    ``watched_folder_id`` frontmatter — the watcher passes
-    ``domain_override`` but not the source-folder-id. The lookup
-    cache the watcher's update/delete handlers depend on
-    (:func:`_index_vault_for_folder`) is only populated by T5's
-    ``brain_resync_folder`` tool, not by a watcher-triggered first
-    ingest. A future plan that threads folder-id through the
-    pipeline would flip these absence-assertions; we pin them
-    explicitly here so the v1 contract is grep-locked at the
-    integration seam.
+    **Plan 22 T10.5 (was a v1 gap)**: the pipeline now populates
+    ``source_path`` + ``watched_folder_id`` on watcher-triggered
+    ingests. T10.5 wired the optional kwargs through
+    :meth:`IngestPipeline.ingest` and
+    :meth:`WatchedFolderWatcher._handle_create` passes them. Pre-T10.5
+    this test pinned the ABSENCE of those fields (documenting the gap);
+    post-T10.5 we flip to PRESENCE assertions so the lookup-cache T6
+    depends on is grep-locked at the integration seam. The flip is the
+    correctness gate for the modify + delete e2e tests below — without
+    these fields, the watcher's :meth:`_find_note_by_source_path` walks
+    return ``None`` and the test relies on a fallback that masks the
+    real bug.
     """
     vault = _scaffold_vault(tmp_path)
     folder = tmp_path / "watched_create"
@@ -360,13 +361,14 @@ async def test_e2e_create_writes_source_note_with_watch_frontmatter(
         assert fm["domain"] == "research"
         assert fm["type"] == "source"
         assert fm["title"] == "My Source"
-        # v1 gap pin: ``source_path`` + ``watched_folder_id`` are
-        # absent from the watcher-triggered ingest. See the
-        # docstring's "v1 gap" note for the rationale.
-        assert "source_path" not in fm or fm["source_path"] is None
-        assert (
-            "watched_folder_id" not in fm or fm["watched_folder_id"] is None
-        )
+        # Plan 22 T10.5: watcher-triggered ingest now writes
+        # ``source_path`` + ``watched_folder_id`` on the source note's
+        # frontmatter. ``source_path`` is the resolved path of the
+        # source file (T2 :meth:`update_source` convention).
+        # ``watched_folder_id`` is the verbatim ``WatchedFolder.path``
+        # string (Plan 22 D1).
+        assert fm["source_path"] == str(src.resolve())
+        assert fm["watched_folder_id"] == str(folder)
         # Both LLM responses (summarize + integrate) were consumed.
         # Classify is skipped because the watcher passes
         # ``domain_override`` derived from ``WatchedFolder.domain``.
@@ -578,6 +580,119 @@ async def test_e2e_unclaimed_file_does_not_ingest(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# (5.5) e2e_create_then_modify — Plan 22 T10.5 lifecycle pin
+# ---------------------------------------------------------------------------
+async def test_e2e_create_then_modify_routes_via_update_source(
+    tmp_path: Path,
+) -> None:
+    """Plan 22 T10.5 regression: create → modify on the SAME path
+    must route through ``update_source`` (not duplicate ingest).
+
+    The original T10 modify/delete tests pre-seed a note with the
+    correct watched-context frontmatter, so they pass even when the
+    bug is present. This lifecycle test does NOT pre-seed: it lets
+    the watcher write the note via its own create-event handler,
+    THEN modifies the same source file. If T10.5 wired the watched-
+    context kwargs correctly, the modify event finds the note via
+    :meth:`_find_note_by_source_path` and overwrites it in place
+    (1 note in sources/, refreshed content_hash). Pre-T10.5 the
+    lookup returns ``None``, the modify falls through to a fresh
+    ingest, and we'd end up with 2 notes in sources/ — the
+    duplicate-on-modify gap the task closes.
+    """
+    vault = _scaffold_vault(tmp_path)
+    folder = tmp_path / "watched_lifecycle"
+    folder.mkdir()
+
+    fake = FakeLLMProvider()
+    # Create event consumes summarize + integrate (classify skipped via
+    # ``domain_override``).
+    _queue_ingest_responses(
+        fake, domain="research", title="lifecycle", summary="v1 body."
+    )
+    # Modify event consumes summarize + integrate (no classify, no
+    # duplicate ingest if T10.5 is wired correctly).
+    _queue_update_responses(fake, title="lifecycle", summary="v2 body.")
+
+    pipeline = _build_pipeline(vault, fake)
+    watcher = _build_watcher(
+        folders=[WatchedFolder(path=str(folder), domain="research")],
+        pipeline=pipeline,
+    )
+    watcher.start()
+    try:
+        # Step 1: create
+        src = folder / "lifecycle.txt"
+        src.write_text("Version one.\n", encoding="utf-8")
+        sources_dir = vault / "research" / "sources"
+
+        def _initial_note_landed() -> bool:
+            notes = list(sources_dir.glob("*.md"))
+            if len(notes) != 1:
+                return False
+            fm, _ = parse_frontmatter(notes[0].read_text(encoding="utf-8"))
+            return fm.get("source_path") == str(src.resolve())
+
+        assert await _wait_async(_initial_note_landed), (
+            "create event did not produce the watched-context note in time; "
+            f"requests={len(fake.requests)}"
+        )
+        notes_after_create = list(sources_dir.glob("*.md"))
+        assert len(notes_after_create) == 1
+        created_note = notes_after_create[0]
+        fm_create, _ = parse_frontmatter(created_note.read_text(encoding="utf-8"))
+        original_hash = fm_create["content_hash"]
+
+        # Step 2: modify the SAME source file. The watcher's modify
+        # handler must find the existing note via
+        # :meth:`_find_note_by_source_path` and route to
+        # :meth:`update_source` — NOT a duplicate ingest.
+        new_body = "Version two — completely different content for hashing.\n"
+        src.write_text(new_body, encoding="utf-8")
+
+        new_hash = content_hash(new_body)
+
+        def _modify_landed() -> bool:
+            if not created_note.exists():
+                return False
+            fm, _ = parse_frontmatter(created_note.read_text(encoding="utf-8"))
+            return fm.get("content_hash") == new_hash
+
+        assert await _wait_async(_modify_landed), (
+            "modify event did not refresh the existing note's content_hash; "
+            f"requests={len(fake.requests)}, "
+            f"sources={list(sources_dir.glob('*.md'))!r}"
+        )
+
+        # Critical T10.5 invariant: sources/ still holds EXACTLY 1
+        # note — modify routed to update_source, not duplicate ingest.
+        notes_after_modify = list(sources_dir.glob("*.md"))
+        assert len(notes_after_modify) == 1, (
+            f"modify event produced a duplicate note (T10.5 regression!): "
+            f"{notes_after_modify!r}"
+        )
+
+        # The single note's hash refreshed; the slug / path is unchanged.
+        fm_modify, _ = parse_frontmatter(
+            created_note.read_text(encoding="utf-8")
+        )
+        assert fm_modify["content_hash"] == new_hash
+        assert fm_modify["content_hash"] != original_hash
+        # source_path + watched_folder_id preserved by update_source.
+        assert fm_modify["source_path"] == str(src.resolve())
+        assert fm_modify["watched_folder_id"] == str(folder)
+
+        # 4 total LLM calls = 2 for create (summarize + integrate)
+        # + 2 for modify (summarize + integrate). If fallback ingest
+        # had fired on modify, we'd still see 4 calls (no classify
+        # because domain_override is set), but the duplicate-note
+        # check above would have caught it.
+        assert len(fake.requests) == 4
+    finally:
+        watcher.stop()
+
+
+# ---------------------------------------------------------------------------
 # (6) e2e_concurrent — 5 rapid files → 5 notes (per-path debounce isolates)
 # ---------------------------------------------------------------------------
 async def test_e2e_concurrent_files_each_produce_a_note(tmp_path: Path) -> None:
@@ -638,10 +753,11 @@ async def test_e2e_concurrent_files_each_produce_a_note(tmp_path: Path) -> None:
 
         # Each note must have a DISTINCT title (and therefore a
         # distinct slug / note path) — proves the debounce didn't
-        # coalesce across paths. We assert on ``title`` rather than
-        # ``source_path`` because the v1 watcher path doesn't
-        # populate ``source_path`` frontmatter (see
-        # ``test_e2e_create_*`` for the v1-gap pin).
+        # coalesce across paths. We assert on BOTH ``title`` AND
+        # ``source_path``: post-Plan 22 T10.5, every watcher-
+        # triggered note carries ``source_path`` frontmatter, so we
+        # can also pin the per-file source-path mapping (each file's
+        # note must reference its own source path, not some sibling's).
         titles = {
             parse_frontmatter(n.read_text(encoding="utf-8"))[0]["title"]
             for n in notes
@@ -654,10 +770,26 @@ async def test_e2e_concurrent_files_each_produce_a_note(tmp_path: Path) -> None:
         assert titles == {f"Burst File {i}" for i in range(5)}, (
             f"unexpected titles: {titles!r}"
         )
-        # All 5 notes are in the research domain.
+        # Per-file source_path pin (T10.5). The set of recorded
+        # ``source_path`` values must equal the set of source files we
+        # dropped — proves the watcher threads the per-event path
+        # through correctly, not just a single shared value.
+        recorded_source_paths = {
+            parse_frontmatter(n.read_text(encoding="utf-8"))[0]["source_path"]
+            for n in notes
+        }
+        expected_source_paths = {
+            str((folder / f"burst-{i}.txt").resolve()) for i in range(5)
+        }
+        assert recorded_source_paths == expected_source_paths, (
+            f"unexpected source_paths: {recorded_source_paths!r}"
+        )
+        # All 5 notes are in the research domain. Also pin that the
+        # shared watched_folder_id rode every note.
         for n in notes:
             fm, _ = parse_frontmatter(n.read_text(encoding="utf-8"))
             assert fm["domain"] == "research"
+            assert fm["watched_folder_id"] == str(folder)
         # 10 LLM calls = 2 per file × 5 files (classify is skipped via
         # ``domain_override``).
         assert len(fake.requests) == 10

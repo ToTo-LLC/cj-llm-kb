@@ -55,6 +55,14 @@ class _IngestCall:
     spec: Path | str
     domain_override: str | None
     allowed_domains: tuple[str, ...]
+    # Plan 22 T10.5: the watcher's create + modify-fallback handlers
+    # now thread ``source_path`` + ``watched_folder_id`` into ingest
+    # so the resulting note's frontmatter carries the lookup keys
+    # ``_find_note_by_source_path`` filters on. Capturing them here
+    # lets unit tests assert the kwargs are wired correctly without
+    # relying on the real :class:`IngestPipeline`.
+    source_path: Path | None = None
+    watched_folder_id: str | None = None
 
 
 @dataclass
@@ -100,6 +108,8 @@ class _FakePipeline:
         allowed_domains: tuple[str, ...],
         domain_override: str | None = None,
         apply: bool = True,
+        source_path: Path | None = None,
+        watched_folder_id: str | None = None,
     ) -> IngestResult:
         with self._lock:
             self.ingest_calls.append(
@@ -107,6 +117,8 @@ class _FakePipeline:
                     spec=spec,
                     domain_override=domain_override,
                     allowed_domains=allowed_domains,
+                    source_path=source_path,
+                    watched_folder_id=watched_folder_id,
                 )
             )
             self._ingest_event.set()
@@ -314,6 +326,13 @@ async def test_on_created_routes_to_ingest(tmp_path: Path) -> None:
         call = pipe.ingest_calls[0]
         assert Path(str(call.spec)).resolve() == src.resolve()
         assert call.domain_override == "research"
+        # Plan 22 T10.5: the watcher's create handler now threads
+        # ``source_path`` + ``watched_folder_id`` into ingest so the
+        # resulting note's frontmatter carries the lookup keys T6
+        # depends on.
+        assert call.source_path is not None
+        assert call.source_path.resolve() == src.resolve()
+        assert call.watched_folder_id == str(folder)
     finally:
         watcher.stop()
 
@@ -384,6 +403,14 @@ async def test_on_modified_unmapped_falls_through_to_ingest(tmp_path: Path) -> N
         call = pipe.ingest_calls[0]
         assert Path(str(call.spec)).resolve() == src.resolve()
         assert call.domain_override == "research"
+        # Plan 22 T10.5: the modify-fallback-to-ingest branch ALSO
+        # threads the watched-context kwargs, so a "first event is
+        # modify" recovery still produces a watched-context note —
+        # otherwise the next modify on the same file would fall through
+        # to ingest AGAIN, creating duplicates indefinitely.
+        assert call.source_path is not None
+        assert call.source_path.resolve() == src.resolve()
+        assert call.watched_folder_id == str(folder)
         assert pipe.update_calls == []
     finally:
         watcher.stop()
