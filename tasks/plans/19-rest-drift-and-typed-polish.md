@@ -948,8 +948,194 @@ Commit SHA recorded after `git commit`. No push per D10.
 
 ## T4 outcome
 
-To be filled in at T4 execution. Per-sub-fix receipts (T4.1 / T4.2 /
-T4.3 / T4.4) — TS widen + Python pin path per sub-fix.
+**Status:** DONE on 2026-05-12.
+
+Track C closure: 4 cosmetic-severity extra-in-backend DRIFTs from the
+Plan 18 T2 audit are widened end-to-end. Backend remains source of
+truth (the locked direction per D3 + the plan author's "widen TS to
+backend reality, not narrow backend" — none of the extra keys had any
+live consumer reads, so no narrowing the backend's public response
+shape was needed). Each sub-fix produces (a) a TS widen at the named
+wrapper site and (b) a Python key-set pin that fails RED on a future
+backend key add / remove / rename.
+
+### Per-sub-fix receipts
+
+**T4.1 — `recent()` outer-shape extra (`limit_used`)**
+
+- **TS widen site:** `apps/brain_web/src/lib/api/tools.ts:160-174`
+  (post-edit line range, includes the new docstring; the `export const recent` declaration begins at line 171).
+  - Before: `Promise<ToolResponse<{ items: RecentEntry[] }>>`.
+  - After: `Promise<ToolResponse<{ items: RecentEntry[]; limit_used: number }>>`.
+  - Backend reference: `packages/brain_core/src/brain_core/tools/recent.py:63`
+    emits `data={"items": items, "limit_used": limit}` (verified via
+    direct read of the handler post-Plan-18; no drift since the audit).
+
+- **Python pin test:**
+  `packages/brain_core/tests/tools/test_recent_outer_shape_pin.py`
+  (new file, 2 cases). Asserts
+  `set(result.data.keys()) == {"items", "limit_used"}` against both an
+  empty-vault path and a populated-vault path (defense-in-depth so a
+  conditional emit cannot slip past).
+
+**T4.2 — `proposeNote()` extra-in-backend (`status`)**
+
+- **TS widen site:** `apps/brain_web/src/lib/api/tools.ts:346-366`
+  (post-edit line range, includes the new docstring; the `export const proposeNote` declaration begins at line 356).
+  - Before: `Promise<ToolResponse<{ patch_id: string; target_path: string }>>`.
+  - After: `Promise<ToolResponse<{ status: string; patch_id: string; target_path: string }>>`.
+  - Backend reference: `packages/brain_core/src/brain_core/tools/propose_note.py:92-99`
+    emits `data={"status": "pending", "patch_id": ..., "target_path": ...}`
+    (verified via direct read of the handler; no drift since the audit).
+
+- **Python pin test:**
+  `packages/brain_core/tests/tools/test_propose_note_data_shape_pin.py`
+  (new file, 1 case using a real `PendingPatchStore` + a permissive
+  `RateLimiter` so the patches-bucket check passes). Asserts
+  `set(result.data.keys()) == {"status", "patch_id", "target_path"}`.
+
+**T4.3 — `listPendingPatches()` outer-shape extra (`count`)**
+
+- **TS widen site:** `apps/brain_web/src/lib/api/tools.ts:369-386`
+  (post-edit line range, includes the new docstring; the `export const listPendingPatches` declaration begins at line 379).
+  - Before: `Promise<ToolResponse<{ patches: PendingPatch[] }>>`.
+  - After: `Promise<ToolResponse<{ count: number; patches: PendingPatch[] }>>`.
+  - Backend reference: `packages/brain_core/src/brain_core/tools/list_pending_patches.py:54`
+    emits `data={"count": len(patches), "patches": patches}` (verified
+    via direct read of the handler; no drift since the audit).
+
+- **Python pin test:**
+  `packages/brain_core/tests/tools/test_list_pending_patches_outer_shape_pin.py`
+  (new file, 2 cases — empty store via in-memory fake + populated
+  store via real `PendingPatchStore` round-trip). Asserts
+  `set(result.data.keys()) == {"count", "patches"}` on both paths.
+
+**T4.4 — `configSet()` extra-in-backend (`status`/`persisted`/`note`)**
+
+- **TS widen site:** `apps/brain_web/src/lib/api/tools.ts:603-640`
+  (post-edit line range, includes the new docstring + the named
+  `ConfigSetData` interface declaration at lines 628-634 and the
+  `configSet` wrapper at lines 636-640).
+  - Before: `Promise<ToolResponse<{ key: string; value: unknown }>>`.
+  - After: new `export interface ConfigSetData { status: string; key: string; value: unknown; persisted: boolean; note: string }`,
+    and `configSet`'s return type is now
+    `Promise<ToolResponse<ConfigSetData>>`.
+  - Backend reference: `packages/brain_core/src/brain_core/tools/config_set.py:832-845`
+    (non-persisted session-scoped branch — `_NON_PERSISTED_KEYS` path)
+    AND `packages/brain_core/src/brain_core/tools/config_set.py:901-910`
+    (persisted Config-field branch). BOTH branches emit the same
+    `{status, key, value, persisted, note}` key set (only the values
+    differ — `persisted=False` vs `True`; branch-specific `note`
+    text). The Plan 18 audit snapshot was correct on this point —
+    re-verified by reading both branches post-Plan-18 closure (no
+    drift between the audit and the current implementation).
+
+- **7 downstream wrappers updated** (per the plan-doc spot-check
+  guidance — found the wrappers had hard-coded
+  `Promise<ToolResponse<{ key: string; value: unknown }>>` return
+  types, not propagated via `ReturnType<typeof configSet>` or shared
+  alias). Each wrapper's return type was edited to
+  `Promise<ToolResponse<ConfigSetData>>` so the new five-field shape
+  is visible at every call site:
+  - `setDomainOverride` (`tools.ts:663`)
+  - `setPrivacyRailed` (`tools.ts:680`)
+  - `setDomainBudget` (`tools.ts:714`)
+  - `setDomainRateLimit` (`tools.ts:756`)
+  - `setDomainAutonomy` (`tools.ts:812`)
+  - `setActiveDomain` (`tools.ts:832`)
+  - `setCrossDomainWarningAcknowledged` (`tools.ts:850`)
+  - **Surprise captured:** the plan doc anticipated "the 7 downstream
+    wrappers inherit the type automatically — no source change should
+    be needed." The actual codebase has each wrapper declare its own
+    return type literally (no shared alias, no `ReturnType<...>`
+    inference), so the 7 wrappers DID need explicit edits. This is
+    a minor cosmetic departure from the plan-doc's "single root fix"
+    framing but not a structural issue — TypeScript covariance let
+    the pre-fix wrappers compile because the narrower
+    `{key, value}` is assignable from the wider `ConfigSetData`. Plan
+    19's edit makes the wrapper return types match the underlying
+    shape exactly so on-hover doc and IDE auto-complete surface the
+    full five fields, not just `key` + `value`.
+
+- **Python pin test:**
+  `packages/brain_core/tests/tools/test_config_set_data_shape_pin.py`
+  (new file, 2 cases — one per branch). Asserts
+  `set(result.data.keys()) == {"status", "key", "value", "persisted", "note"}`
+  on both the persisted branch (via `log_llm_payloads` Config field)
+  and the non-persisted branch (via `ask_model` session-scoped key).
+  Branch-discriminator values (`persisted: bool`, `status: "updated"`)
+  are also asserted so a future refactor that accidentally swaps the
+  branches but preserves the key set would still fail RED.
+
+### Verification receipts
+
+- **`pnpm tsc --noEmit` on `apps/brain_web/`** — clean (exit 0, no
+  output). The widened TS wrappers and the 7 downstream wrapper edits
+  compile cleanly; no orphan `as`-cast remnants surfaced at any
+  caller of the 4 affected wrappers.
+- **`pytest` on the 4 pin tests** —
+  `find .venv -name "*.pth" -exec chflags 0 {} \; 2>/dev/null && uv run --package brain_core pytest packages/brain_core/tests/tools/test_recent_outer_shape_pin.py packages/brain_core/tests/tools/test_propose_note_data_shape_pin.py packages/brain_core/tests/tools/test_list_pending_patches_outer_shape_pin.py packages/brain_core/tests/tools/test_config_set_data_shape_pin.py -q`
+  → **7 passed** (2 cases for `recent`, 1 for `propose_note`, 2 for
+  `list_pending_patches`, 2 for `config_set`), 0 failed, 5 unrelated
+  SwigPy DeprecationWarnings.
+- **`pnpm vitest run` on `apps/brain_web/`** — 81 test files / 496
+  passed + 1 skipped (no regressions; the widens are type-system-only
+  so no behavioral test was at risk, but ran the full suite as a
+  smoke check).
+- **RED-then-GREEN sanity check** demonstrated on
+  `test_recent_outer_data_keys_pin`:
+  - Temporarily added a stray `"STRAY_RED_KEY": "TEMP"` key to
+    `recent.py:63`'s `data={...}` dict.
+  - Re-ran the pin: failed with
+    `AssertionError: assert {'STRAY_RED_K... 'limit_used'} == {'items', 'limit_used'} — Extra items in the left set: 'STRAY_RED_KEY'`
+    at `test_recent_outer_shape_pin.py:62`.
+  - Reverted the backend; re-ran; 7/7 GREEN restored.
+  - Same RED-then-GREEN pattern locks the other 3 pins (the
+    `set(...) == {...}` strict equality fires on add/remove either
+    direction).
+
+### Surprises captured
+
+1. **7 downstream `configSet`-routed wrappers had hardcoded return
+   types**, not `ReturnType<typeof configSet>` inference. The plan
+   doc anticipated automatic inheritance via type propagation; the
+   reality required 7 explicit edits. Flagged inline above in the
+   T4.4 receipts. Not a structural issue (TypeScript covariance let
+   the pre-fix wrappers compile against the widened `configSet`), but
+   leaving the wrappers untouched would have left the on-hover doc at
+   the wrapper sites showing only `{key, value}` even though
+   `configSet`'s shape is now `ConfigSetData` — a worse developer
+   experience than catching the drift at every call site.
+
+2. **`config_set.py`'s two branches confirmed to share the same key
+   set** (re-verified post-Plan-18 by reading both branches directly,
+   not relying on the audit snapshot). The pin test deliberately
+   covers BOTH branches (one case each) so a future refactor that
+   diverges them — e.g., dropping `note` from the non-persisted
+   branch — fails RED.
+
+3. **No live consumer reads of the 4 widened extras surfaced** during
+   the audit-cross-check pass — confirmed via grep of the
+   `apps/brain_web/src/` consumer surface for `limit_used`, `status`
+   (in propose_note context), `count` (in list_pending_patches
+   context), and `persisted`/`note` (in configSet context). Track C
+   stays cosmetic-severity; no live-consumer-bug closure pattern
+   applied (which would have been the Plan 18 T3.1 / T3.7 / T3.11
+   shape). The widen-only nature of T4 matches the plan-doc's locked
+   direction.
+
+### Commit boundaries
+
+Per the plan-doc workflow note (atomic commits preferred), T4 produces
+3 commits in the natural split:
+
+- **(a)** Frontend TS widens — single edit pass on
+  `apps/brain_web/src/lib/api/tools.ts` covering all 4 sub-fixes
+  (T4.1-T4.4) plus the 7 downstream wrapper edits + the new
+  `ConfigSetData` interface declaration.
+- **(b)** Backend Python pin tests — 4 new files under
+  `packages/brain_core/tests/tools/`, one per sub-fix.
+- **(c)** Plan doc — this `## T4 outcome` section.
 
 ## T5 outcome
 
