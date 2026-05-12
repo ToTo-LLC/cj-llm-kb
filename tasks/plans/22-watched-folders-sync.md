@@ -2019,6 +2019,177 @@ adds their first folder via Settings.
   in brain_api lifespan (D7 symmetric watcher)`
 - _(docs commit SHA backfilled by the docs commit itself)_
 
+### T8 outcome — `WatchedFolderWatcher` integration in brain_mcp `_cached_ctx` boot path
+
+**What landed:**
+
+Wired `WatchedFolderWatcher` into `brain_mcp.__main__._run` startup +
+shutdown, with a hot-reload bridge through the existing
+`_on_config_change` callback. Symmetric watcher per D7: brain_mcp
+(stdio MCP server for Claude Desktop) now starts the same watcher
+brain_api does. Watcher is instantiated unconditionally on boot — even
+when `Config.watched_folders` is empty — so the hot-reload bridge
+always has a watcher to restart when the user adds their first folder.
+
+**Files modified:**
+
+- `packages/brain_mcp/src/brain_mcp/__main__.py` — +267 LOC. Added
+  imports for `Config`, `WatchedFolder`, `WatchedFolderWatcher`, and
+  `resolve_config`. New module-private state and helpers:
+  - `_folder_watcher` — module-level slot for the active watcher
+    (mirrors how `_cached_ctx` is lifted to module scope in
+    `brain_mcp.server`; brain_mcp has no `app.state` equivalent).
+  - `_last_known_watched_folders` — folder-list snapshot used by the
+    hot-reload diff. Maintained independently of `_cached_ctx`
+    because the brain_mcp ToolContext is lazy-built per tool call,
+    so the cached config may not exist when the first config change
+    fires.
+  - `_boot_vault_root`, `_boot_allowed_domains` — boot-state captured
+    in `_run` so the hot-reload callback can re-resolve config and
+    rebuild the watcher with the same scope the server launched with.
+  - `_reset_watcher_state()` — test-only helper to clear the four
+    module-level slots between cases.
+  - `_watched_folders_changed(old, new)` — `model_dump`-based diff
+    predicate, byte-for-byte mirror of T7's brain_api version. Kept
+    duplicated rather than imported across packages (cross-package
+    sibling imports are the anti-pattern; a brain_core lift is a Plan
+    23 candidate alongside `_build_pipeline` extraction).
+  - `_build_watched_folder_watcher(config, vault_root, allowed_domains)`
+    — reuses `brain_core.tools.watch_folder._build_pipeline` (late
+    import) so the watcher's IngestPipeline matches the recipe the
+    three watched-folder tools use. With T8 this is now a FOUR-call-
+    site recipe (was three at T7); flagged as Plan 23 closure scope.
+  - `_build_or_reuse_tool_ctx(config, vault_root, allowed_domains)` —
+    brain_mcp-specific helper that prefers the warm `_cached_ctx`
+    singleton in `brain_mcp.server` (so the watcher's pipeline shares
+    StateDB/CostLedger/RateLimiter with the tool dispatcher) and falls
+    back to a fresh build at cold boot (when no tool call has yet
+    warmed the singleton — the watcher IS the first consumer). This is
+    a divergence from T7's `_build_watched_folder_watcher` shape, which
+    reads from `app_state.ctx.tool_ctx` (always-built lifespan
+    artifact). Required because brain_mcp's lazy ctx is structurally
+    different from brain_api's eager ctx — a refactor to unify is a
+    Plan 23 candidate.
+  - `_restart_watched_folder_watcher(new_config)` — coarse v1
+    stop-then-start; swallows errors so the stdio surface stays up.
+    Symmetric to T7's brain_api version.
+  - `_on_config_change(config_path)` — extended with the diff-then-
+    restart bridge at the bottom. Preserves the Plan 16 T35 / T39.5
+    baseline behavior (loader-cache invalidate + ctx-reset) at the
+    top; adds a defensive bail when `_boot_vault_root is None` so the
+    callback can fire during an early window in `_run` startup
+    without crashing.
+- `_run()` startup section: instantiates + starts the watcher AFTER
+  `ConfigWatcher.start()`, stashes on `_folder_watcher`, snapshots
+  `_last_known_watched_folders`. Finally-block teardown: folder
+  watcher stops FIRST (so a trailing ConfigWatcher callback can't
+  restart a watcher we're tearing down), then ConfigWatcher stops,
+  then boot state cleared so a re-entered `_run` starts clean.
+
+**Files created:**
+
+- `packages/brain_mcp/tests/test_main_watcher_startup.py` — 9 tests:
+  1. Cold boot with empty `watched_folders` → watcher instantiated +
+     started, `observers=[]`, `start_called=1`, slot populated.
+  2. Cold boot non-empty → constructor receives ALL 3 folders
+     (enabled + disabled), `allowed_domains=("research",)`.
+  3. Shutdown → `watcher.stop()` called exactly once; slot cleared.
+  4. Disabled-only forwarding — `enabled=False` rows survive the
+     boot-to-watcher seam (contract pin so future filtering at the
+     wrong layer fails loudly).
+  5a. Hot-reload restart — patched `resolve_config` returns a Config
+      with a new folder; existing watcher `stop_called=1`, fresh
+      watcher constructed with the new folder list, module slot
+      swapped to the new instance.
+  5b. Negative case — config change that does NOT touch
+      `watched_folders` (e.g. `log_llm_payloads=True`) does NOT
+      restart the watcher.
+  6. Monkeypatch-binding regression pin (Plan 17 T17 lesson) —
+     patches ONLY `brain_mcp.__main__.WatchedFolderWatcher` and
+     asserts the patch fired (proves `_build_watched_folder_watcher`
+     reads the import-bound name).
+  7. `_watched_folders_changed` unit pin — empty == empty,
+     length-diff, enabled-flag-diff, content-identity.
+  8. Defensive `_on_config_change` bail when `_boot_vault_root is
+     None` — pin that the early-fire window doesn't crash.
+
+  Plus an autouse `_reset_module_state` fixture clears
+  `_folder_watcher`, `_last_known_watched_folders`,
+  `_boot_vault_root`, `_boot_allowed_domains`, AND
+  `brain_mcp.server._cached_ctx` between cases — symmetric to
+  `test_ctx_cache_reset.py::_isolate_module_cache`.
+
+**Test counts:**
+
+- Pre-T8 baseline: `137 passed, 3 skipped`.
+- Post-T8: `146 passed, 3 skipped`.
+- Delta: +9 tests, no regressions.
+- brain_core watcher tests: `12 passed` (T6 + WatchedFolder schema
+  tests unaffected).
+- brain_api T7 lifespan tests: `8 passed` (T7's tests still green).
+
+**Mirror target alignment with T7:**
+
+- Reused: `_watched_folders_changed` semantics + `model_dump` diff
+  predicate. The body is duplicated byte-for-byte; a brain_core lift
+  is the cleanest extraction but bigger than T8.
+- Reused: `_build_pipeline` late-import from
+  `brain_core.tools.watch_folder` (per T7's note about the
+  triple-duplication concern, now FOUR sites).
+- Reused: coarse stop-then-start hot-reload policy + error-swallowing
+  pattern + reverse-order teardown.
+- Diverged: `_build_or_reuse_tool_ctx` — brain_mcp's lazy ToolContext
+  required a new helper that either reuses the warm singleton or
+  builds a fresh one. T7 read from `app_state.ctx.tool_ctx` directly.
+- Diverged: module-level state vs `app.state`. brain_mcp has no app-
+  state container so the watcher + boot params live at module scope,
+  mirroring how `_cached_ctx` was lifted to module scope in Plan 17
+  T8.
+- Diverged: `_on_config_change` signature stays one-argument
+  (`config_path`) — the boot params it needs are read from module
+  state. brain_api threads `app_state` + `vault_root` as args.
+
+**Plan 17 T17 monkeypatch-binding pin:**
+
+`WatchedFolderWatcher` is imported at module level in
+`brain_mcp.__main__`. Test 6 patches ONLY
+`brain_mcp.__main__.WatchedFolderWatcher` and asserts the
+`_build_watched_folder_watcher` call produces a `_FakeWatcher`
+instance. If a future refactor moves the import to a late binding,
+the patch won't fire and the test will fail loudly.
+
+**Concerns / forward notes for closure / Plan 23:**
+
+- `_build_pipeline` is now FOUR call sites (bulk_import, watch_folder,
+  resync_folder, brain_api lifespan, brain_mcp `_run`) — past the
+  threshold for "consistency, don't repeat aggressively". Plan 23
+  candidate: extract shared `IngestPipeline` builder into brain_core.
+- `_watched_folders_changed` and `_build_watched_folder_watcher` are
+  now duplicated in brain_api and brain_mcp. Same "extract to
+  brain_core" Plan 23 candidate.
+- brain_api + brain_mcp parallel watchers (T7 flagged): both
+  processes will watch the same folders independently → duplicate
+  ingest fires for the same event. v1 worst case is a doubled ingest
+  log entry; the VaultWriter filelock serializes the actual write so
+  no corruption. Inter-process coordination marker is deferred to a
+  future plan.
+- brain_mcp's `_build_or_reuse_tool_ctx` falls back to a fresh
+  ToolContext build that does NOT populate
+  `brain_mcp.server._cached_ctx` on its own — that path is owned by
+  the server's tool dispatcher. If the next tool call rebuilds, both
+  ToolContexts coexist briefly; the StateDB connection is acquired
+  per-instance so there's no sharing hazard for v1. A unify-paths
+  refactor is a Plan 23 candidate.
+- `test_tools_listing.py` brain_api pre-existing failure (T7 flagged)
+  is unchanged; brain_mcp has no analogous failing test count
+  assertion. Plan 22 closure should still bump the brain_api constant.
+
+**Commits:**
+
+- `d242f3c` — `feat(plan-22): T8 — WatchedFolderWatcher integration
+  in brain_mcp _cached_ctx (D7 symmetric watcher)`
+- _(docs commit SHA backfilled by the docs commit itself)_
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
