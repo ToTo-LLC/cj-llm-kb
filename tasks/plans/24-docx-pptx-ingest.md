@@ -888,6 +888,94 @@ Pinned by `test_extract_headings_to_markdown` (case 1), `test_extract_uses_filen
 
 **Commits:** plan to bundle T3 abstraction+impl+ledger+fake+helper+tests into one feat commit (`feat(plan-24): T3 — LLMProvider.vision_extract abstract + AnthropicProvider impl + op="ocr" ledger + FakeLLMProvider extension + ingest.ocr helper`), with plan-doc receipt as a second `docs(plan-24): T3 — outcome receipts for vision_extract abstraction` commit. Per D8: NO push.
 
+## T4 outcome
+
+**Status:** DONE. Pipeline-level OCR pass wires T3's `ocr_image` helper into `IngestPipeline.ingest()`. DocxHandler + PptxHandler images now get OCR'd at the pipeline layer (handlers stay pure-extraction per the plan-doc Choice A recommendation). OCR text is inlined into `extracted.body_text` as `[Image: <text>]` (docx) or `[Image (slide N): <text>]` (pptx) blocks, appended to the body with double-newline separation. The summarize + integrate prompts see the OCR'd body, so the LLM can reference image content in summaries and wikilinks.
+
+**Files modified:**
+- `packages/brain_core/src/brain_core/ingest/pipeline.py` (+128 / −2 LOC) — added `cost_ledger: CostLedger | None = None` dataclass field (matches the existing `guard` / `config` optional-injection pattern; legacy call sites keep compiling unchanged); added `_ocr_images()` async helper method; inserted Stage 5.5 (OCR pass) between Stage 5 (Classify + quarantine check) and Stage 6 (Summarize) inside `ingest()`. Imports added: `dataclasses.replace`, `typing.Any`, `structlog`, `brain_core.budget.BudgetCapExceeded`, `brain_core.cost.ledger.CostLedger`, `brain_core.ingest.ocr.ocr_image`. Module-level `_log = structlog.get_logger(__name__)`.
+
+**Files created:**
+- `packages/brain_core/tests/ingest/handlers/test_docx_ocr_integration.py` (+220 LOC) — 5 end-to-end integration tests exercising the full pipeline (build .docx fixture via python-docx → run through `IngestPipeline` → assert on returned `IngestResult.extracted.body_text` and ledger state).
+- `packages/brain_core/tests/ingest/handlers/test_pptx_ocr_integration.py` (+228 LOC) — 4 end-to-end integration tests with the same shape for `.pptx` fixtures (image on slide 2; images on slides 2+5; no images; partial-failure on slide 2 of 2).
+
+**Pipeline insertion point chosen (Stage 5.5 — POST-classify quarantine check, PRE-summarize):**
+- **Stage 4 (idempotency hash) runs BEFORE OCR.** Hash is computed on pre-OCR `body_text`, so re-ingesting the same source skips OCR entirely (duplicate detection costs $0 OCR spend). This is the strictly-better choice over "OCR before hash" — re-ingestion is rare but real (watched-folder churn, manual retry, bulk-import retries).
+- **Quarantine-check runs BEFORE OCR.** A quarantined ingest (domain not in `allowed_domains`) skips OCR — no point burning vision spend on content we're rejecting.
+- **Classify runs BEFORE OCR.** OCR's `op="ocr"` ledger row + per-domain budget check use the RESOLVED post-classify domain. Pre-classify, the domain is unknown (could be `domain_override`, or could be classifier-detected); attributing OCR cost to the wrong domain would skew per-domain caps.
+- **Summarize + Integrate run AFTER OCR.** The augmented `body_text` (with `[Image: ...]` blocks) is fed to the summarize prompt, so the LLM-generated summary can reference image content; the integrate prompt then gets the rendered source note built from that summary.
+
+**Inline-block format (Recommend B from plan-doc — pipeline inspects dict shape, no handler change):**
+- `[Image: <text>]` — image dict has no `slide_index` (DocxHandler).
+- `[Image (slide N): <text>]` — image dict has `slide_index` set (PptxHandler; N is 1-based).
+- Blocks are APPENDED to the END of `body_text` (in handler extraction order — `for img in extras["images"]`). Per-slide interleaving (inserting the block after the matching `## Slide N` section) was deferred — the slide-index marker in the inline block gives downstream prompts enough context; per-slide insertion is a Plan 25 candidate.
+
+**Error handling (per plan-doc §T4 step 5):**
+- **`BudgetCapExceeded` from `ocr_image`** — re-raised by `_ocr_images`. The outer `ingest()` `try/except` (line 285+) catches it, records a `.error.json` failure record, returns `IngestResult(status=FAILED, errors=[str(exc)])`. Verified by `test_docx_with_budget_exhausted_raises_and_status_failed` — pins both (a) the gate fires before any LLM call (`fake.vision_calls == []`) and (b) status=FAILED is returned.
+- **Any other exception (LLM error, malformed image, etc.)** — logged at WARNING level (event=`ingest.ocr.image_skipped`, fields: `error`, `error_type`, `image_index`, `slide_index`) + `continue` to the next image. Remaining images still get OCR'd. Verified by `test_docx_with_vision_error_skips_image_continues_ingest` and `test_pptx_with_vision_error_on_second_image_first_block_survives` (pins partial-success for the multi-image case).
+- **Empty OCR result (`result.text.strip() == ""`)** — no inline block emitted (avoids `[Image: ]` noise). Verified by `test_docx_with_empty_ocr_response_no_inline_block`.
+
+**Graceful no-op when rails missing:** `_ocr_images` returns the input `extracted` unchanged (no LLM call, no ledger row) when ANY of `self.guard`, `self.config`, or `self.cost_ledger` is `None`. This preserves the legacy call-site contract — Plan 02 / Plan 07 demo scripts that constructed an `IngestPipeline` without these fields keep working (handler extraction still runs; just no OCR pass). Logged at INFO (event=`ingest.ocr.skipped_no_rails`) so operators can spot the misconfiguration (e.g. CLI ingest without a config file). Empty `extras["images"]` is also a no-op (early return — no log emitted, since it's the dominant case for non-image sources).
+
+**ExtractedSource is a frozen dataclass:** post-OCR augmentation uses `dataclasses.replace(extracted, body_text=new_body)` — preserves the existing immutability contract (T2 outcome confirms this convention) and keeps `extras` verbatim so downstream consumers can still see the original image list (the `[Image: ...]` blocks in `body_text` are the OCR surface; `extras["images"]` keeps the raw image bytes + metadata).
+
+**Tests passing (9/9):**
+- `test_docx_ocr_integration.py`: 5 — all PASS.
+  - `test_docx_with_one_inline_image_gets_ocr_block` — happy path; pins block format + that summarize sees the OCR'd body (regression pin against "OCR fires AFTER summarize" failure mode).
+  - `test_docx_with_no_images_no_ocr_call` — negative evidence (`vision_calls == []`); vision queue UNCONSUMED.
+  - `test_docx_with_vision_error_skips_image_continues_ingest` — partial-failure path; captures structlog warning shape.
+  - `test_docx_with_empty_ocr_response_no_inline_block` — empty-OCR pin; vision WAS called (one entry in `vision_calls`) but no block emitted.
+  - `test_docx_with_budget_exhausted_raises_and_status_failed` — budget gate fires BEFORE LLM (negative-evidence pin: `vision_calls == []`); status=FAILED returned.
+- `test_pptx_ocr_integration.py`: 4 — all PASS.
+  - `test_pptx_with_slide_image_gets_slide_prefixed_block` — slide-2 image; pins `[Image (slide 2): ...]` format + slide structure preservation.
+  - `test_pptx_with_multiple_slide_images_each_block_correct_number` — slides 2 + 5 both OCR'd with correct slide numbers; pins emission order.
+  - `test_pptx_with_no_images_no_ocr_call` — pure-text deck negative evidence.
+  - `test_pptx_with_vision_error_on_second_image_first_block_survives` — partial-failure pin: slide-1 block present, slide-2 absent, warning logged with `slide_index=2`.
+
+**Test counts:**
+- Brain_core baseline pre-T4 (from T3 outcome): 1225 collected (1220 passed + 5 skipped).
+- Brain_core post-T4: **1234 collected (1229 passed + 5 skipped)**. Net +9 = exactly the 9 new tests.
+
+**Cross-package regression check (pipeline is widely imported):**
+- `brain_api` suite: 223 passed + 4 skipped — clean.
+- `brain_mcp` suite: 146 passed + 3 skipped — clean.
+- `brain_cli` suite: 129 passed — clean.
+
+**Lint / type:** ruff `--check` clean on modified pipeline + both new test files. mypy strict clean on `pipeline.py` + `ocr.py`. Auto-fix removed an unused `# noqa: BLE001` directive (BLE001 isn't enabled in this project) and normalized import order in both test files.
+
+**Verification commands run (recipe from plan-doc):**
+- New tests: `pytest packages/brain_core/tests/ingest/handlers/test_docx_ocr_integration.py packages/brain_core/tests/ingest/handlers/test_pptx_ocr_integration.py -v` → 9 passed.
+- Full brain_core suite: `pytest packages/brain_core/tests/ -q` → 1229 passed, 5 skipped.
+- Cross-package: brain_api (223 + 4), brain_mcp (146 + 3), brain_cli (129) — all clean.
+- `mypy packages/brain_core/src/brain_core/ingest/pipeline.py packages/brain_core/src/brain_core/ingest/ocr.py` — clean.
+- `ruff check packages/brain_core/src/brain_core/ingest/pipeline.py <2 new test files>` — all checks passed.
+
+**Self-review findings:**
+- **Handlers stay pure (Choice A honored).** DocxHandler + PptxHandler emit `extras["images"]` and never call the LLM. The pipeline orchestrates the OCR pass. This preserves the testability of the handlers (existing `test_docx.py` + `test_pptx.py` unit tests cover extraction without needing a `FakeLLMProvider`).
+- **`update_source` does NOT yet run OCR.** Plan 22 T2's `IngestPipeline.update_source()` (re-ingest path for already-known notes) extracts the new source but skips the OCR pass. Rationale: the plan-doc T4 scope was the main `ingest()` flow; adding OCR to `update_source` would expand scope + need its own integration tests + add ledger writes on every modify event. Flagged as a Plan 25 candidate (see concerns below).
+- **Hash-before-OCR is the cost-efficient choice.** A re-ingest of the same docx (rare but real — bulk-import retries, watched-folder churn) skips OCR entirely via the Stage 4 idempotency check. The alternative (hash after OCR) would have made OCR text part of the content hash, which sounds purer but costs vision spend on every re-attempt. The current shape matches the spec "vault is sacred, source-canonical" principle: the surface text of the docx IS the canonical content, OCR is augmentation.
+- **`fake.requests[0]` is the summarize request** in the happy-path tests because `domain_override="research"` skips classify. If someone removes the override, the assertion would need to shift to `fake.requests[1]`. Test comment calls this out (`# classify skipped via override`). Could harden by indexing on `req.model == self.summarize_model` instead, but the inline comment is enough.
+- **Per-image error handling uses a bare `except Exception`.** Justified: T3's `ocr_image` can raise anything from the underlying LLM provider (network errors, JSON parse errors from a downstream HTTP layer, etc.) — broader-than-necessary is the right shape here because the plan-doc explicitly says "log + skip + continue with remaining images". The `BudgetCapExceeded` re-raise comes BEFORE the broad except so budget exhaustion bypasses the swallow.
+- **OCR blocks at end-of-body, not per-slide interleaved.** Discussed in the plan-doc as an option to defer; current shape is fine because (a) the slide-index marker in `[Image (slide N): ...]` gives downstream LLM prompts enough context to associate image text with the slide, and (b) per-slide interleaving complicates the regex-driven slide-section injection. Per-slide insertion is a Plan 25 candidate.
+- **Negative-evidence pins are paranoid by design.** The budget-exhausted test asserts `fake.vision_calls == []` — if the budget gate accidentally fires AFTER the LLM call, the test fails with "queue is empty" instead of the expected `BudgetCapExceeded`-routed FAILED status. Similar pin in `test_no_images_no_ocr_call`: leaving the vision queue empty would surface a different RuntimeError if OCR fired wrongly. Both are intentional belt-and-suspenders.
+- **No live Anthropic API test.** Same posture as T3 — all integration tests use `FakeLLMProvider`. A `BRAIN_E2E=1`-gated live OCR test could land in Plan 25 if we want round-trip coverage with a real .docx + real Claude Vision.
+- **`extracted` reassignment is local-only.** The OCR pass returns a NEW `ExtractedSource` (frozen dataclass + `replace`); the local variable in `ingest()` is rebound. `IngestResult.extracted` carries the post-OCR object (verified by `r.extracted.body_text` assertion in the happy-path tests).
+- **Log event naming.** Used `ingest.ocr.skipped_no_rails` (INFO) and `ingest.ocr.image_skipped` (WARNING) for the two log surfaces. Namespacing follows the existing `ingest.*` convention (no prior `ingest.*` events were namespaced this way — Plan 22's `WatchedFolderWatcher` uses `watch.*`, and the rest of the pipeline doesn't structlog yet — so we're establishing the convention here). Future OCR-related events can use `ingest.ocr.*`.
+
+**Concerns flagged:**
+- **`update_source` skip is a Plan 25 candidate.** A user who modifies a watched docx with embedded images will get the re-ingested note's text refreshed, but NOT the OCR'd image text refreshed. The same image will continue to surface its OLD OCR output (from the original `ingest()`). This is a partial gap, not a regression — pre-T4 there was no OCR at all. Flagged in the Plan 25 candidate scope.
+- **Pre-classify OCR cost on quarantined-but-not-yet-known content.** If `domain_override` is omitted and classify lands on a domain NOT in `allowed_domains`, the quarantine check fires BEFORE OCR — so no OCR spend. Good. BUT: classify itself runs on the pre-OCR `extracted.body_text` snippet (line 210: `snippet=extracted.body_text[:1000]`). For an image-heavy doc with little surface text (e.g. a slide deck where most info is on screenshots), the classifier may make a worse decision than it would if OCR had run first. Trade-off: OCR-before-classify would burn vision spend on quarantined ingests, which seems strictly worse. Current shape (classify on surface text, then OCR on accepted domain) is the right default. Flagged for visibility — Plan 25 candidate if classifier accuracy on image-heavy docs becomes a real problem.
+- **OCR blocks appended to end-of-body.** Not per-slide-interleaved. Downstream LLM prompts (summarize, integrate) get the `[Image (slide N): ...]` blocks at the END of the body, AFTER all the slide sections. The slide-index marker gives context, but a sophisticated reader might prefer the block to land near its slide section. Plan 25 candidate.
+- **`structlog` introduced to `ingest/pipeline.py`.** This is a new dependency surface in the file (other ingest files like `watch/folder_watcher.py` already import it, so it's not a new project dep — just new for this file). No `caplog` regression because existing tests don't `capture_logs` on this file. New T4 tests DO use `capture_logs` for the warning assertions; verified the structlog testing fixture works correctly with the standard pytest fixture.
+- **OCR test fixture deduplication.** The `_make_tiny_png` + `_build_image_docx` / `_build_pptx_with_image` helpers are duplicated between the unit-test files (`test_docx.py`, `test_pptx.py`) and the new integration-test files. Could extract to a shared `tests/ingest/handlers/_image_fixtures.py` but the duplication is small (~60 LOC each) and keeping each test file self-contained matches the existing convention. Flag as a small refactor candidate if we add a third integration-test file in Plan 25.
+
+**Commits planned:**
+1. `feat(plan-24): T4 — pipeline OCR pass wiring DocxHandler + PptxHandler images through ocr_image helper`
+2. `test(plan-24): T4 — docx + pptx OCR integration tests with FakeLLMProvider`
+3. `docs(plan-24): T4 — outcome receipts for pipeline OCR pass`
+
+Per D8: NO push.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
