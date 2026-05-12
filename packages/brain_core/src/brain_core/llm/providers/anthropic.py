@@ -15,6 +15,7 @@ its Plan 02 behavior unchanged.
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
@@ -31,6 +32,21 @@ from brain_core.llm.types import (
 
 if TYPE_CHECKING:
     from brain_core.config.schema import Config
+
+
+# Plan 24 Task 3 / D4: default vision-capable model. Sonnet 4.6 is the
+# strongest-vs-cost vision option in the Claude 4.x lineup. Callers can
+# override per-call by passing an explicit ``model`` to ``vision_extract``;
+# a future Config field (e.g., ``LLMConfig.vision_model``) can replace this
+# default without touching the provider.
+_DEFAULT_VISION_MODEL = "claude-sonnet-4-6"
+
+# Plan 24 Task 3: cap on output tokens for OCR responses. OCR returns
+# only the text visible in the image, so a 1024-token ceiling is plenty
+# even for a dense slide and keeps a runaway response from burning
+# tokens. Callers cannot override yet (no business need surfaced); add a
+# kwarg later if a use case appears.
+_VISION_MAX_OUTPUT_TOKENS = 1024
 
 
 # Module-level injectable clock — keyed off ``time.monotonic`` so tests can
@@ -271,6 +287,61 @@ class AnthropicProvider:
             ),
             stop_reason=getattr(raw, "stop_reason", None),
             tool_uses=tool_uses,
+        )
+
+    async def vision_extract(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        content_type: str = "image/png",
+        model: str | None = None,
+    ) -> tuple[str, int, int]:
+        """Extract text from an image via Claude Vision.
+
+        Plan 24 Task 3 / D4. Sends a single ``user`` message with an image
+        block (base64-encoded) followed by a text block carrying the
+        prompt. Returns the assistant's concatenated text + the upstream
+        usage object's input/output token counts so the caller can record
+        a ledger row with ``operation="ocr"``.
+
+        No per-domain rate-limit gating: ``vision_extract`` doesn't carry
+        a domain at this layer (the caller in T4 owns the domain context
+        and the budget check). Adding rate-limit gating here would
+        duplicate the per-domain leaky-bucket already in place for
+        ``complete`` / ``stream`` once T4 threads domain through; deferred
+        until a real need surfaces.
+        """
+        chosen_model = model or _DEFAULT_VISION_MODEL
+        base64_data = base64.standard_b64encode(image_bytes).decode("utf-8")
+        raw: Any = await self._client.messages.create(
+            model=chosen_model,
+            max_tokens=_VISION_MAX_OUTPUT_TOKENS,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": content_type,
+                                "data": base64_data,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        text_blocks: list[str] = []
+        for block in raw.content:
+            if getattr(block, "type", "") == "text":
+                text_blocks.append(block.text)
+        return (
+            "".join(text_blocks),
+            getattr(raw.usage, "input_tokens", 0),
+            getattr(raw.usage, "output_tokens", 0),
         )
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamChunk]:

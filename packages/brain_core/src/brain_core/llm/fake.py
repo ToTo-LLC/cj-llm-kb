@@ -55,6 +55,37 @@ class _QueuedResponse:
     stop_reason: str = "end_turn"
 
 
+@dataclass
+class FakeVisionResponse:
+    """Queued response for :meth:`FakeLLMProvider.vision_extract`.
+
+    Plan 24 Task 3 / D4: mirrors :class:`_QueuedResponse` but tailored to
+    the ``vision_extract`` return shape ``tuple[str, int, int]``. Defaults
+    on ``input_tokens`` / ``output_tokens`` are non-zero so a test that
+    forgets to set them still produces a realistic ledger row.
+    """
+
+    text: str
+    input_tokens: int = 100
+    output_tokens: int = 50
+
+
+@dataclass
+class FakeVisionCall:
+    """Recorded args from one :meth:`FakeLLMProvider.vision_extract` call.
+
+    Plan 24 Task 3: tests assert on the captured args (image bytes
+    length, prompt, content_type, model) without needing to introspect a
+    looser ``dict[str, Any]`` shape. Keeps the call-record contract
+    typed and discoverable.
+    """
+
+    image_bytes_len: int
+    prompt: str
+    content_type: str
+    model: str | None
+
+
 def _e2e_mode_enabled() -> bool:
     """Return True when ``BRAIN_E2E_MODE`` env var is set to a truthy value.
 
@@ -147,6 +178,12 @@ class FakeLLMProvider:
     def __init__(self) -> None:
         self._queue: list[_QueuedResponse] = []
         self.requests: list[LLMRequest] = []
+        # Plan 24 Task 3: vision_extract test queue + call log. Separate
+        # from the text-completion queue because the wire shapes don't
+        # overlap and tests should be able to prime one without
+        # polluting the other.
+        self._vision_queue: list[FakeVisionResponse] = []
+        self.vision_calls: list[FakeVisionCall] = []
 
     def queue(self, content: str, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
         """Queue a plain-text response (Plan 02 shape; stop_reason='end_turn')."""
@@ -213,3 +250,52 @@ class FakeLLMProvider:
             usage=TokenUsage(input_tokens=q.input_tokens, output_tokens=q.output_tokens),
             done=True,
         )
+
+    # Plan 24 Task 3 / D4 — vision_extract test surface.
+    def queue_vision(
+        self,
+        text: str,
+        *,
+        input_tokens: int = 100,
+        output_tokens: int = 50,
+    ) -> None:
+        """Queue a canned :meth:`vision_extract` response."""
+        self._vision_queue.append(
+            FakeVisionResponse(text=text, input_tokens=input_tokens, output_tokens=output_tokens)
+        )
+
+    def queue_vision_response(self, response: FakeVisionResponse) -> None:
+        """Queue a pre-built :class:`FakeVisionResponse` (verbose-style)."""
+        self._vision_queue.append(response)
+
+    async def vision_extract(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        content_type: str = "image/png",
+        model: str | None = None,
+    ) -> tuple[str, int, int]:
+        """Pop the next queued vision response; raise if empty.
+
+        Mirrors the queue contract :meth:`complete` ships with: empty
+        queue is programmer error and raises ``RuntimeError`` so tests
+        that forget to prime the queue fail loudly rather than silently
+        returning empty text. E2E mode is NOT extended here — OCR isn't
+        part of the demo / Playwright surface yet, and a canned default
+        would mask "did the pipeline forget to call vision_extract".
+        """
+        self.vision_calls.append(
+            FakeVisionCall(
+                image_bytes_len=len(image_bytes),
+                prompt=prompt,
+                content_type=content_type,
+                model=model,
+            )
+        )
+        if not self._vision_queue:
+            raise RuntimeError(
+                "FakeLLMProvider vision queue is empty — call .queue_vision() first"
+            )
+        resp = self._vision_queue.pop(0)
+        return (resp.text, resp.input_tokens, resp.output_tokens)
