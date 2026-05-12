@@ -541,9 +541,65 @@ tasks/
 
 ## T1 outcome
 
-_Filled in at T1 close. Per-pin receipts (4 pin test files + pass/fail
-confirmation + any shape drift surfaced + actual `model_fields`
-verified at exec time)._
+Closed 2026-05-12. Plan 19 T1 audit-OK-but-unpinned gap closed for all
+4 cited BaseModels via the canonical Plan 19 T2 two-tier shape (one
+strict-equality field-set pin + one per-field `field.annotation` +
+`field.is_required()` pin for each single-typed field, with the
+heterogeneous `dict[str, Any] | None` fields pinning only
+non-required defaulting per the spec D4 / responses.py module
+docstring).
+
+### (a) Pin test files created
+
+| # | Sub-fix | File path | LOC | Tests |
+|---|---------|-----------|-----|-------|
+| T1.1 | `SetupStatusResponse` | `packages/brain_api/tests/test_endpoint_setup_status_shape.py` | 70 | 5 (1 field-set + 4 per-field type+required) |
+| T1.2 | `TokenResponse` | `packages/brain_api/tests/test_endpoint_token_shape.py` | 41 | 2 (1 field-set + 1 per-field type+required) |
+| T1.3 + T1.4 | `ToolResponse` + `ErrorResponse` | `packages/brain_api/tests/test_response_envelope_shapes.py` | 117 | 7 (2 field-set + 5 per-field — 3 type+required for single-typed `str` fields + 2 non-required pins for heterogeneous `dict[str, Any] | None` fields) |
+
+### (b) Actual field sets verified at exec time
+
+Re-derived from current main HEAD at task exec; **no drift vs plan-doc
+citations**. All 4 BaseModels match the §T1 step 1 specification
+exactly:
+
+- `SetupStatusResponse.model_fields.keys() == {has_token, is_first_run, vault_exists, vault_path}` — all 4 single-typed primitives (`bool`/`bool`/`bool`/`str`), all required.
+- `TokenResponse.model_fields.keys() == {token}` — single-typed `str`, required.
+- `ToolResponse.model_fields.keys() == {text, data}` — `text: str` required; `data: dict[str, Any] | None` defaults to None (type-annotation pin skipped per heterogeneity rationale).
+- `ErrorResponse.model_fields.keys() == {error, message, detail}` — `error: str` + `message: str` required; `detail: dict[str, Any] | None` defaults to None (type-annotation pin skipped per heterogeneity rationale).
+
+### (c) Shape drift surfaced
+
+**None.** Plan-doc citations matched current main HEAD on first
+inspection — no codification of new shape required.
+
+### (d) Test run output
+
+Recipe used per `feedback_uv_uf_hidden.md` (chflags + pytest on the
+same command line so Spotlight can't re-hide the `.pth` files):
+
+```text
+$ find .venv -name "*.pth" | xargs -I{} chflags 0 {} 2>/dev/null; \
+  uv run --package brain_api pytest \
+  packages/brain_api/tests/test_endpoint_setup_status_shape.py \
+  packages/brain_api/tests/test_endpoint_token_shape.py \
+  packages/brain_api/tests/test_response_envelope_shapes.py -v
+
+============================== 14 passed, 5 warnings in 0.02s ===============================
+```
+
+Coverage: 14 tests total across the 3 new files. All PASSED. The 5
+warnings are pre-existing global `DeprecationWarning`s from the
+`<frozen importlib._bootstrap>` SWIG bindings (unrelated to this
+task).
+
+### Per-task review confirmation
+
+- (a) Each field-set pin uses `set(...keys()) == {...}` strict equality — confirmed across all 4 BaseModels.
+- (b) Cited field sets match current main HEAD at exec time — confirmed, no drift.
+- (c) Per-field `field.annotation` + `field.is_required()` pin for each single-typed field across all 4 BaseModels — confirmed: 4 (SetupStatus) + 1 (Token) + 1 (ToolResponse.text) + 2 (ErrorResponse.error + message) = 8 type+required pins.
+- (d) Heterogeneous fields (`ToolResponse.data` / `ErrorResponse.detail`, both `dict[str, Any] | None`) pin only `not field.is_required()` and skip the type-annotation pin — confirmed in both cases with inline rationale citing the responses.py module docstring.
+- (e) Tests would fail RED on any key add/remove/rename OR any single-typed field's type-annotation change — confirmed (strict equality + `field.annotation is X` mechanics).
 
 ## T2 audit findings
 
