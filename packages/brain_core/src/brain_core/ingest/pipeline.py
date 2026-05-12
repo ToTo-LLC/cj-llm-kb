@@ -338,11 +338,15 @@ class IngestPipeline:
             # Stage A: Scope-guard the existing note path. ``scope_guard``
             # also covers "the note must be inside the vault" — a caller
             # that hands us a stray path outside vault_root is rejected
-            # before we read anything.
+            # before we read anything. ``include_orphans=True`` (Plan 22
+            # T4) — :meth:`update_source` legitimately operates on
+            # already-orphan notes when a watched source reappears, so
+            # the default orphan filter must be bypassed at this seam.
             scope_guard(
                 existing_note_path,
                 vault_root=self.vault_root,
                 allowed_domains=allowed_domains,
+                include_orphans=True,
             )
 
             # Stage B: Read existing note's frontmatter + body. Failure here
@@ -621,11 +625,16 @@ class IngestPipeline:
 
         try:
             # Stage A: scope-guard the path. Mirrors update_source — also
-            # covers "must be inside vault_root".
+            # covers "must be inside vault_root". ``include_orphans=True``
+            # (Plan 22 T4) — :meth:`mark_orphaned` is idempotent and may
+            # be re-called against an already-orphan note (Stage D below
+            # short-circuits to the no-op log line). The default orphan
+            # filter would block that idempotency path, so opt out here.
             scope_guard(
                 existing_note_path,
                 vault_root=self.vault_root,
                 allowed_domains=allowed_domains,
+                include_orphans=True,
             )
 
             # Stage B: read existing note. ``read_text`` raises
@@ -829,6 +838,15 @@ class IngestPipeline:
         verb log entry separately via :meth:`_log_update` so the log
         captures the correct verb (the writer would otherwise stamp
         ``op="patch"``).
+
+        ``include_orphans=True`` is passed to :meth:`VaultWriter.apply`
+        (Plan 22 T4). This helper is shared by :meth:`update_source`
+        (clears orphan mark on successful re-ingest — the target note
+        may already be ``orphaned: true``) and :meth:`mark_orphaned`
+        (target is by definition about to BE marked orphan, and may
+        already be — Stage E only runs on the non-idempotent branch).
+        Both contexts legitimately operate on orphan notes; the default
+        scope_guard filter would block them.
         """
         edits: list[Edit] = [
             Edit(path=note_path, old=old_content, new=new_content),
@@ -843,7 +861,7 @@ class IngestPipeline:
             log_entry=None,  # logged separately with op="update"
             reason="update_source",
         )
-        return self.writer.apply(patch, allowed_domains=(domain,))
+        return self.writer.apply(patch, allowed_domains=(domain,), include_orphans=True)
 
     def _log_update(self, *, domain: str, op_summary: str) -> None:
         """Append a single ``update``-verb entry to the domain's ``log.md``.

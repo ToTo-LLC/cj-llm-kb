@@ -53,7 +53,25 @@ class VaultWriter:
         self._undo_dir = self.vault_root / ".brain" / "undo"
         self._undo_dir.mkdir(parents=True, exist_ok=True)
 
-    def apply(self, patch: PatchSet, *, allowed_domains: tuple[str, ...]) -> Receipt:
+    def apply(
+        self,
+        patch: PatchSet,
+        *,
+        allowed_domains: tuple[str, ...],
+        include_orphans: bool = False,
+    ) -> Receipt:
+        """Apply ``patch`` atomically.
+
+        ``include_orphans`` (Plan 22 T4) threads through to every
+        :func:`scope_guard` call below so callers that legitimately
+        operate on orphan notes (``IngestPipeline.update_source`` /
+        ``mark_orphaned``, the T5 ``brain_restore_orphan`` /
+        ``brain_delete_orphan`` tools) can edit a note whose frontmatter
+        already has ``orphaned: true``. Defaults to ``False`` — every
+        existing caller (LLM patches, ingest stage 6, bulk import)
+        retains the default-filter semantic where editing an orphan
+        raises :class:`brain_core.vault.paths.OrphanedNoteError`.
+        """
         if patch.total_size() > self.max_patch_bytes:
             raise PatchTooLargeError(
                 f"patch total size {patch.total_size()} > limit {self.max_patch_bytes}"
@@ -76,9 +94,19 @@ class VaultWriter:
 
         # Pre-validate every path before any mutation.
         for abs_path in nf_abs_paths:
-            scope_guard(abs_path, vault_root=self.vault_root, allowed_domains=allowed_domains)
+            scope_guard(
+                abs_path,
+                vault_root=self.vault_root,
+                allowed_domains=allowed_domains,
+                include_orphans=include_orphans,
+            )
         for abs_path in edit_abs_paths:
-            scope_guard(abs_path, vault_root=self.vault_root, allowed_domains=allowed_domains)
+            scope_guard(
+                abs_path,
+                vault_root=self.vault_root,
+                allowed_domains=allowed_domains,
+                include_orphans=include_orphans,
+            )
         for ie in patch.index_entries:
             if ie.domain not in allowed_domains:
                 raise PermissionError(
@@ -164,15 +192,30 @@ class VaultWriter:
         dst: Path,
         *,
         allowed_domains: tuple[str, ...],
+        include_orphans: bool = False,
     ) -> Receipt:
         """Atomically rename a file inside the vault.
 
         Both paths must be inside the vault and inside allowed domains, and
         must belong to the same top-level domain (cross-domain moves are
         rejected). `dst` must not exist. Writes a rename undo record.
+
+        ``include_orphans`` (Plan 22 T4) defaults to ``False`` — same
+        semantic as :meth:`apply`. Orphan-aware tools (``brain_delete_orphan``
+        moves the note to ``.brain/trash/``) opt in.
         """
-        src_abs = scope_guard(src, vault_root=self.vault_root, allowed_domains=allowed_domains)
-        dst_abs = scope_guard(dst, vault_root=self.vault_root, allowed_domains=allowed_domains)
+        src_abs = scope_guard(
+            src,
+            vault_root=self.vault_root,
+            allowed_domains=allowed_domains,
+            include_orphans=include_orphans,
+        )
+        dst_abs = scope_guard(
+            dst,
+            vault_root=self.vault_root,
+            allowed_domains=allowed_domains,
+            include_orphans=include_orphans,
+        )
         src_rel = src_abs.relative_to(self.vault_root)
         dst_rel = dst_abs.relative_to(self.vault_root)
         if src_rel.parts[0] != dst_rel.parts[0]:
