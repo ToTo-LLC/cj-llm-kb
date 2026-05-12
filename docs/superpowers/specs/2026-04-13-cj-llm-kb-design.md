@@ -172,6 +172,10 @@ The vault lives at `~/Documents/brain/` (Mac) or `%USERPROFILE%\Documents\brain\
   updated: date
   source_type: text | url | pdf | email | transcript | tweet  # sources only
   source_url: string                                          # sources only
+  source_path: string                                         # absolute path; sources from local-file ingestion only
+  orphaned: bool                                              # default false; set true when watched source disappears
+  orphaned_at: date                                           # set when orphaned flips to true; null otherwise
+  watched_folder_id: string                                   # links note → Config.watched_folders[*].path
   tags: [string]
   ingested_by: brain v<x.y>
   content_hash: sha256                                        # for idempotency
@@ -241,6 +245,51 @@ All handlers implement a `SourceHandler` Protocol (`classify / fetch / extract`)
 `brain migrate <folder>` walks a folder recursively (Obsidian vault, Notion export, plain Markdown day one; other adapters roadmap), classifies each file, batches the Integrate step per-domain, and saves a **dry-run patch tree** to `.brain/migrations/<timestamp>/`. User reviews the plan as a diff tree in the web UI; `brain migrate --apply` (or the Apply button) commits.
 
 Idempotency: each note stores a `content_hash` in frontmatter; re-ingesting an already-seen file is a no-op unless `--force`.
+
+### Watched folders
+
+**Live source → vault sync.** A user-designated folder enters a watch list; brain mirrors source-file additions, edits, and deletions into the knowledge base automatically. Mirrors the symmetric-watchdog pattern Plan 16 T35 established for `ConfigWatcher`: one `watchdog.Observer` per process (brain_api lifespan + brain_mcp `_cached_ctx`), debounce window ~100ms.
+
+**Schema.** `Config.watched_folders: list[WatchedFolder]` where:
+
+```yaml
+WatchedFolder:
+  path: str                  # absolute folder path
+  domain: str                # must be in Config.domains
+  enabled: bool              # toggle without removing from the list
+  last_sync: datetime | null # timestamp of last full sync
+  policy: "overwrite"        # v1 only; reserved for v2 (keep_vault / prompt / merge)
+  include_subdirs: bool      # default true; recursive folder walk
+```
+
+**Lifecycle.**
+
+1. **Watch enable** (`brain_watch_folder <path> --domain <name>`): validates folder; appends `WatchedFolder` to `Config.watched_folders`; runs `pre_watched_folder_sync` backup; performs initial sync via the existing `BulkImporter.plan()` + `apply()` with `domain_override=domain`; starts `WatchedFolderWatcher` observers.
+2. **Live events.**
+   - **Created** → `IngestPipeline.ingest()` with `domain_override` from the WatchedFolder entry (or classify if no override).
+   - **Modified** → `IngestPipeline.update_source(existing_note_path, new_source_path)` — replaces the note's body + frontmatter `updated`/`content_hash`/`source_path` IN PLACE. Slug preserved (wikilinks remain valid). Domain preserved (no surprise moves).
+   - **Deleted** → `IngestPipeline.mark_orphaned(existing_note_path)` — sets `orphaned: true` + `orphaned_at` in frontmatter via VaultWriter mutation with undo log.
+3. **Watch disable** (`brain_unwatch_folder <path>`): removes the WatchedFolder entry; observers stop. Orphans remain marked. Existing notes stay in the vault.
+
+**Contract.** Watched folders treat the source as canonical. Vault edits to watched-source notes are OVERWRITTEN on the next source change. The watch-enable confirmation modal explains this contract prominently so users opt in deliberately. Vault-edit-aware conflict resolution (keep-vault / prompt / merge) is deferred to a future plan.
+
+**Classify behavior.** Classify ONCE on first ingest (or honor `--domain` override). Re-ingest preserves the existing note's frontmatter `domain` — no re-classify call, no surprise domain move.
+
+**Orphan policy.** Source deletion marks the note `orphaned: true` + `orphaned_at: <date>`. `scope_guard(..., include_orphans=False)` filters orphans from default queries; `brain_list_orphans` surfaces them; user manually decides delete-or-restore via `brain_delete_orphan` (requires `typed_confirm=true`) or `brain_restore_orphan`. Auto-delete is explicitly out of scope (preserves "vault is sacred" non-negotiable; requires typed confirmation per CLAUDE.md destructive-action rule).
+
+**Initial sync.** No hard file-count cap; rate-limit + per-domain budget caps (Plan 16 T26-T32) enforce hard ceilings on LLM spend. The `brain_watch_folder` tool surfaces an informational cost estimate (`file_count × ~1000 tokens per classify`) in its `ToolResponse.text` before any LLM call. If the user's budget exhausts mid-sync, the sync pauses and resumes after the user raises the cap.
+
+**Tool surface (7 tools).**
+
+- `brain_watch_folder` — add folder to watch list + initial sync
+- `brain_unwatch_folder` — remove folder; orphans remain marked
+- `brain_list_watched_folders` — read watch list with runtime stats
+- `brain_list_orphans` — read orphan list (filter by folder)
+- `brain_resync_folder` — force full re-sync (catches events watcher missed)
+- `brain_restore_orphan` — unmark `orphaned: false`
+- `brain_delete_orphan` — typed-confirm delete; moves to `.brain/trash/<date>/` with undo log
+
+**Frontmatter additions** (canonical list in §4): `source_path`, `orphaned`, `orphaned_at`, `watched_folder_id`.
 
 ### Failure handling
 
@@ -505,6 +554,7 @@ The vault is sacred.
 - 24h undo window via undo log; older reverts still possible by hand via log
 - Pre-operation hardlink snapshots for ops touching ≥10 files; 7-day retention
 - Domain firewall: single `scope_guard(path, allowed_domains)` function; all vault I/O passes through it
+- **Watched folders**: opt-in only (`brain_watch_folder` is an explicit user action, never auto-triggered); backup trigger `pre_watched_folder_sync` runs before initial sync writes any vault content; orphan marks are non-destructive (`orphaned: true` in frontmatter; user adjudicates delete via `brain_delete_orphan` with `typed_confirm=true`); `scope_guard(..., include_orphans=False)` filters orphans from default queries (default behavior is to hide orphans; an explicit `include_orphans=True` keyword surfaces them for the Orphan management screen). Plan 22 lands the watched-folders subsystem; see §5 "Watched folders" subsection for the full contract.
 - **Canonical Config entry point** (Plan 16 T34 / T34.5 / T35; Plan 17 T14): `brain_core.config.loader.resolve_config(...)` is the only sanctioned call site for obtaining a `Config`. `load_config(...)` is the underlying primitive that `resolve_config` wraps on cache misses; direct `load_config` calls are reserved for the loader itself. New code paths MUST go through `resolve_config` so they participate in the `ConfigWatcher`-driven cross-process invalidation (T35) layered over T34's lazy version-peek — bypassing it produces stale-config bugs on hot-reload (a user edits `config.json` via Settings, the watcher invalidates, but a caller holding a `load_config` result never sees the new state). Long-running consumers each hold ONE live shared `Config` reference: `app_state.ctx.tool_ctx.config` (brain_api lifespan), `session.app_config` (brain_cli chat command, via `build_session(app_config=...)`), `_cached_ctx.config` (brain_mcp server) — refreshed on the next `resolve_config` call after a `ConfigWatcher` event or a `_peek_config_version` mismatch.
 
 ### Testing strategy
