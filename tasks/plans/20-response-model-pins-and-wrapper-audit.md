@@ -770,8 +770,48 @@ findings table is the canonical reference shape for future audits.
 
 ## T4 outcome
 
-_Filled in at T4 close. Demo gate count + commits + tag SHA +
-push receipt._
+Closed 2026-05-12. Closure landed in 3 commits per the Plan 19 T6
+split precedent (chore-demo / docs-lessons / docs-todo+review).
+`scripts/demo-plan-20.py` 7-gate run prints `PLAN 20 DEMO OK`. Tag
+`plan-20-response-model-pins-and-wrapper-audit` cut at the HEAD of
+the final closure commit (T4.3 plan-doc Review finalization). Per
+D10, the tag is local-only at plan-close; push deferred to explicit
+user authorization.
+
+### Demo gate count
+
+7 gates (Plan 20's natural surface count per D7):
+
+1. T1.1 SetupStatusResponse field-set pin (file exists + runtime
+   `model_fields` strict equality).
+2. T1.2 TokenResponse field-set pin (file exists + runtime
+   `model_fields` strict equality).
+3. T1.3 ToolResponse field-set pin in test_response_envelope_shapes.py
+   (file exists + runtime `model_fields` strict equality).
+4. T1.4 ErrorResponse field-set pin (sibling-pinned in same file +
+   runtime `model_fields` strict equality).
+5. T2 plan-doc `## T2 audit findings` section non-empty with
+   verdict-summary sub-table covering all 4 verdicts + TOTAL.
+6. T3 zero-fix closure phrase present in plan-doc `## T3 outcome`.
+7. T4 tasks/todo.md row 20 ✅ Complete + tasks/lessons.md has a
+   `## Plan 20` section.
+
+### Commits
+
+- T4.1 `chore(plan-20): T4.1 — demo-plan-20.py asserting all 7 closure gates`
+- T4.2 `docs(plan-20): T4.2 — lessons.md Plan 20 closure section`
+- T4.3 `docs(plan-20): T4.3 — todo.md row 20 ✅ + plan-doc Review + Plan 21 candidate scope`
+
+### Tag
+
+`plan-20-response-model-pins-and-wrapper-audit` — cut at T4.3 HEAD.
+SHA reported in the controller's closure summary; not pushed (D10).
+
+### Push receipt
+
+**Deferred.** Per D10, the tag is local-only at plan-close. Controller
+relays the tag SHA to the user along with the push-authorization
+prompt; push happens only on explicit user assent.
 
 ## Plan 21 candidate scope
 
@@ -798,8 +838,51 @@ Plus any new candidates surfacing from Plan 20 execution.
 
 ## Review
 
-_Filled in at T4 close. Tag SHA + closure summary + bumps + verification
-receipts + backlog forward._
+- **Tag:** `plan-20-response-model-pins-and-wrapper-audit` cut at HEAD
+  on the green `scripts/demo-plan-20.py` run (2026-05-12). Tag points
+  at the final closure commit (T4.3 plan-doc Review finalization);
+  earlier T4 commits are reachable via the tag's history.
+- **Closes:** the Plan 19 carry-forward candidates #6 + #7 per user
+  1.A scope locking. (T1) Plan 19 T1's audit-OK-but-unpinned gap for
+  4 BaseModels (`SetupStatusResponse`, `TokenResponse`, `ToolResponse`,
+  `ErrorResponse`) closed via the canonical Plan 19 T2 two-tier
+  Pydantic-introspection pin shape (3 test files / 228 LOC / 14
+  tests passing in 0.02s). (T2) `tools.ts` wrapper-fanout audit
+  surfaced 45 wrappers (38 root + 7 fanout) with **0 DRIFT-HARDCODED**
+  — Plan 19 T4's `7cd2b72` 7-wrapper fix is fully holding and the
+  broader 38-root surface is drift-free by design ("wrapper IS the
+  typed surface"). (T3) Zero-fix closure per user's tiered
+  AskUserQuestion at exec time (Q3=3.A); manufacturing regression
+  pins for a non-existent drift class would be over-engineering per
+  CLAUDE.md "engineered enough" principle. (T4) Closure landed in
+  3 commits + tag.
+- **Bumps:** none. Zero schema changes; zero new dependencies; zero
+  spec text changes; zero source modifications outside the 3 new
+  pin test files. All work was drift-prevention infrastructure (T1)
+  + verification receipts (T2 / T3).
+- **Verification:** `scripts/demo-plan-20.py` 7-gate demo prints
+  `PLAN 20 DEMO OK` (gate count not pinned per D7; 7 is Plan 20's
+  natural surface count for a 4-task / 2-theme plan). Test counts at
+  plan-close: brain_api +14 pin tests across 3 new files
+  (`packages/brain_api/tests/test_endpoint_setup_status_shape.py`,
+  `test_endpoint_token_shape.py`, `test_response_envelope_shapes.py`).
+  Regression check at T3 close: `pnpm vitest run` 496 passed / 1
+  skipped (81 test files, 6.07s); `pnpm tsc --noEmit` clean exit. Mac
+  local verified; Windows CI cut at push time per D10.
+- **Backlog forward:** Plan 21 candidate scope per the tail block of
+  `tasks/todo.md` — 4 preserved NOT-DOING carry-forwards (unchanged
+  since Plan 17 / 18 / 19: `seedBrainMd`/`seedScope` rule-of-three;
+  per-thread cross-domain confirmation = architectural NO per spec
+  §3 + Plan 16 D36; topbar scope chip drift watch = lesson-only per
+  Plan 12; PEP 703 `_cached_ctx` 3.14 trigger) plus 1 deferred from
+  Plan 20 per user 1.A scope-locking decision: `resolve_out_dir`
+  `parents[4]` iCloud / uv-editable hardening (Plan 19 T2 surprise
+  #2; `BRAIN_WEB_OUT_DIR` env override is the durable workaround;
+  cross-platform sweep territory per Plan 13 + Plan 15). The new
+  Plan-20-surfaced observations (multi-line-grep artefact /
+  plan-author-grep / `tools.ts` wrapper convention) are LESSON-level
+  captures, not Plan 21 candidates unless surfaced via real-world
+  need.
 
 ---
 
