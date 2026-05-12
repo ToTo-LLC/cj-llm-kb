@@ -617,10 +617,110 @@ NORMAL state; the venv-rebuild was a deeper recovery step.
 
 ## T2 outcome
 
-_Filled in at T2 close. Per-step receipts: app.py warning added at line
-<N>; logger convention used (structlog vs stdlib logging); test file +
-test count + pass/fail; brain_api full-suite run output; monkeypatch-
-binding pattern used per Plan 17 T17 lesson._
+**Status:** DONE.
+
+### (a) Logger convention found
+
+`brain_api` uses **structlog** (verified at exec time via `grep -rn
+"structlog\|import logging\|get_logger\|getLogger"
+packages/brain_api/src/brain_api/`). The relevant module-level binding in
+`brain_api/app.py:40` is:
+
+```python
+_lifespan_logger = structlog.get_logger(__name__)
+```
+
+Two prior warnings in the same module (`_on_config_change` and the
+anthropic-provider-init path) already use the shape
+`_lifespan_logger.warning("event_name", error=str(exc), key=value)` —
+T2 mirrors that exactly. (stdlib `logging` is used in `errors.py`,
+`chat/session_runner.py`, and `routes/chat.py`, but `app.py` itself is
+structlog-only.)
+
+### (b) app.py warning added
+
+Replaced the bare `except RuntimeError: pass` (lines 284-286 in the
+pre-T2 source) with a structured `_lifespan_logger.warning(
+"spa_mount_skipped", error=str(exc), hint=...)` at
+`packages/brain_api/src/brain_api/app.py:284-302`. The hint string
+points at the two documented workarounds (`BRAIN_WEB_OUT_DIR=apps/
+brain_web/out` env-override AND `pnpm --dir apps/brain_web build`). The
+comment block above the warning cross-references the auto-memory note
+`feedback_brain_web_out_dir.md` so a future maintainer hitting the same
+symptom finds the diagnosis trail.
+
+### (c) Test file path, count, pass/fail
+
+- File: `packages/brain_api/tests/test_app_silent_degrade_warning.py`
+  (3 tests, ~160 LOC).
+- Tests:
+  - `test_silent_degrade_warning_fires_when_resolve_raises`
+  - `test_silent_degrade_warning_does_not_fire_when_mount_static_ui_false`
+  - `test_silent_degrade_warning_does_not_fire_on_successful_mount`
+- Result: **3 passed, 0 failed** under the PYTHONPATH-bypass recipe.
+
+```
+packages/brain_api/tests/test_app_silent_degrade_warning.py::test_silent_degrade_warning_fires_when_resolve_raises PASSED [ 33%]
+packages/brain_api/tests/test_app_silent_degrade_warning.py::test_silent_degrade_warning_does_not_fire_when_mount_static_ui_false PASSED [ 66%]
+packages/brain_api/tests/test_app_silent_degrade_warning.py::test_silent_degrade_warning_does_not_fire_on_successful_mount PASSED [100%]
+
+======================== 3 passed, 5 warnings in 0.02s =========================
+```
+
+### (d) brain_api full-suite run output
+
+```
+ssss....................................................................
+........................................................................
+.......................................................................
+211 passed, 4 skipped, 5 warnings in 2.43s
+```
+
+Up from T1's 208 passed / 4 skipped — the +3 delta is exactly the new
+silent-degrade warning tests, and the 4 skipped remain unchanged (the
+existing `test_anthropic_e2e.py` no-API-key skips).
+
+### (e) Monkeypatch-binding pattern used (Plan 17 T17 lesson)
+
+Confirmed `brain_api/app.py:33` does `from brain_api.static_ui import
+SPAStaticFiles, resolve_out_dir` — so `resolve_out_dir` is an
+import-bound name in `brain_api.app`. The tests patch the import-bound
+reference directly:
+
+```python
+monkeypatch.setattr("brain_api.app.resolve_out_dir", _raising_resolver)
+```
+
+Belt-and-suspenders: tests also patch `brain_api.static_ui.resolve_out_dir`
+with `raising=False` so a future refactor that inlines the import (e.g.
+`from brain_api.static_ui import resolve_out_dir as _resolve`) is
+still covered.
+
+### (f) Recipe note — iCloud .pth masking surfaced in T2
+
+The initial chflags-on-same-command-line recipe from
+`feedback_uv_uf_hidden.md` was NOT sufficient on this run: the .venv
+contains a non-editable COPY of `brain_api` in site-packages (only
+`brain_core` has an `_editable_impl_*.pth`), so the chflags recipe
+silently ran tests against the stale site-packages copy of `app.py`
+(pre-T2 `except RuntimeError: pass`). The PYTHONPATH bypass from the
+plan's step 4 fallback was required:
+
+```bash
+unset VIRTUAL_ENV && \
+  PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_api pytest packages/brain_api/tests/ -q
+```
+
+Diagnostic: `inspect.getsource(brain_api.app)` returned the stale
+`except RuntimeError: pass` while the on-disk source had the new
+`_lifespan_logger.warning(...)`. The `__file__` attribute confirmed the
+import was resolving to `.venv/lib/python3.12/site-packages/brain_api/
+app.py`, not the workspace source tree. Worth flagging for the Plan 21
+review section — the auto-memory note may want updating to call out
+that the chflags recipe handles `.pth` re-hiding but does NOT handle
+brain_api / brain_mcp being installed as copies. (T3 will run under the
+same PYTHONPATH recipe to keep the demo gate clean.)
 
 ## T3 outcome
 
