@@ -738,6 +738,50 @@ Pinned by `test_extract_headings_to_markdown` (case 1), `test_extract_uses_filen
 - **Plan-doc test path drift (minor).** The new `handlers/` subdir under `tests/ingest/` deviates from the established `test_handler_<type>.py` flat-naming pattern. The plan-doc explicitly cites the new path in both §T1 and the file inventory; I followed it. T2 will lay down `test_pptx.py` in the same new subdir for consistency. If the convention should be `test_handler_docx.py` flat, T1 + T2 tests can be renamed with no code-side change. Flagging for plan-author awareness; not blocking T1 acceptance.
 - **TranscriptDOCXHandler is unchanged.** It still claims ALL `.docx` files. DocxHandler is unreachable via the default chain TODAY. This is the explicit Plan 24 D3 + plan-doc §T1.2 contract ("DocxHandler is the fall-through ... TranscriptDOCXHandler claims first if applicable") — but the practical implication is generic .docx files currently route to `transcript` SourceType, not `docx`. If the user wants generic .docx to actually flow through DocxHandler today, TranscriptDOCXHandler.can_handle needs narrowing (e.g., a stem convention or a content-sniff). That's out of scope per D3-as-locked; calling it out so T4/T5 integration testing of `docx` SourceType end-to-end uses the explicit-chain pattern from `test_dispatcher_routes_generic_docx_to_docx_handler` until/unless TranscriptDOCXHandler narrows.
 
+### T1.5 outcome — Narrow TranscriptDOCXHandler via content sniffing
+
+**Status:** DONE. Bundled adjudication: option C (content sniffing). T1's concern about TranscriptDOCXHandler claiming all `.docx` is now resolved — DocxHandler is reachable via the DEFAULT dispatch chain.
+
+**Files modified:**
+- `packages/brain_core/src/brain_core/ingest/handlers/transcript_docx.py` (+76 / −2 LOC). Replaced suffix-only `can_handle` with content-sniff: open the `.docx` with python-docx, scan the first 10 non-empty paragraphs, require 3+ matches against speaker / timestamp / arrow-marker regexes. Corrupt files return False (no crash; dispatcher falls through to DocxHandler which surfaces a clean HandlerError at `extract` time).
+- `packages/brain_core/tests/ingest/fixtures/notes.docx` (regenerated). Extended from 3 paragraphs (1 title + 2 speaker turns) to 5 paragraphs (1 title + 4 speaker turns) so the existing `test_docx_transcript_reads_paragraphs` test still passes against the new sniff. Body assertions (`"Alice: Welcome..."`, `"Bob: Thanks..."`) unchanged.
+- `packages/brain_core/tests/ingest/test_handler_transcript_docx.py` (+92 / −0 LOC). Added 4 fixture builders + 8 new tests covering can_handle for transcript shape (speakers), timestamp shape, generic prose, short docs, corrupt docs, non-.docx suffixes, missing files, and string inputs.
+- `packages/brain_core/tests/ingest/handlers/test_docx.py` (+19 / −19 LOC). Added `_build_transcript_docx` helper. Updated `test_dispatcher_routes_transcript_docx_first` to use a transcript-shaped fixture against the DEFAULT chain (was using `_build_plain_docx` + relying on suffix-only claim). Updated `test_dispatcher_routes_generic_docx_to_docx_handler` to use the DEFAULT chain (was injecting `handlers=[DocxHandler()]`). Both routing tests now pass against `_default_handlers()` with no explicit injection — D3 is realized.
+
+**Regex patterns chosen (final, after tightening):**
+- `_SPEAKER_PATTERN`: `^[A-Z][\w.'\-]*(?:\s[\w.'\-]+){0,2}:(?:\s|$)` — covers `Alice:`, `John Doe:`, `Speaker 1:`, `Dr. Smith:`, `Mary Jane Watson:`. Capped at **3 space-separated tokens** before the colon to reject prose like `"This is something I learned today: ..."` (5+ tokens). Intentionally claims `Q:` / `A:` / `Note:` / `TODO:` — these are transcript-adjacent and welcome to flow to the transcript handler. Initial draft was `{0,40}` char-count cap, but that false-matched `"This is something I learned today: the world is round."` at 33 chars. Token-count cap is more discriminating.
+- `_BRACKET_SPEAKER_PATTERN`: `^\[[A-Z][A-Z0-9 .'\-]+\]` — covers Zoom-style all-caps `[CHRIS JOHNSON]`.
+- `_TIMESTAMP_PATTERN`: `^[\[\(]?\d{1,2}:\d{2}(?::\d{2})?[\]\)]?` — covers `01:23`, `12:34:56`, `[01:23]`, `(12:34)`.
+- `_ARROW_SPEAKER_PATTERN`: `^>>\s` — covers some auto-transcription services.
+
+**Threshold:** default per plan-doc — `_TRANSCRIPT_MIN_MATCHES = 3` matches in `_TRANSCRIPT_SNIFF_WINDOW = 10` first non-empty paragraphs. Caught a fixture mismatch during impl: existing `notes.docx` had only 2 speaker lines; regenerated with 4 turns so it stays a positive transcript test.
+
+**Existing TranscriptDOCXHandler tests needing fixture updates:** 1 (`test_docx_transcript_reads_paragraphs` via the `notes.docx` shared fixture). Other existing tests (rejection of `.txt`, corrupt extract raises HandlerError) needed no changes — they rely on rejection paths the new sniff still honors. `test_handler_extract_guards.py` parametrized tests all pass unchanged because they exercise `extract`, not `can_handle`.
+
+**T1 routing tests now passing against DEFAULT chain (verified):**
+- `test_dispatcher_routes_transcript_docx_first` — transcript-shaped `.docx` → TranscriptDOCXHandler via `await dispatch(path)` (no `handlers=` arg). ✓
+- `test_dispatcher_routes_generic_docx_to_docx_handler` — generic-prose `.docx` → DocxHandler via `await dispatch(path)`. ✓
+
+**Test counts:**
+- New tests added: 10 (5 from plan-doc spec + 5 extras: `test_can_handle_returns_false_for_missing_file`, `test_can_handle_returns_false_for_str_input`, `test_can_handle_rejects_prose_with_mid_sentence_colons` (pins the false-positive avoidance), `test_can_handle_claims_qa_interview_format` (pins the intentional Q&A claim), plus internal `.txt` + `.pdf` subtests bundled inside `test_can_handle_returns_false_for_non_docx_suffix`).
+- Brain_core baseline pre-T1.5: 1175 collected (1170 passed + 5 skipped). Post-T1.5: **1185 collected (1180 passed + 5 skipped)**. Net +10 = exactly the 10 new tests.
+
+**mypy:** clean on `transcript_docx.py`.
+
+**Self-review:**
+- Pure path / suffix checks happen BEFORE opening the doc, so `can_handle` only pays the python-docx open cost on actual `.docx` files. For `.txt`, `.pdf`, non-Path inputs, missing files, etc. the cost is a single suffix check.
+- `python-docx` was already imported (no new D11-violating dependency).
+- Corruption path: `Document(str(spec))` raises → caught broadly → returns False. The dispatcher then tries DocxHandler, which ALSO returns True from `can_handle` (suffix-only check), and surfaces a clean `HandlerError` at `extract` time. Net behavior: users get the same actionable error message they got before T1.5, just from DocxHandler instead of TranscriptDOCXHandler. This is preferable — corrupt .docx is no longer mis-classified as a transcript.
+- Regex `_SPEAKER_PATTERN` length cap (40 chars before colon) is conservative against false positives on prose like `"This is something I learned today: the world is round."` — that line starts with `"This"` then has a 40+-char span before the colon, so it won't match. Tested implicitly via `test_can_handle_returns_false_for_generic_docx`.
+- Threshold of 3-in-10 is conservative against meeting agendas that have 1-2 "Topic: details" lines but aren't transcripts. A real meeting transcript has many speaker turns; an agenda has at most a handful of section headers.
+
+**Concerns:**
+- **Performance (minor, flagged).** `can_handle` now opens the .docx with python-docx, which unzips + parses XML. Cost is ~5-20ms per .docx call on a modest M-series Mac. For bulk-import of N .docx files this is N opens before extract; if the file is a transcript, it gets opened twice (once in can_handle, once in extract). Not optimizing today — bulk-import dominant cost is extract + LLM passes, not dispatch. Cache could be added later as `(path, mtime) → bool` if profiling shows it matters. Documented inline in `can_handle` docstring.
+- **D3 contract realized.** T1 outcome flagged "DocxHandler is unreachable via the default chain TODAY"; T1.5 closes that gap. End-to-end testing of `docx` SourceType (T4/T5) no longer needs the explicit-chain pattern — default chain works.
+- **notes.docx regeneration.** The fixture is now 5 paragraphs instead of 3. If any test outside the ingest suite asserts on paragraph count it would break — `grep -r "notes.docx" packages/` shows only the existing 3 references in ingest tests, all of which assert on substring content (preserved). No other call sites.
+
+**Commits:** bundled as one commit per cadence (`fix(plan-24): T1.5 — ...`). Plan-doc receipt this section.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
