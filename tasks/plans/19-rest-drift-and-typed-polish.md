@@ -812,6 +812,77 @@ commits:
 (Or a single combined commit if the user prefers; commits stay
 ~150 LOC total.)
 
+### Supplemental visual verification (post-approval, 2026-05-12)
+
+After T3's APPROVED review, user requested a real end-to-end upload
+check (not synthetic frames). Brought uvicorn up directly:
+
+```
+find .venv -name "*.pth" -exec chflags 0 {} \; 2>/dev/null
+BRAIN_VAULT_ROOT="$HOME/Documents/brain" \
+BRAIN_WEB_OUT_DIR="apps/brain_web/out" \
+.venv/bin/python -m uvicorn \
+  brain_cli.runtime.backend_factory:build_app \
+  --factory --host 127.0.0.1 --port 4317
+```
+
+Observed:
+
+- **Server startup:** clean. Log shows
+  `anthropic_provider_skipped reason=no_api_key` (expected in this
+  workspace) and `Application startup complete`.
+- **SPA serves on `/`:** `HTTP 200 (7827 bytes)` — the static SPA
+  mount works under the explicit `BRAIN_WEB_OUT_DIR` env override
+  (resolves surprise #2 above end-to-end at runtime).
+- **`/api/setup-status`:** `HTTP 200` →
+  `{has_token: true, is_first_run: false, vault_exists: true, vault_path: "..."}`.
+- **`/api/token`:** `HTTP 200` → `{token: "<64-hex>"}`.
+- **`POST /api/upload` with real text/markdown body + valid token:**
+  `HTTP 400` with the typed-error envelope
+  `{error: "ingest_failed", message: "ingest did not stage a patch: failed",
+   detail: {status: "failed", errors: ["FakeLLMProvider queue is empty"], note_path: null}}`.
+  The `FakeLLMProvider` activates because the workspace has no
+  Anthropic API key — same constraint as the implementer's
+  synthetic-DragEvent run. The error path is what `upload.ts:72-85`
+  consumes via the `!response.ok` branch — confirmed structurally
+  correct (it pulls `body.error`/`body.message`/`body.detail` and
+  throws `ApiError`).
+- **`POST /api/tools/brain_recent_ingests`:** `HTTP 200`. Row shape
+  emitted by backend:
+  `{classified_at, cost_usd, domain, error, source, source_type, status}`.
+  Live row `domain: null` for these failed-ingest entries — the
+  ingest never reached classify so no domain was assigned.
+
+**What this confirms structurally:**
+
+1. The success-branch `UploadResponse = {patch_id: str}` is locked
+   by the Python pin test at
+   `packages/brain_api/tests/test_endpoint_upload_shape.py` — the
+   pin asserts `set(UploadResponse.model_fields.keys()) == {"patch_id"}`
+   and would fail RED on any backend drift. The success branch
+   cannot be exercised end-to-end in this workspace (no Anthropic
+   key), but the field-set contract is structurally pinned.
+2. The error-branch envelope (`{error, message, detail}`) IS
+   reproducible and IS consumed correctly by the post-narrow
+   `upload.ts` — verified by the live 400 response above.
+3. The inbox-row `domain` field is populated by the polled
+   `brain_recent_ingests` response, NOT by the upload response —
+   confirmed by the row shape above (backend emits `domain` in the
+   recent_ingests row; T2 removed the `res.domain` write at upload
+   time because that write was always reading an `undefined` field).
+
+**Verification gap (acknowledged):** the success-branch UI flow
+(real successful upload → `patch_id` returned → inbox-store poll
+fills classified `domain`) is NOT verified end-to-end in this
+workspace. Verification of that path requires either (a) a real
+Anthropic API key in the workspace, or (b) queuing the
+`FakeLLMProvider` via test fixtures at module level (which is
+already what the Python integration tests under
+`packages/brain_api/tests/` do, and which already pass GREEN
+post-T2 — see commit `2c7385b` GREEN receipt). The fallback
+verification path is the pin test + the integration tests; the
+visual gap is documented for completeness, not as a blocker.
+
 ## T3 outcome
 
 **Status:** DONE on 2026-05-12.
