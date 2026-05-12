@@ -1,7 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { Link, FileText, Mail, File as FileIcon, RotateCcw } from "lucide-react";
+import {
+  Link,
+  FileText,
+  Mail,
+  File as FileIcon,
+  Presentation,
+  RotateCcw,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type {
@@ -33,6 +40,11 @@ function typeLabel(type: IngestType): string {
       return "TXT";
     case "email":
       return "EML";
+    // Plan 24 T5 — Office Open XML formats.
+    case "docx":
+      return "DOCX";
+    case "pptx":
+      return "PPTX";
     case "file":
     default:
       return "FILE";
@@ -49,6 +61,14 @@ function TypeIcon({ type }: { type: IngestType }): React.ReactElement {
     case "pdf":
     case "text":
       return <FileText className={cls} />;
+    // Plan 24 T5 — generic Word documents get the same FileText glyph
+    // (a document-with-text icon reads as "document"); slide decks get
+    // the dedicated Presentation glyph so they're visually distinct in
+    // a mixed inbox.
+    case "docx":
+      return <FileText className={cls} data-testid="type-icon-docx" />;
+    case "pptx":
+      return <Presentation className={cls} data-testid="type-icon-pptx" />;
     case "file":
     default:
       return <FileIcon className={cls} />;

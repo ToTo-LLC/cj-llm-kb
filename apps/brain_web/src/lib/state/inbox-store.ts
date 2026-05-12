@@ -34,8 +34,77 @@ export type IngestStatus =
   | "done"
   | "failed";
 
-/** Kind of source — drives the leading icon + badge. */
-export type IngestType = "url" | "pdf" | "text" | "email" | "file";
+/** Kind of source — drives the leading icon + badge.
+ *
+ * Plan 24 T5: added ``docx`` + ``pptx`` to match the backend's
+ * ``SourceType`` enum expansion (Plan 24 T0). Generic Microsoft Word
+ * documents and PowerPoint slide decks now ingest via dedicated handlers
+ * with their own ``source_type`` value emitted by the backend; the
+ * Inbox row picks the matching Lucide icon from ``TypeIcon`` below.
+ */
+export type IngestType =
+  | "url"
+  | "pdf"
+  | "text"
+  | "email"
+  | "docx"
+  | "pptx"
+  | "file";
+
+/**
+ * Drop-zone accept list (Plan 24 T5) — the canonical mapping from
+ * supported MIME type to the file extensions that file pickers and
+ * drag-drop callers should advertise. Each entry mirrors the
+ * react-dropzone ``Accept`` shape (MIME → extensions[]) even though
+ * the current ``DropZone`` uses a hand-rolled drag handler; keeping
+ * the same shape future-proofs the constant for a react-dropzone
+ * swap and lets us serialize it into a native ``<input accept=...>``
+ * value with a single helper.
+ *
+ * Order: text-ish formats first, then PDFs, then Office Open XML
+ * (docx / pptx) added by Plan 24 T5. The backend's upload endpoint
+ * is the source of truth for what's actually accepted server-side;
+ * this list is the FRONTEND advertisement and feeds the native file
+ * picker's filter dropdown.
+ */
+export const INGEST_ACCEPT: Readonly<Record<string, readonly string[]>> = {
+  // Plain text + structured text formats the existing pipeline handles.
+  "text/plain": [".txt"],
+  "text/markdown": [".md", ".markdown"],
+  "application/json": [".json"],
+  "application/xml": [".xml"],
+  "application/x-yaml": [".yaml", ".yml"],
+  // Email exports (.eml).
+  "message/rfc822": [".eml"],
+  // PDFs.
+  "application/pdf": [".pdf"],
+  // Plan 24 T5 — Office Open XML formats.
+  // .docx — Microsoft Word.
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
+    ".docx",
+  ],
+  // .pptx — Microsoft PowerPoint.
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
+    ".pptx",
+  ],
+};
+
+/**
+ * Serialize ``INGEST_ACCEPT`` into the string a native
+ * ``<input type="file" accept=...>`` expects: a comma-separated list
+ * of MIME types AND extensions. Browsers accept either form; we emit
+ * BOTH so the picker behaves correctly across Safari, Chrome, and Edge
+ * (Safari historically struggles with MIME-only accept strings for
+ * Office Open XML files).
+ */
+export function ingestAcceptAttribute(): string {
+  const parts: string[] = [];
+  for (const [mime, exts] of Object.entries(INGEST_ACCEPT)) {
+    parts.push(mime);
+    for (const ext of exts) parts.push(ext);
+  }
+  return parts.join(",");
+}
 
 /** The three inbox tabs. */
 export type InboxTab = "progress" | "failed" | "recent";

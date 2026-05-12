@@ -11,7 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { uploadFile } from "@/lib/ingest/upload";
 import { triggerIngest } from "@/lib/ingest/url-paste";
-import { useInboxStore } from "@/lib/state/inbox-store";
+import { ingestAcceptAttribute, useInboxStore } from "@/lib/state/inbox-store";
 import { useSystemStore } from "@/lib/state/system-store";
 import { cn } from "@/lib/utils";
 
@@ -259,6 +259,12 @@ export function DropZone(): React.ReactElement {
         type="file"
         className="hidden"
         aria-hidden="true"
+        // Plan 24 T5: filter the native file picker to the supported
+        // MIME types + extensions (includes .docx + .pptx). The
+        // drag-drop path stays permissive — the backend still
+        // validates server-side — so users can drag in anything and
+        // get a typed error for unsupported formats.
+        accept={ingestAcceptAttribute()}
         onChange={onFilePicked}
       />
     </div>
