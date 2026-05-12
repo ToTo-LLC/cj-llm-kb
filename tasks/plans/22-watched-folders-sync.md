@@ -1371,7 +1371,7 @@ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:p
 
 - `db12ed0` — `feat(plan-22): T3 — IngestPipeline.mark_orphaned
   (D2 non-destructive orphan mark; idempotent)`
-- `<docs-sha>` — `docs(plan-22): T3 — outcome receipts for orphan-mark path`
+- `3920c1b` — `docs(plan-22): T3 — outcome receipts for orphan-mark path`
 
 
 
