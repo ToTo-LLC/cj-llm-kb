@@ -2891,6 +2891,211 @@ the test file's inline comments at the failure sites.
 - Sibling action disable during resync prevents competing mutations
   on the same row (mockup §"Mutation in-flight state" line 142).
 
+## T13 outcome
+
+**Date:** 2026-05-12.
+
+**Subagent:** brain-frontend-engineer.
+
+**Status:** ✅ Complete.
+
+**Files created:**
+
+- `apps/brain_web/src/components/settings/panel-orphans.tsx` (~660 LOC)
+  — Settings → Orphans panel implementing the mockup at
+  `docs/design/plan-22/orphan-management.md`. Renders one row per
+  orphan, groups by `watched_folder_id`, surfaces per-row Restore +
+  Delete actions, supports per-row + bulk selection with a sticky
+  bulk-action bar, and routes both single-row + bulk delete through
+  the existing `TypedConfirmDialog` primitive (slug for single, "delete
+  N notes" literal phrase for bulk per Q4=4.A). Filter dropdowns
+  (folder + domain) drive a `useMemo` reduction before the
+  group-by-folder step. State management mirrors PanelWatchedFolders.
+- `apps/brain_web/src/lib/state/orphans-store.ts` (~165 LOC) — zustand
+  store peer to `useWatchedFoldersStore` with the same shape
+  (`refresh()` resolve-always, `removeOrphanOptimistic()` for snappy
+  UX, `restoreOrphan()` / `deleteOrphan()` resolve-rejects for
+  per-row spinner + toast lifecycle, `_resetForTesting()` for unit
+  tests). In-flight serialization via module-scope Promise cache so
+  concurrent `refresh()` calls share one fetch. The store ALWAYS
+  passes `typed_confirm: true` to `brain_delete_orphan` — the UI guards
+  the typed-confirm at the modal layer; backend's PermissionError
+  refusal is the belt-and-braces backstop.
+- `apps/brain_web/tests/unit/panel-orphans.test.tsx` (~570 LOC, 23
+  tests) — covers populated state, empty state, loading state, error
+  banner, single-row restore (happy + optimistic + failure), single-
+  row delete typed-confirm flow + mistype guard, bulk-select group
+  toggle, bulk restore (sequential N calls), bulk delete typed-confirm
+  (verbatim phrase pin + N sequential calls + mistype refusal),
+  Clear selection, and accessibility annotations (row aria-label
+  composition, warn-icon aria-hidden, group separator aria-label).
+
+**Files modified:**
+
+- `apps/brain_web/src/lib/api/tools.ts` — added 4 named TS interfaces
+  (`OrphanEntry`, `ListOrphansData`, `RestoreOrphanData`,
+  `DeleteOrphanData`) per Plan 19 T4 named-interface discipline, plus
+  3 typed wrappers (`listOrphans`, `restoreOrphan`, `deleteOrphan`).
+  `ALL_TOOL_NAMES` count: 41 → 44.
+- `apps/brain_web/src/components/settings/settings-screen.tsx` — added
+  `"orphans"` to `SettingsTabId` union; registered the tab immediately
+  after `"watched-folders"` per the mockup hand-off note ("Place
+  adjacent to watched-folders"); added `<PanelOrphans />` to the
+  `renderPanel` switch with the `AlertTriangle` icon from
+  `lucide-react`.
+- `apps/brain_web/tests/unit/api-client.test.ts` — bumped the
+  41-tool count pin to 44 with a comment trail describing which Plan
+  22 tools landed in T13 and which (just `brain_watch_folder`) defer
+  to T15.
+
+**Backend shape pins:** the 4 TS interfaces were derived directly from
+the Python pin tests in `packages/brain_core/tests/tools/`:
+
+- `OrphanEntry` ← `test_list_orphans.py::test_returns_only_orphaned_notes_data_shape_pin`
+  (5 keys: `note_path`, `domain`, `source_path`, `orphaned_at`,
+  `watched_folder_id`).
+- `ListOrphansData` ← `{orphans: OrphanEntry[]}` outer envelope from
+  `test_empty_vault_returns_empty_orphans` + the test above.
+- `RestoreOrphanData` ← `test_restore_orphan.py::test_data_shape_pin_and_flips_frontmatter`
+  (3 keys: `status: "restored"`, `note_path`, `undo_id`).
+- `DeleteOrphanData` ← `test_delete_orphan.py::test_data_shape_pin_happy_path`
+  (3 keys: `status: "deleted"`, `trash_path`, `undo_id`).
+
+Drift on either side fails RED on the Python pin → TS interface stays
+in lock-step. Same Plan 19 T4 cosmetic-widen direction.
+
+**TypedConfirmDialog usage:** the existing primitive at
+`apps/brain_web/src/components/dialogs/typed-confirm-dialog.tsx` is
+reused as-is for BOTH single-row delete (word = note slug per the
+modal-orphan-delete.md mockup line 39 ) and bulk delete (word =
+"delete N notes" literal phrase per the mockup's bulk-mode section).
+No new dialog kind was registered, no headerSlot extension was added
+— the note-card header preview from the mockup is a T15 concern (the
+mockup's "Implementation guidance for T15" section recommends
+extending TypedConfirmDialog with an optional `headerSlot: ReactNode`
+prop; T13 ships with the simpler word-only typed-confirm to keep
+scope tight).
+
+**Bulk-delete strategy:** sequential per-note calls (not a new batch
+endpoint). The backend's T5 deliverable shipped per-note tools only;
+T13 iterates `brain_delete_orphan({note_path, typed_confirm: true})`
+over the selection in a for-loop, collecting `okCount` + `firstErr`
+to drive a tri-state toast ("N notes deleted." on full success / "ok
+of N notes deleted." on partial / "Couldn't delete." on full failure).
+Sequential keeps the optimistic-drop + failure-reconcile pattern
+simple and avoids overlapping `refresh()` calls that would otherwise
+share an in-flight Promise. Documented in the panel's
+`handleBulkDelete` callback for the next engineer.
+
+**Verification gates:**
+
+- `pnpm vitest run tests/unit/panel-orphans.test.tsx`:
+  23/23 passing, 1.98s.
+- `pnpm vitest run` (full suite): 540 passing / 1 skipped (was 517/1
+  at T12 fix-up), 7.25s.
+- `pnpm tsc --noEmit`: exit 0. Per auto-memory
+  `feedback_tsc_vs_vitest.md`, both gates run; both clean.
+
+**Mockup-fidelity self-check:**
+
+- Header microcopy verbatim: "Orphaned notes" + "These notes used to
+  come from watched folders, but their source files no longer exist.
+  Restore brings them back into your knowledge base; delete moves
+  them to trash."
+- Empty-state copy verbatim: "No orphaned notes." + "Every note in
+  your vault still has a source file behind it. Nice work." + "View
+  watched folders ›".
+- Filter labels verbatim: "Filter by folder:" / "Filter by domain:"
+  + "All folders" / "All domains".
+- Bulk-action bar copy verbatim: "Selected: ${n}" + "Restore selected"
+  + "Delete selected…" (with ellipsis) + "Clear selection".
+- Group separator template verbatim: "From ${path} · ${domain-badge}
+  · ${count} orphan(s)" + per-group "select all" lowercase affordance
+  + "clear all" toggle when fully-selected.
+- Per-row sub-line: "Source: ${source_path}" line + "Orphaned
+  ${relative} · was last synced ${date}" line. Caveat: the
+  "last synced" portion currently shows the orphaned-at timestamp
+  (`OrphanEntry` from T5 only ships `orphaned_at`, not a separate
+  `last_synced_at` field); flagged as a Plan 23 candidate below.
+- Toast copy verbatim for restore + delete success/failure (per-row
+  + bulk variants), pinned by vitest assertions.
+- Accessibility annotations: warn-icon `aria-hidden="true"`,
+  row-level `aria-label` aggregating title + source + relative-time,
+  bulk-action bar `role="region"` + `aria-label="Bulk actions for
+  selected orphans"`, group `<h3>` with `aria-label` naming count +
+  path + domain. Pinned by 3 a11y tests at the end of the test file.
+
+**Concerns / follow-ups (Plan 23 candidates added below):**
+
+1. **`OrphanEntry` lacks a separate `last_synced_at` field.** The
+   mockup's per-row sub-line template references "was last synced
+   ${date}" — distinct from "orphaned ${relative}". The backend's
+   T5 `brain_list_orphans` only emits `orphaned_at`, so v1 the panel
+   renders the same timestamp for both halves of the line. A future
+   T5 amendment + Plan 19 T4 cosmetic widen would carry a separate
+   `last_synced_at` (or `last_seen_at`) field.
+2. **TypedConfirmDialog headerSlot extension deferred to T15.** The
+   modal-orphan-delete.md mockup specifies a note-card preview inside
+   the typed-confirm modal (warn icon + title + source line). T13
+   ships with the simpler word-only typed-confirm to keep scope
+   tight; T15 (per the mockup's "Implementation guidance" section)
+   is where the headerSlot prop addition lands. v1 typed-confirms
+   render with the body explanation + Type-${word}-to-confirm input
+   pattern from the existing primitive.
+3. **No frontmatter `title` in the OrphanEntry shape.** The mockup's
+   row anatomy says "The note's title (frontmatter `title` or slug
+   fallback)". The backend's T5 pin only carries `note_path` /
+   `domain` / `source_path` / `orphaned_at` / `watched_folder_id`,
+   so v1 always falls back to the slug. A future T5 amendment +
+   Plan 19 T4 cosmetic widen would carry the title.
+4. **Cross-store reconciliation: watched-folders `orphan_count`
+   stays stale after restore/delete.** When the user restores or
+   deletes an orphan in the Orphans panel, the watched-folders
+   store's `orphan_count` column doesn't auto-invalidate. The
+   counter only updates when the user navigates to Watched folders
+   and the panel's first-mount `refresh()` re-walks the vault. v1
+   accepts this; the mockup's hand-off note flagged it as
+   acceptable. A BroadcastChannel-style pubsub (or a one-line
+   `void useWatchedFoldersStore.getState().refresh()` chained off
+   the orphans store's successful mutations) is a Plan 23 candidate.
+5. **Bulk action progress feedback is binary (idle / done), not
+   running-N.** Per mockup §"Bulk action in-flight": "When user
+   clicks 'Restore selected' with 2 selected, the bulk bar shows:
+   'Restoring 2 notes…' with spinner." T13 ships with the rows
+   themselves fading to 50% opacity + `aria-busy="true"` while the
+   action runs (visible in the existing per-row spinner / state),
+   but the bulk-bar text does NOT switch to a "Restoring N…" label
+   during the sequential loop. The user still sees per-row feedback
+   + the eventual toast. Flagged as a UX-polish item for Plan 23.
+
+**Self-review:**
+
+- Plan 19 T4 named-interface discipline honored: 4 named interfaces
+  exported from `tools.ts` rather than inlined at the wrapper sites,
+  so a future backend shape change ripples through one type alias
+  per shape.
+- Per-row spinner state uses two `Set<string>` (one for restoring,
+  one for deleting) so concurrent mutations on independent rows
+  don't share spinner state — same defensive pattern as T12's
+  resync `Set` precedent.
+- Optimistic-drop + reconcile-on-failure pattern mirrors
+  panel-watched-folders unwatch handler (Plan 22 T12 / Plan 16 T4 D4
+  precedent). Failure path always re-fetches via
+  `useOrphansStore.getState().refresh()` so the dropped row reappears.
+- Selection set lives in component-local state per the mockup
+  hand-off note ("Selection state lives in component-local
+  `Set<string>` — does NOT need to persist across tab switches").
+- Per-row `aria-label` aggregates title + source + relative-time
+  per mockup §"Accessibility annotations" line 194.
+- Bulk-action bar carries `role="region"` + `aria-label="Bulk
+  actions for selected orphans"` per mockup line 191; selection
+  count is `aria-live="polite"` per mockup line 192.
+- Group separator is a real `<h3>` (visually rendered as the em-dash
+  rule per mockup line 193) with `aria-label` naming count + path +
+  domain. Screen readers can navigate by heading.
+- Warn icon (`AlertTriangle`) is `aria-hidden="true"` per mockup
+  line 196; row's status conveyed via the row-level `aria-label`.
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards

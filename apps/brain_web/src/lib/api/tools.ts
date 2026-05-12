@@ -1405,6 +1405,143 @@ export const resyncFolder = (args: {
 }): Promise<ToolResponse<ResyncFolderData>> =>
   callTool<ResyncFolderData>("brain_resync_folder", args);
 
+// ---------- Plan 22 T13 — Orphan management (3 tools) ----------
+
+/**
+ * One row in :func:`listOrphans`'s response. Mirrors the backend
+ * ``brain_list_orphans`` handler's per-entry dict exactly (see
+ * ``packages/brain_core/src/brain_core/tools/list_orphans.py``).
+ *
+ * Keys pinned by ``test_list_orphans.py`` /
+ * ``test_returns_only_orphaned_notes_data_shape_pin`` (Plan 22 T5) —
+ * drift on either side fails RED on the Python pin, so the TS interface
+ * stays in lock-step with the wire shape.
+ *
+ *  - ``note_path`` — absolute path of the vault note that is marked as
+ *    orphaned. The Orphans panel uses this as the row key and passes it
+ *    to ``brain_restore_orphan`` / ``brain_delete_orphan``.
+ *  - ``domain`` — domain slug derived from the note's vault path. Used
+ *    by the Settings → Orphans panel to render the per-row domain badge.
+ *  - ``source_path`` — last-known source path from the note's
+ *    ``source_path`` frontmatter key. The mockup renders this as a
+ *    monospace sub-line so the user can recognise where the source
+ *    file lived. May be the empty string if the frontmatter is missing
+ *    the key.
+ *  - ``orphaned_at`` — ISO-8601 timestamp recorded in frontmatter when
+ *    the note was first marked orphaned. Used for the "Orphaned ${relative}"
+ *    label.
+ *  - ``watched_folder_id`` — the watched folder root that originally
+ *    ingested this note (frontmatter ``watched_folder_id`` key). The
+ *    Settings → Orphans panel groups rows by this value (mockup §"Group
+ *    separator").
+ */
+export interface OrphanEntry {
+  note_path: string;
+  domain: string;
+  source_path: string;
+  orphaned_at: string;
+  watched_folder_id: string;
+}
+
+/**
+ * ``brain_list_orphans`` ``ToolResult.data`` shape. Single key
+ * (``orphans``) holding the array — wraps the list in a struct so the
+ * outer envelope has room to grow (e.g. a future ``total`` summary
+ * count) without a breaking shape change.
+ */
+export interface ListOrphansData {
+  orphans: OrphanEntry[];
+}
+
+/**
+ * List every orphaned note in the vault. Optionally filters to a single
+ * ``watched_folder_id`` via the ``folder`` argument; omit for the
+ * full list.
+ *
+ * The Settings → Orphans panel (Plan 22 T13) calls this on first mount
+ * and after every mutation (restore / delete) so the row list stays
+ * canonical with the backend.
+ */
+export const listOrphans = (
+  args: { folder?: string } = {},
+): Promise<ToolResponse<ListOrphansData>> =>
+  callTool<ListOrphansData>("brain_list_orphans", args);
+
+/**
+ * ``brain_restore_orphan`` ``ToolResult.data`` shape. Pinned by
+ * ``test_restore_orphan.py`` / ``test_data_shape_pin_and_flips_frontmatter``
+ * (Plan 22 T5) — single branch on success (``status: "restored"``).
+ *
+ * Failure modes (relative-path, missing note, non-orphan note) raise
+ * exceptions server-side, not alternate-shape error branches — the
+ * wrapper surfaces them as :class:`ApiError` rejections (Plan 22 T13
+ * documents the matching toast at the panel's call site).
+ */
+export interface RestoreOrphanData {
+  status: "restored";
+  note_path: string;
+  undo_id: string;
+}
+
+/**
+ * Restore an orphaned vault note (clear the ``orphaned: true``
+ * frontmatter flag). The source file may or may not still be missing —
+ * the next watched-folder sync re-marks the note if the source is
+ * still gone. Reversible via :func:`undoLast`.
+ *
+ * The Settings → Orphans panel calls this from the per-row "Restore"
+ * action and from the bulk "Restore selected" action (one call per
+ * selected row).
+ */
+export const restoreOrphan = (args: {
+  note_path: string;
+}): Promise<ToolResponse<RestoreOrphanData>> =>
+  callTool<RestoreOrphanData>("brain_restore_orphan", args);
+
+/**
+ * ``brain_delete_orphan`` ``ToolResult.data`` shape. Pinned by
+ * ``test_delete_orphan.py`` / ``test_data_shape_pin_happy_path``
+ * (Plan 22 T5) — single branch on success (``status: "deleted"``).
+ *
+ * The backend REFUSES unless the caller passes ``typed_confirm: true``
+ * (CLAUDE.md "destructive action requires typed confirmation" rule —
+ * see ``test_refuses_without_typed_confirm`` / ``test_refuses_with_typed_confirm_false``).
+ * The frontend gates this through ``TypedConfirmDialog`` (single-note:
+ * type the slug; bulk: type ``delete N notes``).
+ *
+ *  - ``trash_path`` — absolute path under
+ *    ``<vault>/.brain/trash/<YYYY-MM-DD>/`` where the note's content
+ *    was moved. Preserved as an audit trail.
+ *  - ``undo_id`` — identifier the user can pass to
+ *    :func:`undoLast` (or ``brain_undo_last``) to recreate the note at
+ *    its original path.
+ */
+export interface DeleteOrphanData {
+  status: "deleted";
+  trash_path: string;
+  undo_id: string;
+}
+
+/**
+ * Permanently move an orphaned vault note to ``.brain/trash/``.
+ * REQUIRES ``typed_confirm: true`` — the backend raises
+ * :class:`PermissionError` otherwise (CLAUDE.md destructive-action rule
+ * mirrored by :func:`brainDeleteDomain`).
+ *
+ * The Settings → Orphans panel calls this from the per-row "Delete"
+ * action (after the single-note typed-confirm modal) and from the bulk
+ * "Delete selected" action (one call per selected row, after a single
+ * batch typed-confirm modal — see ``modal-orphan-delete.md`` §Bulk mode).
+ *
+ * Reversible via :func:`undoLast` — the response carries the
+ * ``undo_id`` for the recovery path.
+ */
+export const deleteOrphan = (args: {
+  note_path: string;
+  typed_confirm: boolean;
+}): Promise<ToolResponse<DeleteOrphanData>> =>
+  callTool<DeleteOrphanData>("brain_delete_orphan", args);
+
 // ---------- registry ----------
 
 /**
@@ -1468,12 +1605,14 @@ export const ALL_TOOL_NAMES = [
   // "Resync now" button on the false claim that the backend handler
   // didn't ship in T5; it did — see
   // ``packages/brain_core/src/brain_core/tools/resync_folder.py``).
-  // ``brain_watch_folder`` is wired in T15 (watch-enable modal) and
-  // ``brain_list_orphans`` / ``brain_restore_orphan`` /
-  // ``brain_delete_orphan`` are wired in T13 (Orphans panel).
+  // T13 wires the orphan-management tools (list/restore/delete).
+  // ``brain_watch_folder`` is wired in T15 (watch-enable modal).
   "brain_list_watched_folders",
   "brain_unwatch_folder",
   "brain_resync_folder",
+  "brain_list_orphans",
+  "brain_restore_orphan",
+  "brain_delete_orphan",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];

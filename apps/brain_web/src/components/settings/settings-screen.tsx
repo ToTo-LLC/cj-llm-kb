@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Archive,
   BookOpen,
   Bot,
@@ -22,6 +23,7 @@ import { PanelBudget } from "./panel-budget";
 import { PanelDomains } from "./panel-domains";
 import { PanelGeneral } from "./panel-general";
 import { PanelIntegrations } from "./panel-integrations";
+import { PanelOrphans } from "./panel-orphans";
 import { PanelProviders } from "./panel-providers";
 import { PanelWatchedFolders } from "./panel-watched-folders";
 import { cn } from "@/lib/utils";
@@ -53,12 +55,17 @@ export type SettingsTabId =
   | "integrations"
   | "domains"
   | "watched-folders"
+  | "orphans"
   | "brain-md"
   | "backups";
 
 // Plan 22 T12 (per mockup hand-off note): "Watched folders" lives
 // between "Domains" and "BRAIN.md" — semantically grouped with the
-// content-source settings. The Orphans tab (T13) lands after this one.
+// content-source settings. Plan 22 T13 places "Orphans" immediately
+// after "Watched folders" per the orphan-management mockup hand-off
+// note ("Tab def: place adjacent to 'watched-folders'") — the user's
+// path is "I unwatched a folder → some notes are now orphaned → fix
+// them next".
 const TABS: readonly TabDef[] = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "providers", label: "LLM providers", icon: Plug },
@@ -67,6 +74,7 @@ const TABS: readonly TabDef[] = [
   { id: "integrations", label: "Integrations", icon: Shuffle },
   { id: "domains", label: "Domains", icon: Folder },
   { id: "watched-folders", label: "Watched folders", icon: Eye },
+  { id: "orphans", label: "Orphans", icon: AlertTriangle },
   { id: "brain-md", label: "BRAIN.md", icon: BookOpen },
   { id: "backups", label: "Backups", icon: Archive },
 ];
@@ -89,6 +97,8 @@ function renderPanel(tab: SettingsTabId): React.ReactElement {
       return <PanelDomains />;
     case "watched-folders":
       return <PanelWatchedFolders />;
+    case "orphans":
+      return <PanelOrphans />;
     case "brain-md":
       return <PanelBrainMd />;
     case "backups":

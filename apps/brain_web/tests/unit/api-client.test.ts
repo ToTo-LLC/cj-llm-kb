@@ -144,11 +144,12 @@ describe("apiFetch", () => {
     // brought it to 41 by adding ``brain_resync_folder`` (the original
     // T12 mistakenly disabled the "Resync now" button on the false
     // claim that the backend handler didn't ship in T5; it did — the
-    // fix-up wires it). The remaining 4 Plan 22 tools —
-    // ``brain_watch_folder``, ``brain_list_orphans``,
-    // ``brain_restore_orphan``, ``brain_delete_orphan`` — land with the
-    // modals + Orphans panel in T13 / T15.
-    expect(ALL_TOOL_NAMES.length).toBe(41);
+    // fix-up wires it). Plan 22 T13 brought it to 44 by adding the
+    // three orphan-management tools — ``brain_list_orphans``,
+    // ``brain_restore_orphan``, ``brain_delete_orphan`` — for the
+    // Settings → Orphans panel. The remaining Plan 22 tool —
+    // ``brain_watch_folder`` — lands with the watch-enable modal in T15.
+    expect(ALL_TOOL_NAMES.length).toBe(44);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "", data: { domains: ["research"] } }), {
