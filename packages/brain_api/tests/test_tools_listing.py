@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
-    """After Plan 16 Task 33 the registry has all 38 tools auto-registered.
+def test_lists_all_registered_tools(client: TestClient) -> None:
+    """After Plan 22 the registry has all 45 tools auto-registered.
 
     Plan 05 baseline: 18. Plan 07 Task 4 added 4
     (brain_recent_ingests, brain_create_domain, brain_rename_domain,
@@ -30,12 +30,20 @@ def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
     Issue #17 added ``brain_export_thread`` for the chat-sub-header
     export action → 36. Plan 16 Task 33 added two tools for the Settings
     Repair-config dialog (``brain_repair_config`` diagnostic +
-    ``brain_repair_config_apply`` write) → 38.
+    ``brain_repair_config_apply`` write) → 38. Plan 22 Task 5 added
+    seven watched-folder tools (``brain_watch_folder``,
+    ``brain_unwatch_folder``, ``brain_list_watched_folders``,
+    ``brain_list_orphans``, ``brain_resync_folder``,
+    ``brain_restore_orphan``, ``brain_delete_orphan``) → 45.
+
+    The constant on this assert updates per plan closure (Plan 22 T17
+    cleared the pre-existing 38-vs-actual drift; see
+    `tasks/lessons.md` Plan 22 section).
     """
     response = client.get("/api/tools")
     body = response.json()
     names = {t["name"] for t in body["tools"]}
-    assert len(body["tools"]) == 38
+    assert len(body["tools"]) == 45
     # Spot-check a few names across all groups.
     assert "brain_list_domains" in names
     assert "brain_ingest" in names
@@ -68,6 +76,14 @@ def test_lists_thirty_six_tools_after_issue_17(client: TestClient) -> None:
     # Plan 16 Task 33 — Settings Repair-config dialog.
     assert "brain_repair_config" in names
     assert "brain_repair_config_apply" in names
+    # Plan 22 Task 5 — watched-folders subsystem (7 tools).
+    assert "brain_watch_folder" in names
+    assert "brain_unwatch_folder" in names
+    assert "brain_list_watched_folders" in names
+    assert "brain_list_orphans" in names
+    assert "brain_resync_folder" in names
+    assert "brain_restore_orphan" in names
+    assert "brain_delete_orphan" in names
 
 
 def test_listing_shape_matches_schema(client: TestClient) -> None:
