@@ -281,8 +281,24 @@ def create_app(
         try:
             out_dir = resolve_out_dir()
             app.mount("/", SPAStaticFiles(directory=str(out_dir), html=True), name="ui")
-        except RuntimeError:
-            # API-only mode (CI, contract tests, headless). Intentional no-op.
-            pass
+        except RuntimeError as exc:
+            # Visual-QA / dev surface degraded to API-only mode. Production
+            # callers that want a bare API surface pass ``mount_static_ui=
+            # False`` (CI, contract tests, headless deploys); the conftest
+            # ``app`` fixture takes that path too. So this branch only fires
+            # when the caller asked for the SPA mount AND ``resolve_out_dir``
+            # raised — most often an unintentional resolver failure under
+            # uv editable install + iCloud .pth masking (auto-memory note
+            # ``feedback_brain_web_out_dir.md``). Emit a structured warning
+            # so the developer sees the cause without debugging a silent
+            # ``GET /`` 404.
+            _lifespan_logger.warning(
+                "spa_mount_skipped",
+                error=str(exc),
+                hint=(
+                    "set BRAIN_WEB_OUT_DIR=apps/brain_web/out, or run "
+                    "`pnpm --dir apps/brain_web build`"
+                ),
+            )
 
     return app
