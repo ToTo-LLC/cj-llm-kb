@@ -853,6 +853,191 @@ the plan-doc guidance.
   Watched folders + §10 safety rails` (spec edit; 1 file, +50 lines).
 - _This receipt commit follows in the next SHA._
 
+### T1 outcome — `Config.watched_folders` + `WatchedFolder` schema + new frontmatter fields
+
+**Status:** DONE.
+
+**Files touched:**
+
+1. `packages/brain_core/src/brain_core/config/schema.py` (+92 LOC) —
+   added `WatchedFolder` Pydantic model (6 fields per D7);
+   `Config.watched_folders: list[WatchedFolder]` field with cross-field
+   validator `_check_watched_folders_domains_in_domains` (mirrors the
+   `domain_overrides` / `autonomous` orphan-guard validators);
+   `_PERSISTED_FIELDS` whitelist entry so the field round-trips through
+   `config.json`.
+2. `packages/brain_core/src/brain_core/vault/frontmatter.py` (+74 LOC) —
+   added `Frontmatter` Pydantic class documenting the canonical
+   frontmatter schema with all 4 new optional fields (`source_path`,
+   `orphaned`, `orphaned_at`, `watched_folder_id`) plus the
+   pre-Plan-22 canonical fields. Uses `extra="allow"` so the typed
+   class round-trips legacy notes' user-added keys. `from_dict`
+   constructor for T2/T3/T4 consumer call sites. The dict-based
+   `parse_frontmatter` / `serialize_with_frontmatter` functions are
+   unchanged — this is non-breaking for every existing call site.
+3. `packages/brain_core/tests/config/test_watched_folder_schema.py`
+   (NEW, +313 LOC, 23 tests) — field-set pin, per-field type pins,
+   defaults, validation (absolute path, slug rules, extra-forbid,
+   policy literal), JSON round-trip, cross-field domain-membership
+   validator at construction + at domain-removal time, persisted-dict
+   inclusion.
+4. `packages/brain_core/tests/vault/test_frontmatter_orphan_fields.py`
+   (NEW, +198 LOC, 13 tests) — field-set pin (all canonical + 4 new),
+   default-value pins, legacy-note backward compat (no new fields →
+   defaults), watched-folder note + orphaned note happy paths, ISO
+   date string coercion, dict-level parse_frontmatter /
+   serialize_with_frontmatter round-trip preserves the new fields.
+5. `packages/brain_core/tests/config/test_schema_overrides.py` (+5 LOC
+   edit) — updated the existing `test_persisted_dict_returns_exactly_the_d4_keys`
+   pin to include `"watched_folders"`. This is the only existing test
+   that explicitly enumerated the persisted-fields set.
+
+**Canonical frontmatter module location (verified at exec time):**
+`packages/brain_core/src/brain_core/vault/frontmatter.py`. The module
+historically held only dict-based `parse_frontmatter` /
+`serialize_with_frontmatter` — no Pydantic class existed. T1 added
+`Frontmatter` as a NEW typed class documenting the schema without
+wiring it into the parse/serialize path (which stays dict-based for
+maximum compat with hand-edited Obsidian notes). Downstream T2 / T3 /
+T4 consumers will call `Frontmatter.from_dict(parsed)` on demand.
+
+**Cross-field validator pattern used:** `model_validator(mode="after")`
+raise on `Config` (matches the existing `_check_domain_overrides_keys_in_domains`,
+`_check_autonomy_keys_in_domains`, and `_check_privacy_railed_subset_of_domains`
+precedent). Per the CLAUDE.md / Plan 16 T36 lesson, raising inside a
+`model_validator(mode="after")` under `validate_assignment=True` leaves
+the field mutated to the bad value — the model validator is the
+construction-time guard; the eventual `brain_watch_folder` /
+`brain_unwatch_folder` tools (T5) will apply the pre-check pattern
+from `tools/config_set.py:_check_active_domain_membership` at the
+setter seam. T1 only ships the schema layer, which mirrors the
+existing config-sub-model precedent for orphan-key guards.
+
+**Per-field design notes:**
+
+- `WatchedFolder.path: str` — stored as string (not `pathlib.Path`) so
+  the value is an opaque identifier in the on-disk config and in
+  `Frontmatter.watched_folder_id`. The field validator
+  `_check_path_absolute` runs `Path(v).is_absolute()` — on POSIX,
+  Windows-only paths like `C:\\watch` will fail. T1 pins absolute-POSIX
+  acceptance + relative rejection + empty rejection. Cross-platform
+  CI will pin the Windows absolute path acceptance.
+- `WatchedFolder.domain: str` — uses `_validate_domain_slug` (Plan 10
+  D2 rules: lowercase ASCII, regex `[a-z][a-z0-9_-]{0,30}`, no
+  separators, no trailing `_`/`-`). The cross-field "must be in
+  `Config.domains`" check lives on `Config` per Pydantic v2 limitation
+  on sub-model access to parent state.
+- `policy: Literal["overwrite"]` — locked per D1; the literal reserves
+  v2 room for `"keep_vault"` / `"prompt"` / `"merge"` without a schema
+  migration. Construction with `policy="keep_vault"` raises a
+  `ValidationError` — pinned in `test_watched_folder_policy_locked_to_overwrite`.
+- `last_sync: datetime | None = None` — `None` until first sync per
+  spec; T6's watcher updates it on every successful full sync.
+- `Frontmatter.orphaned: bool = False` — default-false explicit (not
+  via union with None) so an absent key in YAML coerces to the
+  documented "not orphaned" state without requiring a `Optional` check
+  at every consumer call site.
+- `Frontmatter.orphaned_at: date | None = None` — null while
+  `orphaned` is `False`; T3 sets it to `today` when flipping
+  `orphaned` true.
+
+**Verification:**
+
+```
+unset VIRTUAL_ENV && PYTHONPATH=.venv/lib/python3.12/site-packages:packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  /opt/homebrew/bin/python3.12 -m pytest \
+  packages/brain_core/tests/config/test_watched_folder_schema.py \
+  packages/brain_core/tests/vault/test_frontmatter_orphan_fields.py -v
+```
+- New-tests run: 36 passed (23 watched_folder + 13 frontmatter), 0.17s.
+
+```
+unset VIRTUAL_ENV && PYTHONPATH=...:packages/.../src \
+  /opt/homebrew/bin/python3.12 -m pytest packages/brain_core/tests/ -q
+```
+- Full brain_core suite: **1047 passed, 5 skipped** (pre-T1 baseline:
+  1011 passed, 5 skipped — delta is +36 pin tests, 0 regressions).
+
+**Verification recipe note:** the plan-doc-suggested `uv run` recipe
+failed with the iCloud-eviction zero-byte-file shape (Plan 21 closure
+auto-memory failure mode A/B). After `rm -rf .venv && uv sync
+--frozen`, 88 files still zero-byte. The brew Python + explicit
+PYTHONPATH bypass (Plan 11 T4 escape hatch, now documented as primary
+in the Plan 21 closure auto-memory) is what worked. Captured here so
+future T2+ implementers don't re-diagnose.
+
+**Pre-existing failures NOT caused by T1:** `brain_api` /
+`brain_cli` collection errors on `test_static_ui_find_repo_root.py`
+and `test_config_command.py` — Plan 21 auto-memory failure mode A
+(install-as-copy stale site-packages; brain_api / brain_mcp /
+brain_cli pinned `editable = false`). Verified by `git stash` → same
+errors → `git stash pop`. Out of T1 scope; will need addressing if
+Plan 22 T5+ exercises tool surfaces via brain_api integration tests.
+
+**Per-task review:** combined.
+- (a) `WatchedFolder.domain` validator wired against `Config.domains`
+  via `_check_watched_folders_domains_in_domains` `model_validator(mode="after")`
+  on `Config` — matches the existing `_check_domain_overrides_keys_in_domains`
+  precedent (NOT a pre-check at the schema layer; pre-check is
+  reserved for the tools layer per Plan 16 T36 lesson — single-field
+  setattr roll-back semantics differ). ✓
+- (b) `policy: Literal["overwrite"]` reserves v2 room. Pinned in
+  `test_watched_folder_policy_locked_to_overwrite`. ✓
+- (c) All 4 new frontmatter fields are OPTIONAL with documented
+  defaults. Pinned in `test_frontmatter_loads_legacy_note_without_new_fields`
+  (legacy note loads → all 4 default to documented values). ✓
+- (d) Pin tests cover field-set + per-field types + defaults + cross-
+  field validator + JSON round-trip + dict-level parse/serialize
+  round-trip. 36 tests total. ✓
+- (e) Full brain_core suite green — 1047 / 5 / 0 (was 1011 / 5 / 0). ✓
+
+**Self-review findings:**
+
+- **Completeness:** All 6 `WatchedFolder` fields per D7 / T0 spec
+  present. All 4 new `Frontmatter` fields per spec §4 present. Cross-
+  field validator + persisted-dict whitelist + legacy backward compat
+  all covered. No spec fields missing.
+- **Quality:** Followed Plan 19 T2 / Plan 20 T1 / Plan 21 T1
+  two-tier pin pattern (field-set + per-field). Validator pattern
+  matches existing precedent in the same file. Module docstring on
+  `frontmatter.py` updated to explain the dict-vs-typed design
+  decision (Frontmatter is documentation, not the parse path) so
+  future readers don't break the contract trying to "fix" it.
+- **Discipline:** Domain-engineer scope held — only schema layer
+  changed; no T2/T3/T4 wiring touched. No new dependencies (D11). No
+  push (D12). No imports of the Anthropic SDK / web framework / MCP
+  SDK.
+- **Testing:** 36 new pin tests, all green. No flakes. Brain_core
+  baseline preserved.
+
+**Concerns / flags:**
+
+- The frontmatter typed-vs-dict design decision. Plan-doc says "add
+  the 4 new optional fields to the canonical frontmatter type used by
+  `VaultWriter`" — no such typed schema existed prior to T1, and
+  `VaultWriter` writes through dict-based `serialize_with_frontmatter`.
+  Decision: added `Frontmatter` as a NEW typed class that documents
+  the spec contract; left `parse_frontmatter` / `serialize_with_frontmatter`
+  unchanged. T2 / T3 / T4 consumers will adopt the typed class on
+  demand (`Frontmatter.from_dict(parsed)`). This is the smallest-
+  blast-radius interpretation; flagging in case reviewer wanted the
+  full pivot to typed parse/serialize (which would have rewritten
+  every test fixture and every ad-hoc dict construction in the
+  ingest pipeline).
+- The cross-platform Windows-path acceptance is NOT pinned by a
+  RED-on-Windows test in T1 (only POSIX runners exercised CI here).
+  Filed for the cross-platform CI sweep at Plan 22 closure (T10
+  verification).
+- iCloud-eviction failure mode (88 zero-byte files post `rm -rf .venv
+  && uv sync --frozen`) made the plan-doc-suggested `uv run` recipe
+  fail. Documented in the verification block above. Not a T1 bug; the
+  brew-Python escape hatch is now the standard recipe per the Plan 21
+  auto-memory update.
+
+**Commits:**
+- `e701462` — `feat(plan-22): T1 — WatchedFolder schema + Config.watched_folders + 4 new frontmatter fields + 2 pin test files`
+- _This receipt commit follows in the next SHA._
+
 
 
 ## Plan 23 candidate scope
