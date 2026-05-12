@@ -1373,7 +1373,193 @@ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:p
   (D2 non-destructive orphan mark; idempotent)`
 - `3920c1b` — `docs(plan-22): T3 — outcome receipts for orphan-mark path`
 
+### T4 outcome — `scope_guard(..., *, include_orphans=False)` extension
 
+**Status:** DONE.
+
+**Files touched:**
+
+1. **`packages/brain_core/src/brain_core/vault/paths.py`** (+108 LOC,
+   13 → 165 LOC total).
+
+   * Added `OrphanedNoteError(ScopeError)` — subclass so existing
+     `except ScopeError` handlers (e.g. `brain_search` re-verification
+     drop, the per-tool `ScopeError` propagation contract) catch orphan
+     blocks unchanged. Callers wanting to distinguish (e.g. UI
+     surfaces rendering "this note is orphaned — restore?") catch
+     `OrphanedNoteError` specifically.
+   * Added `_is_note_orphaned(resolved: Path) -> bool` with a
+     process-local `(resolved_path, mtime_ns) -> bool` memo. Cache
+     bounded by `_MAX_CACHE_ENTRIES=1000` with FIFO eviction;
+     `OrderedDict.move_to_end` on hit converts to LRU. Thread-safe
+     (`Lock` around all dict mutations); disk I/O happens OUTSIDE the
+     lock so concurrent readers don't serialize on filesystem reads.
+     `os.replace` (used by `VaultWriter._atomic_write`) bumps mtime,
+     so concurrent writes invalidate the cache organically — no
+     wiring scope_guard into VaultWriter mutation events required.
+   * Added `_orphan_cache_clear()` test-only hook (called by an
+     autouse fixture in the new test module so memoized state from a
+     sibling test cannot leak across the boundary).
+   * Extended `scope_guard(..., *, include_orphans: bool = False)`.
+     When `False` and the resolved path is an existing `.md` file
+     with frontmatter `orphaned: true` → raises `OrphanedNoteError`.
+     When `True`, the orphan check is skipped ENTIRELY — no
+     frontmatter read, no stat call. This is the perf path for
+     `brain_list_orphans` (T5) which iterates over many orphans per
+     call.
+
+2. **`packages/brain_core/src/brain_core/vault/writer.py`** (+24 LOC).
+   `VaultWriter.apply` and `VaultWriter.rename_file` gained a kw-only
+   `include_orphans: bool = False` that threads through to every
+   internal `scope_guard` call. Default `False` keeps every existing
+   caller (LLM patches via `brain_apply_patch`, ingest stage 6, bulk
+   import) at the same strictness. T5's `brain_restore_orphan` /
+   `brain_delete_orphan` will pass `include_orphans=True` so they can
+   mutate an already-orphan note.
+
+3. **`packages/brain_core/src/brain_core/ingest/pipeline.py`**
+   (+8 LOC, 3 seams).
+
+   * `IngestPipeline.update_source` Stage-A `scope_guard` now passes
+     `include_orphans=True` — re-ingest legitimately operates on
+     orphan notes (the path that clears the orphan mark on
+     successful overwrite). Without this, the T2 test
+     `test_update_source_clears_orphan_mark_on_successful_overwrite`
+     would regress to an `OrphanedNoteError` at Stage A.
+   * `IngestPipeline.mark_orphaned` Stage-A `scope_guard` now passes
+     `include_orphans=True` — idempotent re-mark of an
+     already-orphan note must reach Stage D's short-circuit. Without
+     this, the T3 test
+     `test_mark_orphaned_is_idempotent_when_already_orphaned` would
+     regress at Stage A.
+   * `IngestPipeline._apply_replacement` (the shared writer-helper
+     used by both update_source and mark_orphaned) now passes
+     `include_orphans=True` to `writer.apply`. The writer's
+     scope_guard would otherwise re-block the Edit on the orphan
+     path even if Stage A was permitted.
+
+4. **`packages/brain_core/tests/vault/test_scope_guard_orphan_filter.py`**
+   (NEW, 7 fixtures, 215 LOC):
+
+   * `test_default_filters_orphaned_note` — D2 default-filter pin.
+   * `test_include_orphans_true_returns_orphan_path` — opt-in path
+     pin; orphan returned unchanged.
+   * `test_mixed_vault_filters_only_orphans` — neighbor non-orphan
+     notes pass; default filter does not over-reach.
+   * `test_cache_invalidates_on_mtime_change` — bumping mtime (via
+     `os.utime` with a 2s ns shift to defeat FS-clock granularity)
+     refreshes the cache so the new orphan flag is reflected. This is
+     the production cache-invalidation contract: `os.replace` in
+     `VaultWriter._atomic_write` bumps mtime; scope_guard's cache
+     drops the stale entry organically.
+   * `test_non_note_paths_skip_orphan_check` — directories,
+     `index.md` (frontmatter-less), and missing files (writer
+     `new_files` pre-validation) all pass without an orphan-check.
+   * `test_include_orphans_true_skips_frontmatter_read` — perf pin
+     via monkeypatched `_is_note_orphaned` counter. Confirms zero
+     frontmatter reads on the explicit-include path.
+   * `test_orphaned_note_error_is_scope_error` — inheritance pin so
+     `except ScopeError` blocks catch orphans unchanged.
+
+**Caching strategy:** Option B (mtime-keyed memo). Rationale:
+
+- **A (naive per-call read):** simple but doubles I/O for every
+  `scope_guard` on a note. Search returning 5 hits → 5 frontmatter
+  reads. Compounds across the LLM tool surface.
+- **B (mtime-keyed memo):** chosen. `os.replace` bumps mtime so the
+  cache invalidates organically. Stateless externally; no wiring
+  scope_guard into writer mutation events. Bounded LRU prevents
+  unbounded memory growth on a long-running process scanning a
+  large vault.
+- **C (drop cache on every VaultWriter mutation):** simpler
+  invalidation logic but requires wiring scope_guard's cache into
+  VaultWriter (or a global event bus). More coupling for a marginal
+  correctness gain — B already handles this via the filesystem's
+  mtime contract.
+
+The hot-path `include_orphans=True` skip-entirely behavior (option
+D from the brief's design considerations) is folded INTO B: when
+`include_orphans=True`, scope_guard bypasses `_is_note_orphaned`
+unconditionally so even a 1000-note orphan list incurs zero
+frontmatter reads at the scope_guard seam (T5's `brain_list_orphans`
+will read frontmatter itself to surface the per-orphan metadata —
+but that's at the tool-handler layer, not at scope_guard).
+
+**Caller-grep results:**
+
+```
+grep -rn "scope_guard(" packages/ apps/
+```
+
+Sites found (15 total):
+
+* `packages/brain_core/src/brain_core/vault/paths.py` — definition.
+* `packages/brain_core/src/brain_core/vault/writer.py` — 4 sites
+  (apply: 2; rename_file: 2). MIGRATED: writer.apply / rename_file
+  threads `include_orphans` through. Default `False` — no behavioral
+  change for existing callers.
+* `packages/brain_core/src/brain_core/tools/get_index.py:29` —
+  index.md path. Default-filter is correct (index.md has no
+  `orphaned` field; `_is_note_orphaned` returns False). NO MIGRATION.
+* `packages/brain_core/src/brain_core/tools/search.py:41` —
+  re-verification on search hits. Default-filter is correct (search
+  must NOT surface orphans per D2). NO MIGRATION.
+* `packages/brain_core/src/brain_core/tools/base.py:83` — generic
+  `scope_guard_path` helper. Default-filter is correct (every caller
+  is a tool reading or proposing into a non-orphan note). NO
+  MIGRATION.
+* `packages/brain_core/src/brain_core/chat/tools/read_note.py:32`,
+  `propose_note.py:42`, `search_vault.py:50`, `edit_open_doc.py:40`,
+  `list_index.py:24` — chat tools. Default-filter is correct (chat
+  must NOT discover orphans). NO MIGRATION.
+* `packages/brain_core/src/brain_core/ingest/pipeline.py` — 2 sites
+  (update_source Stage A; mark_orphaned Stage A). MIGRATED to
+  `include_orphans=True` — both are orphan-aware operations.
+* `packages/brain_mcp/src/brain_mcp/resources/domain_index.py:48` —
+  MCP resource handler returning a domain's index payload.
+  Default-filter is correct (no orphan opt-in needed). NO MIGRATION.
+* Test files (test_paths.py, test_paths_dynamic.py): 7 sites —
+  positional / no-kwarg signatures all keyword-arg-default-compat.
+  NO MIGRATION.
+
+Sites NOT migrated but flagged for T5 caller-side opt-in:
+`brain_list_orphans`, `brain_restore_orphan`, `brain_delete_orphan`
+(do not exist yet — created in T5). Each will pass
+`include_orphans=True` to its scope_guard / writer.apply call. Plan
+22 T5 prompt will reference this section as the migration anchor.
+
+**Test counts:**
+
+```
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/vault/test_scope_guard_orphan_filter.py -v
+# 7 passed in 0.90s
+
+# full brain_core suite
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# 1070 passed, 5 skipped (baseline 1063 + 7 new T4 = 1070; no regressions)
+
+# brain_mcp + brain_api cross-package
+unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_mcp pytest packages/brain_mcp/tests/ -q
+# 137 passed, 3 skipped
+unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_api pytest packages/brain_api/tests/ -q
+# 211 passed, 4 skipped
+
+# mypy
+unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_core mypy \
+  packages/brain_core/src/brain_core/vault/paths.py \
+  packages/brain_core/src/brain_core/vault/writer.py \
+  packages/brain_core/src/brain_core/ingest/pipeline.py
+# Success: no issues found in 3 source files
+```
+
+**Commits:**
+
+- `e8d2356` — `feat(plan-22): T4 — scope_guard include_orphans kwarg
+  (D2 default-filter)`
+- _(docs commit SHA backfilled in next docs commit per Plan-19 T6.2 cadence)_
 
 ## Plan 23 candidate scope
 
