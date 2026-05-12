@@ -1896,6 +1896,129 @@ $ unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_core pytest \
   (symmetric watchdog observer; mirrors ConfigWatcher shape)`
 - _(docs commit SHA backfilled by the docs commit itself)_
 
+### T7 outcome — `WatchedFolderWatcher` lifespan integration in brain_api
+
+**What landed:**
+
+Wired `WatchedFolderWatcher` into `brain_api._lifespan` startup +
+shutdown, with a hot-reload bridge through the existing
+`ConfigWatcher.on_change` callback. Single observer per process per
+D7 / D11 (no new deps). Watcher is instantiated unconditionally on
+boot — even when `Config.watched_folders` is empty — so the
+hot-reload bridge always has a watcher to restart when the user
+adds their first folder via Settings.
+
+**Files modified:**
+
+- `packages/brain_api/src/brain_api/app.py` — +131 LOC. Added
+  imports for `Config`, `WatchedFolder`, `WatchedFolderWatcher`.
+  New module-private helpers:
+  - `_watched_folders_changed(old, new)` — `model_dump`-based diff
+    predicate; gates restart-on-config-change.
+  - `_build_watched_folder_watcher(config, app_state)` — reuses
+    `brain_core.tools.watch_folder._build_pipeline` (late import)
+    so the watcher's IngestPipeline matches the recipe the three
+    watched-folder tools use (T2 / T4 / T5).
+  - `_restart_watched_folder_watcher(app_state, new_config)` —
+    coarse v1 stop-then-start; swallows errors so HTTP stays up.
+  Lifespan startup section: instantiates + starts the watcher AFTER
+  `ConfigWatcher.start()`, stashes on `app.state.folder_watcher`.
+  Lifespan shutdown: folder watcher stops FIRST (so a trailing
+  ConfigWatcher callback can't restart a watcher we're tearing
+  down), then ConfigWatcher stops. `_on_config_change` extended
+  with the diff-then-restart bridge at the bottom of its try-block.
+
+**Files created:**
+
+- `packages/brain_api/tests/test_app_watcher_lifespan.py` — 8 tests:
+  1. Empty `watched_folders` → watcher still instantiated + started,
+     `observers=[]`, `start_called=1`.
+  2. Non-empty list → constructor receives ALL 3 folders (enabled +
+     disabled), `allowed_domains=("research",)`.
+  3. Shutdown ordering — folder watcher `stop` precedes ConfigWatcher
+     `stop`; verified via a shared `call_log` ordering pin.
+  4. Disabled-only forwarding — `enabled=False` rows survive the
+     lifespan-to-watcher seam (contract pin so future filtering at
+     the wrong layer fails loudly).
+  5a. Hot-reload restart — patched `resolve_config` returns a Config
+      with a new folder; existing watcher `stop_called=1`, fresh
+      watcher constructed with the new folder list,
+      `app.state.folder_watcher` swapped to the new instance.
+  5b. Negative case — config change that does NOT touch
+      `watched_folders` (e.g. `log_llm_payloads=True`) does NOT
+      restart the watcher.
+  6. Monkeypatch-binding regression pin (Plan 17 T17 lesson) —
+     patches ONLY `brain_api.app.WatchedFolderWatcher` and asserts
+     the patch fired (proves the lifespan reads the import-bound
+     name, not a re-resolution through `brain_core.watch`).
+  7. `_watched_folders_changed` unit pin — empty == empty,
+     length-diff, enabled-flag-diff, content-identity.
+
+**Test counts:**
+
+- Pre-T7 baseline: `210 passed, 1 failed (pre-existing
+  test_tools_listing.py count=38 vs 45 — Plan 22 T1-T5 added 7
+  tools without updating the count test), 4 skipped`.
+- Post-T7: `218 passed, 1 failed (same pre-existing), 4 skipped`.
+- Delta: +8 tests, no regressions.
+- brain_core watcher tests: `35 passed` (T6 + WatchedFolder schema
+  tests unaffected).
+
+**Design notes preserved (for T8 / closure):**
+
+1. **`mock.patch` does NOT accept `raising=False`** — that's a
+   `monkeypatch.setattr` / `patch.object` kwarg. Tests 1, 2, 5
+   belt-and-suspenders BOTH `brain_api.app.WatchedFolderWatcher`
+   and `brain_core.watch.WatchedFolderWatcher` with plain `patch()`.
+   T8 should mirror this pattern.
+2. **`_build_pipeline` triple-duplication** — `brain_core.tools.
+   bulk_import`, `watch_folder`, `resync_folder` each have a
+   private `_build_pipeline(ctx)`. T7 reuses the `watch_folder`
+   variant (private import). Past the "consistency, don't repeat"
+   threshold but extracting it is bigger than T7 — flag for plan
+   closure-T cleanup OR Plan 23 candidate ("extract shared
+   `IngestPipeline` builder").
+3. **`test_tools_listing.py::test_lists_thirty_six_tools_after_issue_17`
+   pre-existing failure** — expects 38 tools, repo has 45 after
+   T1-T5. Plan 22 closure should bump the constant + rename the
+   test method or move it to a snapshot pattern.
+4. **Coarse stop-then-start hot-reload** — every `watched_folders`
+   change does a full restart, even adding one folder to a list of
+   ten. Adequate for v1 (folder counts are small, observer-thread
+   churn negligible). Incremental `schedule()` / `unschedule()` is
+   a Plan 23 candidate per §T7 forward notes.
+5. **`folder_watcher` shutdown idempotency** — the lifespan teardown
+   sets `app.state.folder_watcher = None` after stop. A trailing
+   `_on_config_change` callback (the ConfigWatcher hasn't stopped
+   yet) hits the `existing is None` branch in
+   `_restart_watched_folder_watcher` and skips the stop step. This
+   is the v1 race-mitigation; a stricter shutdown gate (e.g. a
+   `_shutting_down` flag) is out of scope.
+
+**Concerns / forward notes for T8:**
+
+- T8 (`brain_mcp._cached_ctx`) should mirror this shape: late-import
+  `_build_pipeline`, single-observer per process, stash on
+  `_cached_ctx`'s container for shutdown. The brain_mcp side does
+  NOT have an `app.state` so a module-private global or a wrapper
+  object will need to hold the reference.
+- The Plan 17 T17 monkeypatch-binding lesson applies identically:
+  patch `brain_mcp.__main__.WatchedFolderWatcher` (or wherever T8
+  imports it), not just `brain_core.watch.WatchedFolderWatcher`.
+- Both watchers run in their own processes per the spec — there is
+  no IPC. brain_api and brain_mcp BOTH watch the same folders
+  independently; a single event fires both watchers (each writes
+  to the same vault via VaultWriter's filelock). The v1 worst case
+  is a doubled ingest log entry until a future plan adds an
+  inter-process coordination marker. Flag for Plan 22 closure
+  review (likely deferred to Plan 23).
+
+**Commits:**
+
+- `3374e44` — `feat(plan-22): T7 — WatchedFolderWatcher integration
+  in brain_api lifespan (D7 symmetric watcher)`
+- _(docs commit SHA backfilled by the docs commit itself)_
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
