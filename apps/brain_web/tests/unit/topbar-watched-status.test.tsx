@@ -104,6 +104,18 @@ function makeEntry(
 beforeEach(() => {
   listWatchedFoldersMock.mockReset();
   useWatchedFoldersStore.getState()._resetForTesting();
+  // Default mock for the Plan 23 T2.b mount-time auto-refresh. Tests
+  // that pre-seed ``loaded: true`` via setState skip the auto-fetch
+  // entirely; tests that don't (e.g., the empty-state pin where the
+  // store starts at its zero-value initial state) need a resolved
+  // response so the indicator's first-mount ``refresh()`` doesn't
+  // crash on ``undefined.then``. Override per-case for shape-specific
+  // assertions.
+  listWatchedFoldersMock.mockResolvedValue({
+    text: "",
+    data: { folders: [] },
+    isError: false,
+  });
 });
 
 // =====================================================================
@@ -326,8 +338,13 @@ describe("WatchedFoldersTopbarIndicator — render states", () => {
     // (refresh() called), not navigation, so the noise is unhelpful.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
+      // Plan 23 T2.b — the mount-time auto-refresh fires once because
+      // ``loaded: false`` in the seeded setState. Capture the post-mount
+      // count then assert the click adds exactly one more call (the
+      // error-state click handler's explicit ``refresh()`` invocation).
+      const postMountCalls = refreshSpy.mock.calls.length;
       await userEvent.click(trigger);
-      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(refreshSpy.mock.calls.length).toBe(postMountCalls + 1);
     } finally {
       errSpy.mockRestore();
     }
@@ -402,6 +419,77 @@ describe("WatchedFoldersTopbarIndicator — render states", () => {
         screen.getByTestId("watched-folders-indicator"),
       ).toBeInTheDocument();
     });
+  });
+});
+
+// =====================================================================
+// Plan 23 T2.b — first-mount auto-refresh
+// =====================================================================
+
+describe("WatchedFoldersTopbarIndicator — Plan 23 T2.b mount-fetch", () => {
+  test("fires refresh() on mount when the store is uninitialized (loaded === false)", async () => {
+    // Pin the behavior directly: replace the store's ``refresh`` action
+    // with a spy AND seed ``loaded: false``, then assert the component
+    // calls the spy on mount. Spying on the store action (rather than
+    // counting ``listWatchedFoldersMock`` invocations) decouples the
+    // assertion from the store's internal in-flight Promise machinery
+    // and the prior-test microtask race that would otherwise let a
+    // leaked ``finally`` re-set ``loaded: true`` between beforeEach and
+    // our render. Matches the error-state test's spy-on-refresh
+    // pattern.
+    const refreshSpy = vi.fn(() => Promise.resolve());
+    useWatchedFoldersStore.setState({
+      folders: [],
+      loaded: false,
+      error: null,
+      refresh: refreshSpy,
+    });
+
+    render(<WatchedFoldersTopbarIndicator />);
+
+    // The mount-time useEffect should fire ``refresh()`` exactly once
+    // because ``!loaded`` is true at render time.
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("does NOT re-fire refresh() when the store is already loaded (loaded === true)", () => {
+    // Pre-seed the store as if Settings panel already loaded it. The
+    // ``!loaded`` gate should short-circuit the mount-time refresh so
+    // we don't waste a request on every route change. Same spy pattern
+    // as the loaded-false test above.
+    const refreshSpy = vi.fn(() => Promise.resolve());
+    useWatchedFoldersStore.setState({
+      folders: [makeEntry({ path: "/a", orphan_count: 0 })],
+      loaded: true,
+      error: null,
+      refresh: refreshSpy,
+    });
+
+    render(<WatchedFoldersTopbarIndicator />);
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  test("does NOT re-fire when loaded === true even if folders is empty", () => {
+    // Pin the "vault legitimately has zero watched folders" case: once
+    // a successful fetch resolves with ``folders: []``, ``loaded: true``,
+    // remounting the indicator must NOT trigger a re-fetch. Gating on
+    // ``!loaded`` (not on ``folders.length === 0``) is what protects
+    // this case from looping. Regression-pin if a future refactor
+    // weakens the gate.
+    const refreshSpy = vi.fn(() => Promise.resolve());
+    useWatchedFoldersStore.setState({
+      folders: [],
+      loaded: true,
+      error: null,
+      refresh: refreshSpy,
+    });
+
+    render(<WatchedFoldersTopbarIndicator />);
+
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -96,7 +96,7 @@ export function WatchEnableModal({
   onClose,
 }: WatchEnableModalProps): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
-  const { domains } = useDomains();
+  const { domains, activeDomain } = useDomains();
   const isPrefilled = Boolean(prefilledFolder);
 
   // Form state. ``folder`` may be the empty string (Settings entry,
@@ -108,8 +108,22 @@ export function WatchEnableModal({
   const [folder, setFolder] = React.useState<string>(prefilledFolder ?? "");
   const [domain, setDomain] = React.useState<string>(() => {
     if (prefilledDomain) return prefilledDomain;
-    // Default to first available domain — caller can pass an explicit
-    // value via ``prefilledDomain`` to override.
+    // Plan 23 T2.a — default to ``Config.active_domain`` so the modal
+    // pre-fills the dropdown to match the scope chip in the topbar.
+    // Pre-T2.a this defaulted to ``domains[0]`` which is typically
+    // ``"personal"`` (alphabetical-ish ordering), so a user with
+    // ``active_domain="research"`` would land on a personal-domain
+    // selection unless they manually changed it — a footgun for the
+    // privacy-railed personal scope.
+    //
+    // Defensive fallbacks: ``activeDomain`` is empty string until the
+    // domains store first ``refresh()`` resolves (and may be empty
+    // forever against a backend that pre-dates Plan 11 T6). Tests may
+    // pre-seed ``domains`` without ``activeDomain``, so the ``domains[0]``
+    // fallback preserves existing happy-path behavior. The final
+    // ``"research"`` literal is the last-resort default that matches
+    // the Plan 22 setup wizard's default domain.
+    if (activeDomain) return activeDomain;
     return domains[0]?.slug ?? "research";
   });
   const [includeSubdirs, setIncludeSubdirs] = React.useState<boolean>(true);
@@ -129,12 +143,14 @@ export function WatchEnableModal({
   const [confirming, setConfirming] = React.useState<boolean>(false);
 
   // Update domain default when domains list resolves AFTER first mount
-  // (the store's auto-refresh may land after the modal opens).
+  // (the store's auto-refresh may land after the modal opens). Plan 23
+  // T2.a: prefer ``activeDomain`` over ``domains[0]`` so the post-
+  // resolve hydration matches the synchronous initial-value path.
   React.useEffect(() => {
     if (!prefilledDomain && domains.length > 0 && !domain) {
-      setDomain(domains[0]!.slug);
+      setDomain(activeDomain || domains[0]!.slug);
     }
-  }, [domain, domains, prefilledDomain]);
+  }, [activeDomain, domain, domains, prefilledDomain]);
 
   // Cost-estimate fetch. Fires on mount when ``folder`` is non-empty
   // AND on every input change (folder / domain / include_subdirs).

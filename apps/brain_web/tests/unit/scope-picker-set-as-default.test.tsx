@@ -106,11 +106,24 @@ vi.mock("@/lib/bootstrap/bootstrap-context", () => ({
   }),
 }));
 
-const { setActiveDomainMock } = vi.hoisted(() => ({
+const { setActiveDomainMock, listWatchedFoldersMock } = vi.hoisted(() => ({
   setActiveDomainMock: vi.fn(),
+  // Plan 23 T2.b — the topbar now mounts a watched-folders indicator
+  // that auto-fetches on first mount if ``useWatchedFoldersStore.loaded``
+  // is false. This test file renders the full ``<Topbar />``, so the
+  // indicator's effect fires here too. Resolve with an empty folder
+  // list so ``listWatchedFolders().then(...)`` doesn't crash and the
+  // store flips ``loaded: true`` quietly. Per-test overrides not needed
+  // — the scope-picker tests don't care about watched-folder shape.
+  listWatchedFoldersMock: vi.fn(async () => ({
+    text: "",
+    data: { folders: [] },
+    isError: false,
+  })),
 }));
 vi.mock("@/lib/api/tools", () => ({
   setActiveDomain: setActiveDomainMock,
+  listWatchedFolders: listWatchedFoldersMock,
 }));
 
 const { pushToastStub } = vi.hoisted(() => ({ pushToastStub: vi.fn() }));

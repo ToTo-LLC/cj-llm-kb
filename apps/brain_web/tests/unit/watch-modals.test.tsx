@@ -74,6 +74,7 @@ import { StepApply } from "@/components/bulk/step-apply";
 import { useBulkStore } from "@/lib/state/bulk-store";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useDomainsStore } from "@/lib/state/domains-store";
+import { _setDomainsCacheForTesting } from "@/lib/hooks/use-domains";
 import { useSystemStore } from "@/lib/state/system-store";
 import { useWatchedFoldersStore } from "@/lib/state/watched-folders-store";
 import type {
@@ -380,6 +381,134 @@ describe("WatchEnableModal — Plan 22 T15 §1", () => {
       (c) => (c[0] as { dry_run?: boolean })?.dry_run === false,
     );
     expect(realRunCalls).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------
+  // Plan 23 T2.a — activeDomain default
+  // -------------------------------------------------------------------
+
+  test("Plan 23 T2.a — defaults the domain dropdown to Config.active_domain (not domains[0])", async () => {
+    // Seed the domains store as if the backend has resolved
+    // ``Config.active_domain = "work"`` AND the domain list is
+    // ``["research", "work", "personal"]``. Pre-T2.a the modal would
+    // default to ``domains[0]`` = ``"research"``; T2.a fixes it to
+    // honor the user's active scope. Use ``work`` (not the alphabetical
+    // first entry) so the assertion proves the new behavior — if the
+    // implementation regresses to ``domains[0]``, the trigger would
+    // read ``research`` and the test fails RED.
+    _setDomainsCacheForTesting(
+      [
+        {
+          slug: "research",
+          label: "Research",
+          accent: "var(--dom-research)",
+          configured: true,
+          on_disk: true,
+        },
+        {
+          slug: "work",
+          label: "Work",
+          accent: "var(--dom-work)",
+          configured: true,
+          on_disk: true,
+        },
+        {
+          slug: "personal",
+          label: "Personal",
+          accent: "var(--dom-personal)",
+          configured: true,
+          on_disk: true,
+        },
+      ],
+      "work",
+    );
+
+    render(<WatchEnableModal onClose={vi.fn()} />);
+    await screen.findByRole("dialog");
+
+    // The Select trigger's accessible-name text reflects the current
+    // value (the SelectValue placeholder is replaced once a value is
+    // set). Reading the trigger by testid keeps the assertion stable
+    // against future markup tweaks in shadcn/ui's Select.
+    const trigger = screen.getByTestId("watch-enable-domain-select");
+    expect(trigger).toHaveTextContent("work");
+    expect(trigger).not.toHaveTextContent(/^research$/);
+  });
+
+  test("Plan 23 T2.a — falls back to domains[0] when activeDomain is empty (defensive)", async () => {
+    // Empty ``activeDomain`` is the pre-Plan-11-T6 backend shape AND
+    // the pre-store-hydration state. Pin the defensive fallback so a
+    // future refactor that drops the ``|| domains[0]`` arm fails RED.
+    _setDomainsCacheForTesting(
+      [
+        {
+          slug: "research",
+          label: "Research",
+          accent: "var(--dom-research)",
+          configured: true,
+          on_disk: true,
+        },
+        {
+          slug: "work",
+          label: "Work",
+          accent: "var(--dom-work)",
+          configured: true,
+          on_disk: true,
+        },
+      ],
+      "", // empty active_domain — defensive fallback path
+    );
+
+    render(<WatchEnableModal onClose={vi.fn()} />);
+    await screen.findByRole("dialog");
+
+    const trigger = screen.getByTestId("watch-enable-domain-select");
+    expect(trigger).toHaveTextContent("research");
+  });
+
+  test("Plan 23 T2.a — prefilledDomain overrides activeDomain default", async () => {
+    // Bulk Import → Watch bridge (D6) passes ``prefilledDomain`` so the
+    // user lands on the domain they already picked for the bulk import.
+    // T2.a's activeDomain default must not override this — the prop is
+    // an explicit caller intent.
+    _setDomainsCacheForTesting(
+      [
+        {
+          slug: "research",
+          label: "Research",
+          accent: "var(--dom-research)",
+          configured: true,
+          on_disk: true,
+        },
+        {
+          slug: "work",
+          label: "Work",
+          accent: "var(--dom-work)",
+          configured: true,
+          on_disk: true,
+        },
+        {
+          slug: "personal",
+          label: "Personal",
+          accent: "var(--dom-personal)",
+          configured: true,
+          on_disk: true,
+        },
+      ],
+      "work", // activeDomain = work
+    );
+
+    render(
+      <WatchEnableModal
+        prefilledFolder="/p/A"
+        prefilledDomain="personal" // explicit caller intent
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByRole("dialog");
+
+    const trigger = screen.getByTestId("watch-enable-domain-select");
+    expect(trigger).toHaveTextContent("personal");
   });
 });
 

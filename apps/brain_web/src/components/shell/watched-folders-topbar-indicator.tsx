@@ -136,8 +136,31 @@ export function WatchedFoldersTopbarIndicator({
   testId = "watched-folders-indicator",
 }: WatchedFoldersTopbarIndicatorProps = {}): React.ReactElement | null {
   const folders = useWatchedFoldersStore((s) => s.folders);
+  const loaded = useWatchedFoldersStore((s) => s.loaded);
   const error = useWatchedFoldersStore((s) => s.error);
   const refresh = useWatchedFoldersStore((s) => s.refresh);
+
+  // Plan 23 T2.b — first-mount auto-refresh for cold caches. Pre-T2.b
+  // the indicator relied on Settings → Watched folders mounting first
+  // to populate the store; a user who landed directly on chat / inbox /
+  // browse would see the indicator render empty (or stay hidden when
+  // it should be visible) until they navigated to Settings. Matches the
+  // ``useDomains()`` first-mount auto-refresh pattern (Plan 12 T5).
+  //
+  // Dedup against concurrent fetches is handled inside the store —
+  // ``refresh()`` short-circuits to the in-flight Promise when one is
+  // pending (module-private ``inFlightPromise`` cache), so a Settings
+  // panel mount + topbar mount in the same render tree only triggers
+  // one network call. Gating on ``!loaded`` (rather than
+  // ``folders.length === 0``) avoids re-fetching forever for a user
+  // whose vault legitimately has zero watched folders — once the
+  // store resolves with an empty list, ``loaded`` flips true and we
+  // stop firing.
+  React.useEffect(() => {
+    if (!loaded) {
+      void refresh();
+    }
+  }, [loaded, refresh]);
 
   const { watchedCount, orphanCount } = React.useMemo(() => {
     const wc = folders.length;
