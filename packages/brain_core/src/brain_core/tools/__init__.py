@@ -77,6 +77,7 @@ from brain_core.tools import config_set as _config_set  # noqa: E402, F401
 from brain_core.tools import cost_report as _cost_report  # noqa: E402, F401
 from brain_core.tools import create_domain as _create_domain  # noqa: E402, F401
 from brain_core.tools import delete_domain as _delete_domain  # noqa: E402, F401
+from brain_core.tools import delete_orphan as _delete_orphan  # noqa: E402, F401
 from brain_core.tools import export_thread as _export_thread  # noqa: E402, F401
 from brain_core.tools import fork_thread as _fork_thread  # noqa: E402, F401
 from brain_core.tools import get_brain_md as _get_brain_md  # noqa: E402, F401
@@ -85,8 +86,10 @@ from brain_core.tools import get_pending_patch as _get_pending_patch  # noqa: E4
 from brain_core.tools import ingest as _ingest  # noqa: E402, F401
 from brain_core.tools import lint as _lint  # noqa: E402, F401
 from brain_core.tools import list_domains as _list_domains  # noqa: E402, F401
+from brain_core.tools import list_orphans as _list_orphans  # noqa: E402, F401
 from brain_core.tools import list_pending_patches as _list_pending_patches  # noqa: E402, F401
 from brain_core.tools import list_threads as _list_threads  # noqa: E402, F401
+from brain_core.tools import list_watched_folders as _list_watched_folders  # noqa: E402, F401
 from brain_core.tools import mcp_install as _mcp_install  # noqa: E402, F401
 from brain_core.tools import mcp_selftest as _mcp_selftest  # noqa: E402, F401
 from brain_core.tools import mcp_status as _mcp_status  # noqa: E402, F401
@@ -100,6 +103,10 @@ from brain_core.tools import reject_patch as _reject_patch  # noqa: E402, F401
 from brain_core.tools import rename_domain as _rename_domain  # noqa: E402, F401
 from brain_core.tools import repair_config as _repair_config  # noqa: E402, F401
 from brain_core.tools import repair_config_apply as _repair_config_apply  # noqa: E402, F401
+from brain_core.tools import restore_orphan as _restore_orphan  # noqa: E402, F401
+from brain_core.tools import resync_folder as _resync_folder  # noqa: E402, F401
 from brain_core.tools import search as _search  # noqa: E402, F401
 from brain_core.tools import set_api_key as _set_api_key  # noqa: E402, F401
 from brain_core.tools import undo_last as _undo_last  # noqa: E402, F401
+from brain_core.tools import unwatch_folder as _unwatch_folder  # noqa: E402, F401
+from brain_core.tools import watch_folder as _watch_folder  # noqa: E402, F401
