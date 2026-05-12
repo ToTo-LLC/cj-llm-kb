@@ -24,6 +24,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import structlog
+from pydantic import ValidationError
+
 from brain_core.tools._errors import raise_if_no_config
 from brain_core.tools.base import ToolContext, ToolResult
 from brain_core.vault.frontmatter import (
@@ -31,6 +34,8 @@ from brain_core.vault.frontmatter import (
     FrontmatterError,
     parse_frontmatter,
 )
+
+logger = structlog.get_logger(__name__)
 
 NAME = "brain_list_watched_folders"
 DESCRIPTION = (
@@ -52,8 +57,10 @@ def _walk_watched_folder_counts(
     Iterates every ``.md`` file under each configured domain directory,
     reads frontmatter, and counts the notes whose ``watched_folder_id``
     matches ``folder_path``. Notes with malformed frontmatter or no
-    ``watched_folder_id`` are skipped silently — they cannot be
-    attributed to a watched folder.
+    ``watched_folder_id`` are skipped — Plan 23 T1: also catch
+    :class:`pydantic.ValidationError` so a single typed-field mismatch
+    (e.g. ``orphaned: yes-as-string`` or ``type: invalid-literal``)
+    does not crash the whole watched-folders walk + Settings UI.
     """
     file_count = 0
     orphan_count = 0
@@ -69,7 +76,14 @@ def _walk_watched_folder_counts(
                     md_path.read_text(encoding="utf-8")
                 )
                 fm = Frontmatter.from_dict(fm_dict)
-            except (OSError, UnicodeDecodeError, FrontmatterError):
+            except (OSError, UnicodeDecodeError):
+                continue
+            except (FrontmatterError, ValidationError) as exc:
+                logger.warning(
+                    "watched_folder_note_frontmatter_invalid",
+                    path=str(md_path),
+                    error=str(exc),
+                )
                 continue
             if fm.watched_folder_id != folder_path:
                 continue
