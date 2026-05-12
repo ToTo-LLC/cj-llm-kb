@@ -66,6 +66,21 @@ def _build_plain_docx(tmp_path: Path, name: str = "doc.docx") -> Path:
     return path
 
 
+def _build_transcript_docx(tmp_path: Path, name: str = "transcript.docx") -> Path:
+    """Build a .docx with transcript shape (speaker labels) so the
+    Plan 24 T1.5 content-sniff in TranscriptDOCXHandler.can_handle claims it.
+    """
+    doc = Document()
+    doc.add_paragraph("Conversation log 2026-05-12")
+    doc.add_paragraph("Alice: Welcome to the call.")
+    doc.add_paragraph("Bob: Thanks for joining.")
+    doc.add_paragraph("Alice: Let us discuss the roadmap.")
+    doc.add_paragraph("Bob: Sounds good to me.")
+    path = tmp_path / name
+    doc.save(str(path))
+    return path
+
+
 def _build_headings_docx(tmp_path: Path, name: str = "headings.docx") -> Path:
     doc = Document()
     doc.add_heading("Strategy 2026", level=1)
@@ -126,33 +141,28 @@ def _build_no_title_docx(tmp_path: Path, name: str = "no-title.docx") -> Path:
 
 @pytest.mark.asyncio
 async def test_dispatcher_routes_transcript_docx_first(tmp_path: Path) -> None:
-    """Per D3: TranscriptDOCXHandler claims FIRST. DocxHandler is fall-through.
+    """Per D3: transcript-shaped .docx routes to TranscriptDOCXHandler.
 
-    Today TranscriptDOCXHandler.can_handle claims ANY .docx by suffix, so a
-    transcript-stem-named file still goes to it. This test pins that
-    invariant so future narrowing of TranscriptDOCXHandler.can_handle (if
-    it adopts a stem convention) still keeps the same example file routed
-    to the transcript handler.
+    Plan 24 T1.5 narrowed TranscriptDOCXHandler.can_handle to content-sniff
+    for speaker-label / timestamp markers. A doc with 3+ such lines in its
+    first 10 non-empty paragraphs routes to the transcript handler via the
+    DEFAULT dispatch chain (no explicit handler injection).
     """
-    path = _build_plain_docx(tmp_path, name="interview-2024-05.docx")
+    path = _build_transcript_docx(tmp_path, name="interview-2024-05.docx")
     handler = await dispatch(path)
     assert isinstance(handler, TranscriptDOCXHandler)
 
 
 @pytest.mark.asyncio
 async def test_dispatcher_routes_generic_docx_to_docx_handler(tmp_path: Path) -> None:
-    """When TranscriptDOCXHandler is bypassed, generic .docx flows to DocxHandler.
+    """Per D3: generic .docx (no transcript shape) falls through to DocxHandler.
 
-    TranscriptDOCXHandler currently claims all .docx, so to verify the
-    fall-through wiring we pass a handler list that omits the transcript
-    handler. This is the same pattern the dispatcher will exhibit once
-    TranscriptDOCXHandler is narrowed to transcript-stem only.
+    Plan 24 T1.5 made this routing reachable in the DEFAULT chain. A doc
+    with plain prose paragraphs (no speakers / timestamps) skips
+    TranscriptDOCXHandler's content sniff and lands on DocxHandler.
     """
     path = _build_plain_docx(tmp_path, name="Q4-strategy.docx")
-    handler = await dispatch(
-        path,
-        handlers=[DocxHandler()],
-    )
+    handler = await dispatch(path)
     assert isinstance(handler, DocxHandler)
 
 
