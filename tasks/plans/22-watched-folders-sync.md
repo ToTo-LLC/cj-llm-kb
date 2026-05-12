@@ -1245,6 +1245,134 @@ re-sync can resolve it.
   (re-ingest preserving slug + domain; D1 overwrite contract)`
 - `617957f` — `docs(plan-22): T2 — outcome receipts for re-ingest path`
 
+### T3 outcome — Pipeline orphan path (`IngestPipeline.mark_orphaned`)
+
+**Status:** DONE.
+
+**Files touched:**
+
+1. **`packages/brain_core/src/brain_core/ingest/pipeline.py`** (+186 LOC, two
+   new public + two new private surfaces):
+
+   * **`mark_orphaned(existing_note_path, *, allowed_domains)`** — new
+     public method. Reads frontmatter, flips `orphaned: true` +
+     `orphaned_at: <today>`, writes atomically via `VaultWriter`
+     (`_apply_replacement` reused from T2), emits a `orphan | mark |
+     <slug>` log entry. Idempotent: if the note is ALREADY orphaned,
+     short-circuits to a no-op (no vault write, original `orphaned_at`
+     preserved) and emits `orphan | no_change | <slug>` for grep. Scope
+     check at Stage A (path) + Stage C (frontmatter domain) — a watcher
+     in `("research",)` scope cannot orphan a `personal`-domain note.
+     `ScopeError` propagates (mirrors `update_source` shape so T5 / T6
+     callers can match uniformly); other exceptions flow to
+     `IngestStatus.FAILED` with `record_failure` writing a
+     `.error.json` audit record under `raw/failed/`.
+   * **`_rewrite_frontmatter_for_orphan(...)`** — new private helper.
+     Sister to T2's `_rewrite_frontmatter_only`. Body untouched. Only
+     `orphaned` + `orphaned_at` keys flipped; all other frontmatter
+     (including user-added `aliases` / `cssclass`) round-trips
+     unchanged.
+   * **`_log_orphan(*, domain, op_summary)`** — new private helper.
+     Sister to T2's `_log_update`. Stamps `op="orphan"` so the verb
+     is greppable distinctly from `patch` (raw VaultWriter PatchSet
+     log entries) and `update` (T2's re-ingest path).
+
+2. **`packages/brain_core/tests/ingest/test_pipeline_mark_orphaned.py`**
+   (NEW, 7 fixtures, 380 LOC):
+
+   * Normal-mark: frontmatter flipped, body byte-identical, log line,
+     LLM not called.
+   * Idempotent no-op: original `orphaned_at` preserved (audit
+     invariant), no vault write, `no_change` log line.
+   * Body-byte-identical pin: distinctive whitespace + unicode body
+     survives the round-trip verbatim.
+   * Undo round-trip: `UndoLog.revert(latest_undo_id)` restores the
+     pre-mark frontmatter byte-for-byte (including absence of the
+     `orphaned` key when the seeded note didn't carry one).
+   * Scope violation: `personal`-domain note + `("research",)` scope
+     → `ScopeError`; vault untouched.
+   * Missing-note: nonexistent path → `IngestStatus.FAILED`, no log
+     entry, no surprise raise (mirrors `update_source`).
+   * No-other-field-mutation pin: explicit assert every non-orphan
+     frontmatter field is unchanged (catches future "helpful"
+     auto-restamping of `updated`).
+
+**Helper reuse from T2:**
+
+- `_apply_replacement` — REUSED (single-Edit VaultWriter call with undo
+  record). No changes needed; T3's body-unchanged contract is naturally
+  expressed as `Edit(old=full_pre_mark_content, new=full_post_mark_content)`.
+- `_rewrite_frontmatter_only` — NOT reused. T2's helper is
+  `source_path` + `updated`-specific. Mixing orphan-flip semantics
+  into that helper would muddy its contract; new sister helper
+  `_rewrite_frontmatter_for_orphan` is the cleaner shape.
+- `_log_update` — NOT reused. The verb differs (`orphan` vs `update`);
+  new sister helper `_log_orphan` keeps the verb hardcoded per method
+  so a caller cannot accidentally cross verbs.
+
+**Date format for `orphaned_at`:** `now.date().isoformat()` where
+`now = datetime.now(tz=UTC)`. ISO 8601 string. Matches T2's
+`_rewrite_frontmatter_only` and the `Frontmatter.orphaned_at: date | None`
+typed field declared in T1.
+
+**Log verb shape:** `orphan | mark | <slug>` / `orphan | no_change | <slug>`.
+Mirrors T2's `update | overwrite | <slug>` cadence. The `<slug>` is
+`existing_note_path.stem` — preserves greppability for "find every
+orphan mark for slug `hello`" queries.
+
+**Exception types:**
+
+- `ScopeError` (subclass of `PermissionError`) propagates from
+  `scope_guard` on scope violation. Same shape as `update_source`.
+- `FileNotFoundError` from `Path.read_text` flows to FAILED branch.
+  No new domain exception introduced; the existing pipeline-FAILED
+  shape covers the watcher's needs without overloading the caller.
+- In-frontmatter-domain mismatch (`existing_fm.domain not in
+  allowed_domains`) returns `IngestStatus.QUARANTINED` rather than
+  raising — mirrors `update_source` exactly.
+
+**Self-review against plan-doc criteria:**
+
+- (a) **All writes via VaultWriter:** YES. `_apply_replacement` wraps
+  a single `Edit` and calls `self.writer.apply(...)`. The
+  `LogFile.append` for the log entry follows the same direct-API
+  pattern T2 uses for its `_log_update` (so the `op` verb can be
+  stamped correctly — `VaultWriter.apply` hardcodes `op="patch"`).
+- (b) **Undo log entry landed:** YES. Test 4 (undo round-trip) exercises
+  `UndoLog.revert(latest_undo_id)` and asserts the note content is
+  byte-identical to the pre-mark version, including absence of the
+  `orphaned` key when the seeded note didn't carry one.
+- (c) **Body unchanged:** YES. Tests 1, 3, and 7 pin this from three
+  angles — round-trip parse, distinctive-bytes byte-equality, and
+  field-by-field frontmatter delta confirming only `orphaned` +
+  `orphaned_at` differ.
+
+**Verification:**
+
+```bash
+# new tests
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/ingest/test_pipeline_mark_orphaned.py -v
+# 7 passed in 0.68s
+
+# full brain_core suite
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# 1063 passed, 5 skipped (baseline was 1056 + 7 new = 1063 — no regressions)
+
+# mypy
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core mypy packages/brain_core/src/brain_core/ingest/pipeline.py
+# Success: no issues found in 1 source file
+```
+
+**Commits:**
+
+- `db12ed0` — `feat(plan-22): T3 — IngestPipeline.mark_orphaned
+  (D2 non-destructive orphan mark; idempotent)`
+- `<docs-sha>` — `docs(plan-22): T3 — outcome receipts for orphan-mark path`
+
 
 
 ## Plan 23 candidate scope
