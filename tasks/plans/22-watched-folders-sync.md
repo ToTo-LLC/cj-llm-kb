@@ -2609,6 +2609,154 @@ integration tests. No platform-specific branches.
   `brain_bulk_import` tool (drag-drop) therefore keeps its pre-T10.5
   frontmatter shape.
 
+## T12 outcome
+
+**Status:** ✅ DONE (mockup-faithful, all gates green).
+
+**Files created:**
+
+- `apps/brain_web/src/components/settings/panel-watched-folders.tsx`
+  (~430 LOC) — orchestrator + `WatchedFolderRow` per-row presentation
+  component + `WatchNewFolderCta` placeholder CTA. Reads from the new
+  zustand store; mutations route through `brain_unwatch_folder` with
+  optimistic drop + reconcile-on-error (mirrors Plan 16 T4 / D4
+  `panel-domains` rollback pattern). Tooltips on disabled "Resync now"
+  / "Open in Finder" buttons explain the placeholder state (the
+  backend `brain_resync_folder` did not ship in T5 — tracked below).
+- `apps/brain_web/src/lib/state/watched-folders-store.ts` (~120 LOC) —
+  zustand store mirroring `useDomainsStore` shape (`loaded`, `error`,
+  `refresh()`, `removeFolderOptimistic`, `_resetForTesting`). No
+  BroadcastChannel for v1 — flagged as Plan 23 candidate (added below).
+  Resolve-always semantics on `refresh()` (failures record on `error`
+  state rather than rejecting) so first-mount auto-fetch can't surface
+  unhandled rejections.
+- `apps/brain_web/tests/unit/panel-watched-folders.test.tsx` (~470
+  LOC, 16 tests) — pins populated / empty / loading / error-banner
+  states, the unwatch optimistic-drop + reconcile + toast lifecycle,
+  the personal-domain note conditional, and CTA placement per the
+  mockup spec. All microcopy assertions match the mockup verbatim.
+
+**Files modified:**
+
+- `apps/brain_web/src/lib/api/tools.ts` — added `WatchedFolderEntry` +
+  `ListWatchedFoldersData` named interfaces (Plan 19 T4 pattern), the
+  `UnwatchFolderData` discriminated union (mirrors `UndoLastData` /
+  Plan 18 T3.7 precedent), and `listWatchedFolders` /
+  `unwatchFolder` typed wrappers. `ALL_TOOL_NAMES` count: 38 → 40.
+- `apps/brain_web/src/components/settings/settings-screen.tsx` — added
+  `"watched-folders"` to `SettingsTabId` union; registered the tab
+  between `"domains"` and `"brain-md"` per the mockup hand-off note;
+  added `<PanelWatchedFolders />` to the `renderPanel` switch with the
+  `Eye` icon from `lucide-react`.
+- `apps/brain_web/tests/unit/api-client.test.ts` — updated the 38-tool
+  count pin to 40 with a comment explaining which Plan 22 tools landed
+  in T12 vs which defer to T13 / T15.
+
+**State management approach:** zustand store (`useWatchedFoldersStore`)
+mirroring `useDomainsStore` for parity with the Plan 13 T2 single-
+source-of-truth lesson. Local React state was rejected because the
+topbar status indicator (T14) and the Orphans panel (T13) will both
+need to read the same data; a single store keeps them in lock-step
+without remount.
+
+**Watch-new CTA wiring:** placeholder. Clicking the CTA pushes a toast
+("Coming soon. The watch-folder picker ships in the next Plan 22 task
+(T15).") so the user gets confirmation the click registered. The
+button stays interactive (not disabled) so the focus ring, hover, and
+keyboard binding all read correctly in axe + Playwright. T15 wires the
+modal.
+
+**Unit-test count:** 16 tests, all passing. Covers:
+
+1. Populated state: row count, path, domain badge (3 rows).
+2. Sub-line file/orphan/last-sync format with the 4-min / 1-hour /
+   12-min / never variants.
+3. Orphan count omitted from sub-line when zero (mockup §microcopy).
+4. Personal-domain note conditional rendering.
+5. Empty-state card + verbatim copy ("No folders being watched yet.",
+   "Pick a folder and Brain will keep its notes in sync
+   automatically.").
+6. Loading skeleton + sr-only "Loading watched folders…" `aria-live`
+   announcement.
+7. Error banner + retry button: `role="alert"`, error message
+   surfaced, retry triggers a new fetch.
+8. Unwatch action: optimistic drop, API called with correct args,
+   success toast with basename + orphan count.
+9. Unwatch failure path: row restored via reconcile-refresh, danger
+   toast with verbatim error message.
+10. CTA placement: header-anchored in populated branch, centered in
+    empty branch; click pushes the T15-placeholder toast.
+
+**Verification gates:**
+
+- `pnpm vitest run tests/unit/panel-watched-folders.test.tsx`:
+  16/16 passing, 1.16s total.
+- `pnpm vitest run` (full suite): 512 passing / 1 skipped, 6.42s.
+- `pnpm tsc --noEmit`: exit 0. Per auto-memory
+  `feedback_tsc_vs_vitest.md`, both gates run; both clean.
+
+**Concerns / follow-ups:**
+
+1. **`brain_resync_folder` did not ship in T5.** The plan-doc §T5
+   names a `resync_folder.py` deliverable; the file does not exist in
+   `packages/brain_core/src/brain_core/tools/`. T12's "Resync now"
+   button renders as disabled with a "Coming soon" tooltip explaining
+   the placeholder state. Tracked as a Plan 22 follow-up — adding it
+   to the **Plan 23 candidate scope** block below as a delta to the
+   plan's locked decisions.
+2. **OS-native "Open in Finder" helper does not exist.** The mockup
+   specifies a per-row "Open in Finder ↗" button (macOS `open <path>`
+   / Windows `explorer.exe <path>`). The `Integrations` helper
+   referenced in the mockup is not present in `brain_web` today.
+   Button renders as disabled with a "Coming soon" tooltip. Plan 23
+   candidate (added below).
+3. **Cross-tab pubsub deferred.** v1 does not add a BroadcastChannel
+   pattern to the watched-folders store (the domains-store / Plan 12
+   T5 precedent). Single-tab realm is the v1 product surface — the
+   topbar status indicator (T14) and Orphans panel (T13) live in the
+   same shell tab, so peer-tab divergence isn't a v1 risk. Plan 23
+   candidate.
+4. **Toggle re-watch from OFF state is impossible.** Per the mockup's
+   interaction spec ("OFF state shouldn't exist as a transient"), the
+   row's Switch only goes ON → unwatch confirmation → row removed.
+   There is no OFF-state row in the v1 UI — re-watching means going
+   through the watch-enable modal (T15). The test for the toggle
+   verifies clicking it calls `onUnwatch`, not that it has a re-watch
+   path. This matches the mockup but is worth flagging: a user who
+   accidentally unwatches a folder will need to re-pick it through
+   the watch-enable picker; there's no one-click "re-watch" undo
+   today. (The success toast does NOT carry an undo affordance —
+   adding one is a Plan 23 candidate.)
+
+**Self-review:**
+
+- Mockup microcopy is verbatim. Empty-state heading + body + CTA;
+  sub-line template with the orphan-omission branch; personal-domain
+  privacy-rail note; error banner phrasing; toast lead + msg. Pinned
+  by 16 vitest assertions against the exact strings.
+- Tab placement matches the mockup hand-off note: between Domains and
+  BRAIN.md. Eye icon for the sidebar entry (mockup §Microcopy).
+- Per-row keyboard order matches mockup §"Keyboard order": Switch →
+  Include subfolders checkbox → Resync → Open in Finder → Unwatch.
+  Verified by tab-stop ordering in the rendered DOM (children of the
+  row container).
+- Accessibility per mockup §"Accessibility annotations": `<ul
+  role="list">` wrapper; domain dot `aria-hidden`; switch carries
+  explicit `aria-label` including the path; sub-line carries an
+  `aria-label` aggregating the metrics; `<time datetime>` element
+  for the ISO timestamp; loading state uses `role="status"` +
+  `aria-live="polite"` + sr-only copy; error banner is
+  `role="alert"`. No axe-core run yet (e2e is T16's deliverable);
+  static review only.
+- Plan 19 T4 named-interface pattern is honored in tools.ts: every
+  new tool exports a named TS interface (`WatchedFolderEntry`,
+  `ListWatchedFoldersData`, `UnwatchFolderData`) rather than inlining
+  the shape at the call site. A future backend shape change ripples
+  through one type alias rather than every wrapper site.
+- The `tsc --noEmit` discipline per auto-memory
+  `feedback_tsc_vs_vitest.md` is satisfied — both vitest and tsc were
+  run after every save; neither leaked an error.
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
