@@ -725,9 +725,48 @@ Spot-check seeds (for reviewer's 2-3-row sampling):
 
 ## T3 outcome
 
-_Filled in at T3 close. Tier locked + retype mechanism chosen +
-per-finding receipts (per wrapper modified) + verification: pnpm vitest
-run + pnpm tsc --noEmit + any rows deferred to Plan 21 candidate._
+Closed 2026-05-12. **Zero-fix closure.** T2 audit (commit `8ee3ba5`) surfaced
+0 DRIFT-HARDCODED rows across all 45 wrappers in `apps/brain_web/src/lib/api/tools.ts`.
+Per D2's audit-then-size + Q3=3.A tiered `AskUserQuestion` at exec time, the
+user adjudicated **T3.A: zero-fix closure** — no source modifications.
+
+### Tier locked
+
+**T3.A — Zero-fix closure.** Plan 19 T4's `7cd2b72` commit (the 7-wrapper
+`configSet` fix) is comprehensive; the broader 38-root surface is also
+drift-free. Adding regression pins for a non-existent drift class would
+be over-engineering per CLAUDE.md "engineered enough" principle.
+
+### Retype mechanism chosen
+
+**N/A — zero fixes mean no retyping needed.** For posterity / future plans:
+the codebase's established convention is **explicit shared named alias**
+(e.g., `ConfigSetData` interface at `tools.ts:628-634`, referenced by
+`configSet` root at l. 639 + each of the 7 fanout wrappers). Future
+wrapper-fanout helpers SHOULD adopt the same shape: declare a named
+interface for the data payload, reference it via `Promise<ToolResponse<Foo>>`
+at both root and wrappers.
+
+### Regression check receipts
+
+- `pnpm vitest run` — `Test Files 81 passed (81) | Tests 496 passed | 1 skipped (497) | Duration 6.07s`
+- `pnpm tsc --noEmit` — clean exit (no errors)
+
+Both verified at T3 close on current main HEAD (commit before T3 = `8ee3ba5`).
+
+### Deferred to Plan 21 candidate
+
+**None from T2 audit.** All 45 wrappers classified at T2 close:
+0 DRIFT-HARDCODED, 7 OK-PROPAGATES, 38 OK-NARROW-INTENTIONAL.
+No rows deferred.
+
+### Per-row-shape commentary (forward-looking)
+
+If a future plan adds new wrapper-fanout helpers in `tools.ts`, the
+audit pattern is reproducible: `grep -nE "Promise<ToolResponse<"`,
+trace each match's body for `callTool(...)` (root) vs another tools.ts
+fn (fanout), check return-type alignment with root. The 45-row T2
+findings table is the canonical reference shape for future audits.
 
 ## T4 outcome
 
