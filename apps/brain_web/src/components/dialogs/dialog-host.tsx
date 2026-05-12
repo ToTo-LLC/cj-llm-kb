@@ -9,6 +9,8 @@ import { ForkDialog } from "./fork-dialog";
 import { RejectReasonDialog } from "./reject-reason-dialog";
 import { RenameDomainDialog } from "./rename-domain-dialog";
 import { TypedConfirmDialog } from "./typed-confirm-dialog";
+import { WatchDisableModal } from "./watch-disable-modal";
+import { WatchEnableModal } from "./watch-enable-modal";
 
 /**
  * DialogHost — single mount point for app-level dialogs. Lives inside
@@ -18,6 +20,7 @@ import { TypedConfirmDialog } from "./typed-confirm-dialog";
  * Task 11 landed `reject-reason`, `edit-approve`, `typed-confirm`.
  * Task 19 wired `doc-picker`. Task 20 completes the set with
  * `file-to-wiki`, `fork`, `rename-domain`.
+ * Plan 22 T15 added `watch-enable` and `watch-disable`.
  */
 export function DialogHost() {
   const active = useDialogsStore((s) => s.active);
@@ -40,6 +43,16 @@ export function DialogHost() {
       return <ForkDialog {...active} onClose={close} />;
     case "rename-domain":
       return <RenameDomainDialog {...active} onClose={close} />;
+    case "watch-enable":
+      return (
+        <WatchEnableModal
+          prefilledFolder={active.prefilledFolder}
+          prefilledDomain={active.prefilledDomain}
+          onClose={close}
+        />
+      );
+    case "watch-disable":
+      return <WatchDisableModal folder={active.folder} onClose={close} />;
     default: {
       // Exhaustiveness check — adding a new dialog kind must widen the
       // switch. Without this assignment TypeScript won't flag stale

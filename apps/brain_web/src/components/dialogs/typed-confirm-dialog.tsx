@@ -9,11 +9,18 @@ import { Modal } from "./modal";
 /**
  * TypedConfirmDialog — "type DELETE to confirm" pattern. Used by Settings
  * flows that are destructive or hard to undo: delete domain, restore
- * backup, uninstall.
+ * backup, uninstall, orphan delete (Plan 22 T15).
  *
  * The confirm button is disabled until the user's input is EXACTLY equal to
  * `word`. Case-sensitive on purpose — the typed phrase should be hard to
  * fat-finger past.
+ *
+ * Plan 22 T15: extended with an optional ``headerSlot`` prop so callers
+ * can render a per-note card (or per-batch summary card) ABOVE the body
+ * paragraph. The slot is rendered between the description and the body
+ * paragraph — matches the mockup at ``docs/design/plan-22/modal-orphan-delete.md``
+ * where the warn-icon + filename card sits above the explanatory body.
+ * Backward-compatible (no slot → identical layout to pre-T15).
  */
 
 export interface TypedConfirmDialogProps {
@@ -24,6 +31,17 @@ export interface TypedConfirmDialogProps {
   word: string;
   /** Flips the confirm button to the danger variant + destructive copy. */
   danger?: boolean;
+  /**
+   * Optional content rendered ABOVE the body paragraph. Plan 22 T15 added
+   * this so the orphan-delete modal can render a warn-icon note card
+   * (single mode) or a batch summary card (bulk mode) without duplicating
+   * the input-state + typed-confirm logic. Use ``role="group"`` +
+   * ``aria-label`` on the slot's root for screen reader semantics — see
+   * ``orphan-delete-modal.tsx``'s ``buildHeaderSlot`` for the canonical
+   * example. Stays ``undefined`` for the original delete-domain / backup-
+   * restore / uninstall callers.
+   */
+  headerSlot?: React.ReactNode;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -34,6 +52,7 @@ export function TypedConfirmDialog({
   body,
   word,
   danger = false,
+  headerSlot,
   onConfirm,
   onClose,
 }: TypedConfirmDialogProps) {
@@ -68,6 +87,7 @@ export function TypedConfirmDialog({
         </>
       }
     >
+      {headerSlot ? <div className="mb-3">{headerSlot}</div> : null}
       <p className="mb-3 text-muted-foreground">{body}</p>
       <label className="mb-1.5 block text-xs uppercase tracking-wider text-muted-foreground">
         Type{" "}

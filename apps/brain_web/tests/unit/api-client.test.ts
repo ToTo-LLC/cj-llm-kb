@@ -148,8 +148,10 @@ describe("apiFetch", () => {
     // three orphan-management tools — ``brain_list_orphans``,
     // ``brain_restore_orphan``, ``brain_delete_orphan`` — for the
     // Settings → Orphans panel. The remaining Plan 22 tool —
-    // ``brain_watch_folder`` — lands with the watch-enable modal in T15.
-    expect(ALL_TOOL_NAMES.length).toBe(44);
+    // Plan 22 T15 brought it to 45 by adding ``brain_watch_folder`` (the
+    // dry-run cost-preview + real-run commit tool wired by the
+    // watch-enable modal).
+    expect(ALL_TOOL_NAMES.length).toBe(45);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "", data: { domains: ["research"] } }), {

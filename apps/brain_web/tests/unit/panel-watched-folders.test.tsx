@@ -65,6 +65,7 @@ vi.mock("@/lib/api/tools", async () => {
 // ---- Imports (after mocks) ----
 
 import { PanelWatchedFolders } from "@/components/settings/panel-watched-folders";
+import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
 import { useWatchedFoldersStore } from "@/lib/state/watched-folders-store";
 import type { WatchedFolderEntry } from "@/lib/api/tools";
@@ -121,6 +122,9 @@ beforeEach(() => {
   resyncFolderMock.mockReset();
   resetSystemStore();
   useWatchedFoldersStore.getState()._resetForTesting();
+  // Plan 22 T15: unwatch + Watch-new CTAs now route through
+  // ``useDialogsStore`` — reset so each test gets a fresh `active=null`.
+  useDialogsStore.getState().close();
 });
 
 // ---- Tests ----
@@ -346,157 +350,48 @@ describe("PanelWatchedFolders — error banner", () => {
   });
 });
 
-describe("PanelWatchedFolders — unwatch action", () => {
-  test("clicking Unwatch calls brain_unwatch_folder with the row path", async () => {
+describe("PanelWatchedFolders — unwatch action (T15: modal-gated)", () => {
+  // Plan 22 T15 changed the unwatch UX: the row's Unwatch button (and
+  // toggle) now opens the watch-disable confirmation modal via
+  // ``useDialogsStore`` rather than firing ``brain_unwatch_folder``
+  // directly. The toast + optimistic-drop + failure-rollback flow
+  // moved INTO the modal — see ``watch-modals.test.tsx`` for the
+  // post-T15 coverage. This file's responsibility narrows to "click
+  // opens the modal with the correct entry".
+
+  test("clicking Unwatch opens the watch-disable modal with the row entry", async () => {
     const user = userEvent.setup();
     primeListResolved([
       makeEntry({ path: "/p/A", domain: "research", orphan_count: 2 }),
     ]);
-    unwatchFolderMock.mockResolvedValue({
-      text: "",
-      data: { status: "unwatched", folder: "/p/A", remaining_notes: 5 },
-      isError: false,
-    });
-    // Mock the SUBSEQUENT refresh after the unwatch resolves — the
-    // panel re-fetches to reconcile. Empty list is fine for the assertion.
-    render(<PanelWatchedFolders />);
-    await waitFor(() =>
-      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
-    );
-    // After first refresh resolves with [A], queue the post-unwatch
-    // refresh to resolve with []. The store re-uses the same mock so
-    // the next mockResolvedValueOnce takes over.
-    listWatchedFoldersMock.mockResolvedValueOnce({
-      text: "",
-      data: { folders: [] },
-      isError: false,
-    });
-    await user.click(screen.getByTestId("watched-folder-unwatch-/p/A"));
-    await waitFor(() =>
-      expect(unwatchFolderMock).toHaveBeenCalledWith({ folder: "/p/A" }),
-    );
-  });
-
-  test("unwatch optimistically drops the row before the API resolves", async () => {
-    const user = userEvent.setup();
-    primeListResolved([
-      makeEntry({ path: "/p/A", domain: "research" }),
-      makeEntry({ path: "/p/B", domain: "work" }),
-    ]);
-    // Hold the unwatch open so we observe the optimistic drop.
-    let resolveFn: ((v: unknown) => void) | undefined;
-    unwatchFolderMock.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveFn = resolve;
-        }),
-    );
-    render(<PanelWatchedFolders />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("watched-folder-row")).toHaveLength(2),
-    );
-    await user.click(screen.getByTestId("watched-folder-unwatch-/p/A"));
-    // Optimistic drop — only B remains before the API resolves.
-    await waitFor(() =>
-      expect(screen.getAllByTestId("watched-folder-row")).toHaveLength(1),
-    );
-    expect(screen.getByText("/p/B")).toBeInTheDocument();
-    expect(screen.queryByText("/p/A")).not.toBeInTheDocument();
-    // Resolve so the test doesn't leak the pending promise.
-    listWatchedFoldersMock.mockResolvedValueOnce({
-      text: "",
-      data: { folders: [makeEntry({ path: "/p/B", domain: "work" })] },
-      isError: false,
-    });
-    resolveFn?.({
-      text: "",
-      data: { status: "unwatched", folder: "/p/A", remaining_notes: 0 },
-      isError: false,
-    });
-  });
-
-  test("unwatch toast includes basename and orphan count", async () => {
-    const user = userEvent.setup();
-    // First call (mount refresh) resolves with the populated row;
-    // default (mockResolvedValue) catches the second call (post-unwatch
-    // reconcile refresh) with an empty list. Order matters — `Once`
-    // queue is consumed before falling through to the default.
-    listWatchedFoldersMock.mockResolvedValueOnce({
-      text: "",
-      data: {
-        folders: [
-          makeEntry({
-            path: "/Users/test/Notes/Research-Papers",
-            domain: "research",
-            orphan_count: 3,
-          }),
-        ],
-      },
-      isError: false,
-    });
-    listWatchedFoldersMock.mockResolvedValue({
-      text: "",
-      data: { folders: [] },
-      isError: false,
-    });
-    unwatchFolderMock.mockResolvedValue({
-      text: "",
-      data: {
-        status: "unwatched",
-        folder: "/Users/test/Notes/Research-Papers",
-        remaining_notes: 142,
-      },
-      isError: false,
-    });
-    render(<PanelWatchedFolders />);
-    await waitFor(() =>
-      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
-    );
-    await user.click(
-      screen.getByTestId(
-        "watched-folder-unwatch-/Users/test/Notes/Research-Papers",
-      ),
-    );
-    await waitFor(() => {
-      const toasts = useSystemStore.getState().toasts;
-      expect(toasts).toHaveLength(1);
-      expect(toasts[0].lead).toBe("Stopped watching Research-Papers.");
-      expect(toasts[0].msg).toContain("3 orphans remain marked");
-      expect(toasts[0].variant).toBe("success");
-    });
-  });
-
-  test("unwatch failure restores the row and pushes danger toast", async () => {
-    const user = userEvent.setup();
-    primeListResolved([
-      makeEntry({ path: "/p/A", domain: "research" }),
-    ]);
-    unwatchFolderMock.mockRejectedValue(new Error("disk full"));
-    // The error-recovery refresh re-fetches; resolve with [A] again so
-    // the row reappears.
-    listWatchedFoldersMock.mockResolvedValueOnce({
-      text: "",
-      data: {
-        folders: [makeEntry({ path: "/p/A", domain: "research" })],
-      },
-      isError: false,
-    });
     render(<PanelWatchedFolders />);
     await waitFor(() =>
       expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
     );
     await user.click(screen.getByTestId("watched-folder-unwatch-/p/A"));
-    await waitFor(() => {
-      const toasts = useSystemStore.getState().toasts;
-      expect(toasts).toHaveLength(1);
-      expect(toasts[0].lead).toBe("Couldn't unwatch folder.");
-      expect(toasts[0].msg).toBe("disk full");
-      expect(toasts[0].variant).toBe("danger");
-    });
-    // Row restored after the error-recovery refresh.
+    const active = useDialogsStore.getState().active;
+    expect(active?.kind).toBe("watch-disable");
+    if (active?.kind === "watch-disable") {
+      expect(active.folder.path).toBe("/p/A");
+      expect(active.folder.orphan_count).toBe(2);
+    }
+    // The API is NOT fired directly from the panel anymore.
+    expect(unwatchFolderMock).not.toHaveBeenCalled();
+  });
+
+  test("clicking the row Switch (toggle OFF) also opens the watch-disable modal", async () => {
+    const user = userEvent.setup();
+    primeListResolved([makeEntry({ path: "/p/B", domain: "work" })]);
+    render(<PanelWatchedFolders />);
     await waitFor(() =>
       expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
     );
+    await user.click(screen.getByTestId("watched-folder-toggle-/p/B"));
+    const active = useDialogsStore.getState().active;
+    expect(active?.kind).toBe("watch-disable");
+    if (active?.kind === "watch-disable") {
+      expect(active.folder.path).toBe("/p/B");
+    }
   });
 });
 
@@ -525,7 +420,7 @@ describe("PanelWatchedFolders — Watch-new CTA placement", () => {
     ).not.toBeInTheDocument();
   });
 
-  test("clicking the CTA pushes the placeholder toast (T15 will wire the modal)", async () => {
+  test("clicking the CTA opens the watch-enable modal (T15 wiring)", async () => {
     const user = userEvent.setup();
     primeListResolved([makeEntry({ path: "/p/A", domain: "research" })]);
     render(<PanelWatchedFolders />);
@@ -533,12 +428,46 @@ describe("PanelWatchedFolders — Watch-new CTA placement", () => {
       expect(screen.getByTestId("watched-folders-add-cta")).toBeInTheDocument(),
     );
     await user.click(screen.getByTestId("watched-folders-add-cta"));
-    await waitFor(() => {
-      const toasts = useSystemStore.getState().toasts;
-      expect(toasts).toHaveLength(1);
-      expect(toasts[0].lead).toBe("Coming soon.");
-      expect(toasts[0].msg).toContain("T15");
-    });
+    const active = useDialogsStore.getState().active;
+    expect(active?.kind).toBe("watch-enable");
+    // Settings entry — no prefilled folder/domain.
+    if (active?.kind === "watch-enable") {
+      expect(active.prefilledFolder).toBeUndefined();
+      expect(active.prefilledDomain).toBeUndefined();
+    }
+  });
+
+  // Legacy assertion stub: confirms the old "Coming soon" toast no
+  // longer fires (regression guard for Plan 22 T12 placeholder copy
+  // resurfacing accidentally).
+  test("clicking the empty-state CTA opens the watch-enable modal", async () => {
+    const user = userEvent.setup();
+    primeListResolved([]);
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folders-empty-cta")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId("watched-folders-empty-cta"));
+    const active = useDialogsStore.getState().active;
+    expect(active?.kind).toBe("watch-enable");
+    // No toast — the placeholder copy is gone.
+    expect(useSystemStore.getState().toasts).toHaveLength(0);
+  });
+
+  // Sentinel for the original placeholder assertion: documented at
+  // T15 so future readers know the old copy was intentionally retired.
+  test("legacy 'Coming soon' toast is no longer emitted", async () => {
+    const user = userEvent.setup();
+    primeListResolved([makeEntry({ path: "/p/A", domain: "research" })]);
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folders-add-cta")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId("watched-folders-add-cta"));
+    // Old behavior would have left a "Coming soon." toast — this
+    // assertion replaces the pre-T15 test that pinned it.
+    const leads = useSystemStore.getState().toasts.map((t) => t.lead);
+    expect(leads).not.toContain("Coming soon.");
   });
 });
 

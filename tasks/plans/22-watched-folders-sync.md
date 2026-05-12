@@ -3361,6 +3361,171 @@ Success: no issues found in 1 source file
 Bundled — feat + test + docs in one commit per the plan-19 / T13 / T14
 outcome shape.
 
+## T15 outcome — Confirmation modals (watch-enable / watch-disable / orphan-delete) + Bulk Import → Watch CTA
+
+**Status: DONE.** All 3 modals shipped, panel + bulk-import CTAs
+wired, 580 vitest tests green, tsc clean.
+
+### What shipped
+
+1. **`WatchEnableModal`** (`apps/brain_web/src/components/dialogs/watch-enable-modal.tsx`):
+   - Fires `brain_watch_folder` with `dry_run=true` on mount + on every
+     input change (folder / domain / include_subdirs) to populate the
+     cost panel. Inputs cancel-safe via a per-effect signal flag so
+     a stale Promise can't overwrite fresh state.
+   - D1 callout paragraph is rendered VERBATIM from the mockup
+     `docs/design/plan-22/modal-watch-enable.md` §"D1 contract
+     paragraph — final agreed wording" (lines 172-176). The "Heads-up"
+     intro, "source of truth" phrasing, and "isn't deleted" emphasis
+     are pinned by `watch-modals.test.tsx`'s D1-verbatim assertion.
+   - Cost panel renders four states per mockup §States 2-4 + 5:
+     loading (`Estimating cost…`), success (`N files found · estimated
+     cost ~$U`), error (non-blocking with `Try again` retry), and the
+     Bulk Import "already imported" helper line. The
+     `already_watched` dry-run status surfaces inline validation
+     (mockup §State 6) + disables the confirm button.
+   - Pre-fill props (`prefilledFolder`, `prefilledDomain`) bridge the
+     Bulk Import → Watch path (D6); read-only folder input + eyebrow
+     swap to `BULK IMPORT → WATCH` when prefilled.
+   - On confirm, fires real-run + toasts + refreshes
+     `useWatchedFoldersStore` so the Settings panel + topbar status
+     indicator pick up the new row.
+2. **`WatchDisableModal`** (`apps/brain_web/src/components/dialogs/watch-disable-modal.tsx`):
+   - Confirmation modal (NOT typed-confirm) per mockup §"Why no typed-
+     confirm" — the action is reversible.
+   - Default button variant (NOT destructive) per mockup §"Why the
+     confirm button is NOT destructive variant" — nothing is being
+     deleted.
+   - Renders the "stays the same" / "what changes" lists verbatim from
+     the mockup, with a conditional orphan-count info-line that ONLY
+     renders when `folder.orphan_count > 0`.
+   - Owns the API call + toast + optimistic-drop + failure-rollback
+     lifecycle so the parent panel's `handleUnwatch` collapsed to a
+     1-liner `openDialog({kind: "watch-disable", folder: entry})`.
+3. **Orphan delete** (`apps/brain_web/src/components/dialogs/orphan-delete-modal.tsx`):
+   - Extension strategy: extended `TypedConfirmDialog` with a new
+     `headerSlot?: React.ReactNode` prop (mockup §"Implementation
+     guidance" recommended this over a sibling component). Backward
+     compatible — existing callers (`brain_delete_domain`, backup
+     restore, etc.) render identically.
+   - This file exports two DialogKind builders:
+     `buildSingleOrphanDeleteDialog` (slug typed-confirm + per-note
+     warn-icon card) and `buildBulkOrphanDeleteDialog` (`delete N
+     notes` phrase + summary card with up to 5 slugs + `…and N more`
+     overflow). The builders own the slug derivation + microcopy + the
+     `headerSlot` composition so a future mockup tweak doesn't drift
+     between single + bulk modes.
+   - `panel-orphans.tsx`'s `handleDelete` / `handleBulkDelete`
+     refactored to use the builders. The post-confirm side effects
+     (optimistic drop / API call / toast / refresh) stay in the
+     orchestrator; the builders own ONLY the dialog payload shape.
+4. **Bulk Import → Watch CTA** (`apps/brain_web/src/components/bulk/step-apply.tsx`):
+   - "Watch this folder for changes" button in the apply-complete
+     screen. Renders only when (a) a folder was picked AND (b) at
+     least one file applied successfully (an all-failed run shouldn't
+     suggest watching).
+   - Click opens `useDialogsStore.open({kind: "watch-enable",
+     prefilledFolder, prefilledDomain})` — modal handles the rest.
+   - `domain: "auto"` (lazy classify) does NOT pre-fill the modal's
+     domain (lets the modal default to active domain).
+5. **`useDialogsStore` extension**: added `watch-enable` +
+   `watch-disable` to the `DialogKind` discriminated union. `DialogHost`
+   exhaustiveness switch updated to render the new kinds.
+6. **`tools.ts` binding**: added `watchFolder` + `WatchFolderData`
+   discriminated union + `WatchFolderCostEstimate` interface. Registry
+   `ALL_TOOL_NAMES` widened to 45.
+
+### TypedConfirmDialog extension strategy (mockup-flagged decision)
+
+**Chose extension over sibling component.** Single source of truth for
+the input-state + typed-confirm logic; backward compatible (existing
+`brain_delete_domain` / backup-restore callers unchanged). The
+`headerSlot` is rendered between the description and the body
+paragraph — same insertion point the mockup specifies for the warn-icon
+note card. Cheap one-prop addition; future callers (any destructive
+typed-confirm that wants a metadata header) get the affordance for free.
+
+### Files created (4)
+
+- `apps/brain_web/src/components/dialogs/watch-enable-modal.tsx` (391 LOC)
+- `apps/brain_web/src/components/dialogs/watch-disable-modal.tsx` (155 LOC)
+- `apps/brain_web/src/components/dialogs/orphan-delete-modal.tsx` (170 LOC)
+- `apps/brain_web/tests/unit/watch-modals.test.tsx` (471 LOC, 24 tests)
+
+### Files modified (7)
+
+- `apps/brain_web/src/components/dialogs/typed-confirm-dialog.tsx` — added `headerSlot` prop
+- `apps/brain_web/src/components/dialogs/dialog-host.tsx` — added 2 dialog kinds
+- `apps/brain_web/src/lib/state/dialogs-store.ts` — extended `DialogKind` union
+- `apps/brain_web/src/lib/api/tools.ts` — added `watchFolder` binding + types
+- `apps/brain_web/src/components/settings/panel-watched-folders.tsx` — wired modal CTAs
+- `apps/brain_web/src/components/settings/panel-orphans.tsx` — routed through new builders
+- `apps/brain_web/src/components/bulk/step-apply.tsx` — added Watch CTA
+- `apps/brain_web/tests/unit/panel-watched-folders.test.tsx` — updated tests to reflect modal-gated unwatch
+- `apps/brain_web/tests/unit/api-client.test.ts` — bumped tool count to 45
+
+### Verification
+
+```
+$ cd apps/brain_web && pnpm vitest run tests/unit/watch-modals.test.tsx
+✓ 24 tests passed (1.74s)
+$ cd apps/brain_web && pnpm tsc --noEmit
+(clean)
+$ cd apps/brain_web && pnpm vitest run
+✓ 580 tests passed | 1 skipped (6.97s)
+```
+
+### Self-review findings
+
+- D1 callout copy is VERBATIM from the mockup — confirmed by the
+  watch-modals.test.tsx `renders eyebrow + title + D1 callout verbatim`
+  test which pins the exact phrases (`Heads-up`, `source of truth`,
+  `your edits will be overwritten the next time the source file
+  changes`, `isn't deleted`, `Settings → Orphans`).
+- Microcopy strings for watch-disable's stays/changes lists are
+  verbatim from the mockup — pinned in `WatchDisableModal — renders
+  mockup-verbatim stays/changes lists` test.
+- The orphan-count info-line conditional render matches mockup §State
+  1 vs State 2 — pinned by two complementary tests.
+- The "Choose folder" button uses the browser-only `webkitdirectory`
+  shim (mockup §Implementation guidance flagged that the OS-native
+  folder picker is a Plan 23 candidate). v1 lets the user paste the
+  path directly; the picker is best-effort.
+- `pushToast` is still imported in `panel-watched-folders.tsx`
+  because `handleResync` consumes it. Lint is clean.
+
+### Concerns / follow-ups (non-blocking)
+
+1. **Native OS folder picker still missing** — the watch-enable modal's
+   "Choose folder" button uses the browser `webkitdirectory` shim,
+   which only surfaces the directory name (not the absolute path on
+   disk) in most browsers due to security. Users on Mac / Windows will
+   need to paste the absolute path manually in v1. Plan 23 candidate:
+   wire through the same OS-bridge an Electron wrapper or the Plan 06
+   setup wizard's folder picker uses.
+2. **Domain dropdown defaults to `domains[0]` when `prefilledDomain` is
+   omitted** — mockup §State 1 says "defaults to currently-active
+   domain". The `useDomains()` hook surfaces `activeDomain` but the
+   modal currently picks the first slug. Cheap follow-up (one line) if
+   user testing shows surprises.
+3. **No `BulkImporter`-aware dry-run** — same caveat T14.5 carried
+   forward: a per-domain budget exhaustion will surface during the
+   real-run, not the dry-run.
+4. **Modal opens then closes on success but the dialogs-store's
+   `active` resets via `onClose` (the modal-level close handler), not
+   via an explicit unmount path. If the user clicks confirm and the
+   API takes >5s, the user can still Cancel mid-flight which fires
+   `onClose` but the in-flight Promise will resolve into a closed
+   modal (no toast, no refresh). The fix is an AbortController on the
+   confirm call — flagged as a Plan 23 candidate (low risk; the
+   real-run is bounded by the initial-sync timeout).
+
+### Commit cadence
+
+Bundled — feat (modals + bindings + panel wiring) + test (24 new + 6
+updated) + docs (this section) in one commit per the plan-19 / T13 /
+T14 / T14.5 outcome shape.
+
 ## Review
 
 _Filled in at T18 close. Tag SHA + closure summary + bumps + verification

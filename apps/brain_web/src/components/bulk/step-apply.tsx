@@ -13,11 +13,12 @@
  */
 
 import * as React from "react";
-import { Check, CircleStop } from "lucide-react";
+import { Check, CircleStop, Eye } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useBulkStore } from "@/lib/state/bulk-store";
+import { useDialogsStore } from "@/lib/state/dialogs-store";
 
 const TYPE_BADGE: Record<string, string> = {
   pdf: "PDF",
@@ -31,6 +32,8 @@ const TYPE_BADGE: Record<string, string> = {
 
 export function StepApply(): React.ReactElement {
   const files = useBulkStore((s) => s.files);
+  const folder = useBulkStore((s) => s.folder);
+  const bulkDomain = useBulkStore((s) => s.domain);
   const applying = useBulkStore((s) => s.applying);
   const applyIdx = useBulkStore((s) => s.applyIdx);
   const cancelled = useBulkStore((s) => s.cancelled);
@@ -38,6 +41,7 @@ export function StepApply(): React.ReactElement {
   const results = useBulkStore((s) => s.results);
   const cancel = useBulkStore((s) => s.cancel);
   const reset = useBulkStore((s) => s.reset);
+  const openDialog = useDialogsStore((s) => s.open);
 
   const included = files.filter((f) => f.include && !f.skip);
   const progress = included.length === 0 ? 0 : applyIdx / included.length;
@@ -171,6 +175,37 @@ export function StepApply(): React.ReactElement {
             <Button variant="ghost" onClick={reset}>
               Import another folder
             </Button>
+            {/* Plan 22 T15 / D6 — Bulk Import → Watch bridge. Opens the
+                watch-enable modal pre-filled with the just-imported
+                folder + the bulk-import domain so the user can convert
+                a one-shot import into an ongoing watch without
+                re-entering either field. Only renders when we have a
+                folder path AND the bulk-import landed at least one file
+                (an all-failed run shouldn't suggest watching). */}
+            {folder && results.applied.length > 0 && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  openDialog({
+                    kind: "watch-enable",
+                    prefilledFolder: folder.path,
+                    // ``bulkDomain`` is "auto" when the user picked
+                    // lazy classify — in that branch we don't pre-fill
+                    // domain so the modal lets the user pick (defaults
+                    // to the active domain).
+                    prefilledDomain:
+                      bulkDomain && bulkDomain !== "auto"
+                        ? bulkDomain
+                        : undefined,
+                  });
+                }}
+                data-testid="bulk-watch-cta"
+                className="gap-1.5"
+              >
+                <Eye className="h-4 w-4" />
+                Watch this folder for changes
+              </Button>
+            )}
             <a
               href="/pending"
               className="inline-flex h-9 items-center justify-center rounded-md bg-[var(--accent)] px-4 text-sm font-medium text-[var(--accent-fg,white)]"

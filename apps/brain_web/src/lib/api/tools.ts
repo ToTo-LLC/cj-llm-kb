@@ -1311,6 +1311,116 @@ export const listWatchedFolders = (): Promise<
   callTool<ListWatchedFoldersData>("brain_list_watched_folders");
 
 /**
+ * Cost-estimate payload returned by ``brain_watch_folder`` (in both
+ * dry-run and real-run branches when ``initial_sync`` is ``true``).
+ *
+ * Mirrors the backend handler at
+ * ``packages/brain_core/src/brain_core/tools/watch_folder.py:328-333,
+ *  399-404`` (the dict literal is built in two places that produce the
+ * exact same shape; T14.5 pinned this). Plan 22 D3 specifies the
+ * estimate is informational only — there is NO refusal threshold —
+ * so the modal renders the panel and lets the user proceed.
+ *
+ *  - ``file_count`` — number of source files the initial-sync walker
+ *    would classify (recursive walk respects ``include_subdirs``).
+ *  - ``estimated_tokens`` — file_count × per-file classify token cost
+ *    (T14.5's ``_CLASSIFY_TOKEN_COST`` constant). The summarize +
+ *    integrate spend is NOT included — that's per-file post-classify
+ *    and depends on each file's body length.
+ *  - ``estimated_usd`` — input × pricing lookup for the
+ *    ``classify_model``. ``null`` when the pricing table has no entry
+ *    for the resolved model (forward-compat for a model swap that
+ *    lands ahead of pricing); the modal renders "n/a (no pricing
+ *    entry)" in that branch.
+ *  - ``classify_model`` — the resolved model id the cost estimate is
+ *    keyed on; the modal surfaces this so the user can see WHICH
+ *    model the projection is for.
+ */
+export interface WatchFolderCostEstimate {
+  file_count: number;
+  estimated_tokens: number;
+  estimated_usd: number | null;
+  classify_model: string;
+}
+
+/**
+ * ``brain_watch_folder`` ``ToolResult.data`` shape. Three branches
+ * discriminated by ``status`` — mirrors the backend handler at
+ * ``packages/brain_core/src/brain_core/tools/watch_folder.py:265-278,
+ *  351-363, 471-489``:
+ *
+ *  - ``"dry_run"``: T14.5 cost-estimate preview; NO state mutated.
+ *    Caller hands the same args back with ``dry_run=false`` to confirm.
+ *    ``cost_estimate`` is populated when ``initial_sync=true`` (the
+ *    common case from the modal); ``null`` when ``initial_sync=false``.
+ *  - ``"watched"``: real-run success; the folder is now in
+ *    ``Config.watched_folders``. ``initial_sync_summary`` carries the
+ *    per-file counts when the initial sync ran; ``null`` when
+ *    ``initial_sync=false``. ``cost_estimate`` mirrors the same shape
+ *    as the dry-run branch (the value the user saw at confirm time).
+ *  - ``"already_watched"``: idempotent no-op; the folder was already
+ *    in ``Config.watched_folders``. ``initial_sync_summary`` is always
+ *    ``null`` here (no sync ran); ``cost_estimate`` is always ``null``
+ *    (no spend to project).
+ */
+export type WatchFolderData =
+  | {
+      status: "dry_run";
+      folder: string;
+      domain: string;
+      initial_sync_summary: null;
+      cost_estimate: WatchFolderCostEstimate | null;
+    }
+  | {
+      status: "watched";
+      folder: string;
+      domain: string;
+      initial_sync_summary: {
+        planned: number;
+        applied: number;
+        skipped_duplicate: number;
+        failed: number;
+      } | null;
+      cost_estimate: WatchFolderCostEstimate | null;
+    }
+  | {
+      status: "already_watched";
+      folder: string;
+      domain: string;
+      initial_sync_summary: null;
+      cost_estimate: null;
+    };
+
+/**
+ * Register a watched folder + optionally run the initial sync (Plan 22
+ * T5 / T14.5).
+ *
+ *  - ``folder`` — absolute path on disk.
+ *  - ``domain`` — explicit target domain slug (omit for lazy classify,
+ *    which lets the per-file classifier route each note at sync time).
+ *  - ``include_subdirs`` — recurse into subfolders. Defaults to ``true``
+ *    server-side; modal defaults match.
+ *  - ``initial_sync`` — fire the bulk-import sync immediately. Defaults
+ *    to ``true`` server-side; the watch-enable modal always passes
+ *    ``true``.
+ *  - ``dry_run`` — Plan 22 T14.5 cost-preview mode. ``true`` returns
+ *    the cost estimate WITHOUT mutating config / backups / vault;
+ *    ``false`` commits the watch + runs the initial sync.
+ *
+ * The watch-enable modal calls this twice: once on mount with
+ * ``dry_run=true`` to populate the cost panel; once on confirm with
+ * ``dry_run=false`` to commit.
+ */
+export const watchFolder = (args: {
+  folder: string;
+  domain?: string;
+  include_subdirs?: boolean;
+  initial_sync?: boolean;
+  dry_run?: boolean;
+}): Promise<ToolResponse<WatchFolderData>> =>
+  callTool<WatchFolderData>("brain_watch_folder", args);
+
+/**
  * ``brain_unwatch_folder`` ``ToolResult.data`` shape. Two branches
  * discriminated by ``status`` — mirrors the backend handler at
  * ``packages/brain_core/src/brain_core/tools/unwatch_folder.py:92-122``:
@@ -1606,8 +1716,10 @@ export const ALL_TOOL_NAMES = [
   // didn't ship in T5; it did — see
   // ``packages/brain_core/src/brain_core/tools/resync_folder.py``).
   // T13 wires the orphan-management tools (list/restore/delete).
-  // ``brain_watch_folder`` is wired in T15 (watch-enable modal).
+  // T15 wires ``brain_watch_folder`` (watch-enable modal — dry-run cost
+  // preview + real-run commit).
   "brain_list_watched_folders",
+  "brain_watch_folder",
   "brain_unwatch_folder",
   "brain_resync_folder",
   "brain_list_orphans",

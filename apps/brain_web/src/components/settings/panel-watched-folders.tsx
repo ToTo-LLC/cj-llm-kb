@@ -19,7 +19,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { unwatchFolder, type WatchedFolderEntry } from "@/lib/api/tools";
+import { type WatchedFolderEntry } from "@/lib/api/tools";
+import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useSystemStore } from "@/lib/state/system-store";
 import { useWatchedFoldersStore } from "@/lib/state/watched-folders-store";
 
@@ -127,7 +128,11 @@ function subLineLabel(entry: WatchedFolderEntry): string {
 
 interface WatchedFolderRowProps {
   entry: WatchedFolderEntry;
-  onUnwatch: (folder: string) => void;
+  /** Plan 22 T15: row now opens the watch-disable confirmation modal
+   *  rather than firing ``brain_unwatch_folder`` directly. The
+   *  orchestrator passes the modal-open handler; the modal owns the
+   *  toast + refresh lifecycle. */
+  onUnwatch: (entry: WatchedFolderEntry) => void;
   onResync: (folder: string) => void;
   /** Set ``true`` while a resync of THIS row is in flight (drives the
    *  spinner + label swap + aria-busy + sibling-disable per mockup
@@ -202,7 +207,7 @@ function WatchedFolderRow({
               (the toggle is the first focusable element in each row). */}
           <Switch
             checked={entry.enabled}
-            onCheckedChange={() => onUnwatch(entry.path)}
+            onCheckedChange={() => onUnwatch(entry)}
             aria-label={`Stop watching ${entry.path}`}
             data-testid={`watched-folder-toggle-${entry.path}`}
             className="shrink-0"
@@ -312,7 +317,7 @@ function WatchedFolderRow({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onUnwatch(entry.path)}
+            onClick={() => onUnwatch(entry)}
             disabled={resyncing}
             data-testid={`watched-folder-unwatch-${entry.path}`}
             aria-label={`Unwatch ${entry.path}`}
@@ -330,31 +335,20 @@ function WatchedFolderRow({
 // ---------- Orchestrator ----------
 
 /**
- * "Watch a new folder" CTA. v1 (T12) renders the visual slot per the
- * mockup but does not open a modal — T15 wires the watch-enable modal.
- * The CTA logs a warning on click so a developer who lands here mid-
- * Plan-22 sees the breadcrumb; the button stays interactive (not
- * disabled) so the focus ring, hover, and keyboard binding all read
- * correctly in axe + Playwright. The intent is documented inline rather
- * than as a TODO comment so the next engineer reads it without context-
- * switching to the plan doc.
+ * "Watch a new folder" CTA. Plan 22 T15 wired this to the watch-enable
+ * modal via :class:`useDialogsStore`. The empty-state and populated-
+ * state variants share the same click handler — the only difference is
+ * the visual treatment (centred card label vs header-row label per the
+ * Settings mockup).
  */
 function WatchNewFolderCta({
   variant = "primary",
 }: {
   variant?: "primary" | "empty-state";
 }): React.ReactElement {
-  const pushToast = useSystemStore((s) => s.pushToast);
+  const openDialog = useDialogsStore((s) => s.open);
   const onClick = () => {
-    // T15 deliverable — until the watch-enable modal lands, surface a
-    // toast so the user gets confirmation the click registered (rather
-    // than wondering whether the UI broke). The toast copy is
-    // intentionally informative, not apologetic.
-    pushToast({
-      lead: "Coming soon.",
-      msg: "The watch-folder picker ships in the next Plan 22 task (T15).",
-      variant: "default",
-    });
+    openDialog({ kind: "watch-enable" });
   };
   if (variant === "empty-state") {
     return (
@@ -382,6 +376,7 @@ function WatchNewFolderCta({
 
 export function PanelWatchedFolders(): React.ReactElement {
   const pushToast = useSystemStore((s) => s.pushToast);
+  const openDialog = useDialogsStore((s) => s.open);
   const folders = useWatchedFoldersStore((s) => s.folders);
   const loaded = useWatchedFoldersStore((s) => s.loaded);
   const storeError = useWatchedFoldersStore((s) => s.error);
@@ -402,44 +397,20 @@ export function PanelWatchedFolders(): React.ReactElement {
     void useWatchedFoldersStore.getState().refresh();
   }, []);
 
+  /**
+   * Open the watch-disable confirmation modal. Plan 22 T15: replaces
+   * the pre-T15 direct-call ``brain_unwatch_folder`` path that fired
+   * with no user confirmation. The modal owns the API call + toast +
+   * refresh lifecycle so this orchestrator only needs to identify
+   * which row was clicked. Per-mockup ``modal-watch-disable.md``: the
+   * action is reversible, so a confirmation modal (not a typed-confirm)
+   * is the right friction level.
+   */
   const handleUnwatch = React.useCallback(
-    async (folderPath: string) => {
-      // T15 will gate this behind a watch-disable confirmation modal.
-      // For T12 we fire the API directly so the panel is functionally
-      // complete — drop the row optimistically, restore on API failure
-      // (mirrors ``panel-domains`` delete handler / Plan 16 T4 / D4).
-      const entry = folders.find((f) => f.path === folderPath);
-      useWatchedFoldersStore.getState().removeFolderOptimistic(folderPath);
-      try {
-        await unwatchFolder({ folder: folderPath });
-        // Re-fetch so any orphan counts / last-sync timestamps for OTHER
-        // rows that the unwatch may have invalidated (rare, but possible
-        // if the backend prunes shared state) refresh in lock-step.
-        void useWatchedFoldersStore.getState().refresh();
-        const basename = folderPath.split(/[/\\]/).pop() ?? folderPath;
-        const orphanCount = entry?.orphan_count ?? 0;
-        pushToast({
-          lead: `Stopped watching ${basename}.`,
-          msg:
-            orphanCount > 0
-              ? `Existing notes kept. ${orphanCount} orphan${
-                  orphanCount === 1 ? "" : "s"
-                } remain marked.`
-              : "Existing notes kept.",
-          variant: "success",
-        });
-      } catch (err) {
-        // API failed — restore the row by re-fetching the canonical
-        // server list (mirrors the ``panel-domains`` rollback pattern).
-        await useWatchedFoldersStore.getState().refresh();
-        pushToast({
-          lead: "Couldn't unwatch folder.",
-          msg: err instanceof Error ? err.message : "Unknown error.",
-          variant: "danger",
-        });
-      }
+    (entry: WatchedFolderEntry) => {
+      openDialog({ kind: "watch-disable", folder: entry });
     },
-    [folders, pushToast],
+    [openDialog],
   );
 
   const handleResync = React.useCallback(
@@ -610,7 +581,7 @@ export function PanelWatchedFolders(): React.ReactElement {
                 <WatchedFolderRow
                   key={entry.path}
                   entry={entry}
-                  onUnwatch={(folder) => void handleUnwatch(folder)}
+                  onUnwatch={handleUnwatch}
                   onResync={(folder) => void handleResync(folder)}
                   resyncing={resyncingPaths.has(entry.path)}
                 />

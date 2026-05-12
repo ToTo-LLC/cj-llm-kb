@@ -20,6 +20,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  buildBulkOrphanDeleteDialog,
+  buildSingleOrphanDeleteDialog,
+} from "@/components/dialogs/orphan-delete-modal";
 import type { OrphanEntry } from "@/lib/api/tools";
 import { useDialogsStore } from "@/lib/state/dialogs-store";
 import { useOrphansStore } from "@/lib/state/orphans-store";
@@ -412,53 +416,59 @@ export function PanelOrphans(): React.ReactElement {
 
   const handleDelete = React.useCallback(
     (entry: OrphanEntry) => {
-      const slug = slugFromNotePath(entry.note_path);
       const title = titleFromNotePath(entry.note_path);
-      openDialog({
-        kind: "typed-confirm",
-        eyebrow: "ORPHAN MANAGEMENT",
-        title: "Delete this orphaned note?",
-        body: `The source file for this note no longer exists. Deleting moves the note to your vault's trash. You can restore it from ~/Documents/brain/.brain/trash/ within 30 days, or undo this with brain_undo_last.`,
-        word: slug,
-        danger: true,
-        onConfirm: async () => {
-          // Optimistic drop — typed-confirm has already gated the
-          // destructive action.
-          useOrphansStore.getState().removeOrphanOptimistic(entry.note_path);
-          setDeletingPaths((prev) => {
-            const next = new Set(prev);
-            next.add(entry.note_path);
-            return next;
-          });
-          setSelected((prev) => {
-            if (!prev.has(entry.note_path)) return prev;
-            const next = new Set(prev);
-            next.delete(entry.note_path);
-            return next;
-          });
-          try {
-            await useOrphansStore.getState().deleteOrphan(entry.note_path);
-            pushToast({
-              lead: "Note deleted.",
-              msg: `${title} moved to .brain/trash/. Undo via brain_undo_last.`,
-              variant: "success",
-            });
-          } catch (err) {
-            await useOrphansStore.getState().refresh();
-            pushToast({
-              lead: "Couldn't delete.",
-              msg: err instanceof Error ? err.message : "Unknown error.",
-              variant: "danger",
-            });
-          } finally {
+      // Plan 22 T15: route through ``buildSingleOrphanDeleteDialog`` so
+      // the per-note warn-icon card (headerSlot) renders above the body
+      // per ``modal-orphan-delete.md``. The builder owns the slug
+      // derivation + microcopy + headerSlot composition — this orchestrator
+      // just owns the post-confirm side effects (optimistic drop +
+      // delete API call + toast + refresh).
+      openDialog(
+        buildSingleOrphanDeleteDialog({
+          entry,
+          onConfirm: async () => {
+            // Optimistic drop — typed-confirm has already gated the
+            // destructive action.
+            useOrphansStore
+              .getState()
+              .removeOrphanOptimistic(entry.note_path);
             setDeletingPaths((prev) => {
+              const next = new Set(prev);
+              next.add(entry.note_path);
+              return next;
+            });
+            setSelected((prev) => {
+              if (!prev.has(entry.note_path)) return prev;
               const next = new Set(prev);
               next.delete(entry.note_path);
               return next;
             });
-          }
-        },
-      });
+            try {
+              await useOrphansStore
+                .getState()
+                .deleteOrphan(entry.note_path);
+              pushToast({
+                lead: "Note deleted.",
+                msg: `${title} moved to .brain/trash/. Undo via brain_undo_last.`,
+                variant: "success",
+              });
+            } catch (err) {
+              await useOrphansStore.getState().refresh();
+              pushToast({
+                lead: "Couldn't delete.",
+                msg: err instanceof Error ? err.message : "Unknown error.",
+                variant: "danger",
+              });
+            } finally {
+              setDeletingPaths((prev) => {
+                const next = new Set(prev);
+                next.delete(entry.note_path);
+                return next;
+              });
+            }
+          },
+        }),
+      );
     },
     [openDialog, pushToast],
   );
@@ -536,64 +546,68 @@ export function PanelOrphans(): React.ReactElement {
     );
     const n = paths.length;
     if (n === 0) return;
-    const phrase = `delete ${n} note${n === 1 ? "" : "s"}`;
-    openDialog({
-      kind: "typed-confirm",
-      eyebrow: "ORPHAN MANAGEMENT",
-      title: `Delete ${n} orphaned note${n === 1 ? "" : "s"}?`,
-      body: `The source files for these notes no longer exist. Deleting moves them to your vault's trash. You can restore each one from ~/Documents/brain/.brain/trash/ within 30 days, or undo the whole batch with brain_undo_last.`,
-      word: phrase,
-      danger: true,
-      onConfirm: async () => {
-        setDeletingPaths((prev) => {
-          const next = new Set(prev);
-          for (const p of paths) next.add(p);
-          return next;
-        });
-        for (const p of paths) {
-          useOrphansStore.getState().removeOrphanOptimistic(p);
-        }
-        let okCount = 0;
-        let firstErr: Error | null = null;
-        for (const p of paths) {
-          try {
-            await useOrphansStore.getState().deleteOrphan(p);
-            okCount += 1;
-          } catch (err) {
-            if (!firstErr) {
-              firstErr = err instanceof Error ? err : new Error(String(err));
+    const entries = filteredOrphans.filter((o) => paths.includes(o.note_path));
+    // Plan 22 T15: route through ``buildBulkOrphanDeleteDialog`` so the
+    // bulk summary card (headerSlot) renders with up to 5 slug names +
+    // an "…and N more" overflow line per ``modal-orphan-delete.md``
+    // §"Bulk mode". The builder owns the typed-confirm phrase
+    // composition + microcopy; this orchestrator owns the iteration
+    // over selected paths + partial-success toast variants.
+    openDialog(
+      buildBulkOrphanDeleteDialog({
+        entries,
+        onConfirm: async () => {
+          setDeletingPaths((prev) => {
+            const next = new Set(prev);
+            for (const p of paths) next.add(p);
+            return next;
+          });
+          for (const p of paths) {
+            useOrphansStore.getState().removeOrphanOptimistic(p);
+          }
+          let okCount = 0;
+          let firstErr: Error | null = null;
+          for (const p of paths) {
+            try {
+              await useOrphansStore.getState().deleteOrphan(p);
+              okCount += 1;
+            } catch (err) {
+              if (!firstErr) {
+                firstErr =
+                  err instanceof Error ? err : new Error(String(err));
+              }
             }
           }
-        }
-        setDeletingPaths((prev) => {
-          const next = new Set(prev);
-          for (const p of paths) next.delete(p);
-          return next;
-        });
-        setSelected(new Set());
-        if (firstErr && okCount === 0) {
-          await useOrphansStore.getState().refresh();
-          pushToast({
-            lead: "Couldn't delete.",
-            msg: firstErr.message,
-            variant: "danger",
+          setDeletingPaths((prev) => {
+            const next = new Set(prev);
+            for (const p of paths) next.delete(p);
+            return next;
           });
-        } else if (firstErr) {
-          await useOrphansStore.getState().refresh();
-          pushToast({
-            lead: `${okCount} of ${n} notes deleted.`,
-            msg: `${n - okCount} failed. ${firstErr.message}`,
-            variant: "warn",
-          });
-        } else {
-          pushToast({
-            lead: `${n} note${n === 1 ? "" : "s"} deleted.`,
-            msg: "Moved to .brain/trash/. Undo via brain_undo_last.",
-            variant: "success",
-          });
-        }
-      },
-    });
+          setSelected(new Set());
+          if (firstErr && okCount === 0) {
+            await useOrphansStore.getState().refresh();
+            pushToast({
+              lead: "Couldn't delete.",
+              msg: firstErr.message,
+              variant: "danger",
+            });
+          } else if (firstErr) {
+            await useOrphansStore.getState().refresh();
+            pushToast({
+              lead: `${okCount} of ${n} notes deleted.`,
+              msg: `${n - okCount} failed. ${firstErr.message}`,
+              variant: "warn",
+            });
+          } else {
+            pushToast({
+              lead: `${n} note${n === 1 ? "" : "s"} deleted.`,
+              msg: "Moved to .brain/trash/. Undo via brain_undo_last.",
+              variant: "success",
+            });
+          }
+        },
+      }),
+    );
   }, [filteredOrphans, openDialog, pushToast, selected]);
 
   // ---------- Render ----------

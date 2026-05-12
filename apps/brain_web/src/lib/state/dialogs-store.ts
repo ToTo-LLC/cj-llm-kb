@@ -1,6 +1,9 @@
 "use client";
 
+import type * as React from "react";
 import { create } from "zustand";
+
+import type { WatchedFolderEntry } from "@/lib/api/tools";
 
 /**
  * Dialog state lives in one Zustand store so any component can pop a dialog
@@ -56,6 +59,16 @@ export type DialogKind =
       body: string;
       word: string;
       danger?: boolean;
+      /**
+       * Optional React node rendered above the body paragraph. Plan 22
+       * T15 added this so the orphan-delete modal can render a warn-icon
+       * note card (single) or a batch summary card (bulk) above the
+       * shared body + typed-confirm input. Kept here (rather than on a
+       * dedicated ``orphan-delete`` kind) because every other consumer
+       * of ``typed-confirm`` (delete-domain, backup-restore, uninstall)
+       * benefits from the same extension when their mockups ask for one.
+       */
+      headerSlot?: React.ReactNode;
       onConfirm: () => void;
     }
   | {
@@ -98,6 +111,27 @@ export type DialogKind =
        * here and hand it to ``draft-store.openDoc``.
        */
       onNewBlank: (path: string) => void;
+    }
+  | {
+      /**
+       * Plan 22 T15 — watch-enable confirmation modal. The dialog itself
+       * fires the dry-run cost preview on mount + the real-run watch on
+       * confirm; callers don't pass an onConfirm because the success +
+       * failure toasts + store refresh live inside the modal. The
+       * optional prefill props bridge from Bulk Import → Watch (D6).
+       */
+      kind: "watch-enable";
+      prefilledFolder?: string;
+      prefilledDomain?: string;
+    }
+  | {
+      /**
+       * Plan 22 T15 — watch-disable confirmation modal. Like
+       * ``watch-enable``, the modal owns the API call + toasts so the
+       * caller only needs to identify which folder is being unwatched.
+       */
+      kind: "watch-disable";
+      folder: WatchedFolderEntry;
     };
 
 export interface DialogsState {
