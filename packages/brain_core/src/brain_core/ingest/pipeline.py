@@ -29,9 +29,15 @@ from brain_core.llm.types import LLMMessage, LLMRequest, LLMResponse
 from brain_core.prompts.loader import load_prompt
 from brain_core.prompts.schemas import ClassifyOutput, SummarizeOutput
 from brain_core.state.db import StateDB
-from brain_core.vault.frontmatter import parse_frontmatter, serialize_with_frontmatter
-from brain_core.vault.types import NewFile, PatchSet
-from brain_core.vault.writer import VaultWriter
+from brain_core.vault.frontmatter import (
+    Frontmatter,
+    parse_frontmatter,
+    serialize_with_frontmatter,
+)
+from brain_core.vault.log import LogEntry, LogFile
+from brain_core.vault.paths import ScopeError, scope_guard
+from brain_core.vault.types import Edit, IndexEntryPatch, NewFile, PatchSet
+from brain_core.vault.writer import Receipt, VaultWriter
 
 
 @dataclass
@@ -266,6 +272,411 @@ class IngestPipeline:
                 note_path=None,
                 errors=[str(exc)],
             )
+
+    async def update_source(
+        self,
+        existing_note_path: Path,
+        new_source_path: Path,
+        *,
+        allowed_domains: tuple[str, ...],
+    ) -> IngestResult:
+        """Re-ingest a single source against an existing vault note (Plan 22 T2).
+
+        Preserves the note's slug + domain per D4 (no re-classify, no surprise
+        domain move). Per D1 (source canonical / overwrite), the existing
+        note's body + summary-derived sections are REPLACED on every
+        content-changed update — hand-edits made to the vault note since the
+        last ingest are LOST. Three branches:
+
+        * ``new_hash == old_hash`` AND the resolved source path is unchanged
+          → no-op. No LLM calls, no vault mutation. Emits a ``update |
+          no_change | <slug>`` log entry for greppability.
+        * ``new_hash == old_hash`` AND the source path changed → frontmatter-
+          only mutation (``source_path`` + ``updated``). No LLM calls. Emits
+          ``update | path_only | <slug>``.
+        * ``new_hash != old_hash`` → full re-ingest (summarize + integrate),
+          body + frontmatter rewritten in place via a single VaultWriter Edit
+          (atomic temp+rename, undo record persisted, scope guard enforced).
+          ``domain`` / ``created`` / ``watched_folder_id`` / ``source_url``
+          frontmatter fields are PRESERVED. ``updated`` / ``content_hash`` /
+          ``source_path`` are replaced. Emits ``update | overwrite | <slug>``.
+
+        Stages skipped vs the 9-stage :meth:`ingest`:
+
+        * **Stage 1 (classify)** — domain is read from existing frontmatter
+          (D4). No classifier call, no `domain_override` semantics.
+        * **Stage 4 (archive)** — re-archive only happens on overwrite (the
+          no-op and path-only branches keep the existing archived copy).
+
+        Args:
+            existing_note_path: Absolute path to the vault note to update.
+                Slug is preserved (derived from the path's stem).
+            new_source_path: Path to the new source file on disk. May be the
+                same path as the original ingest (typical "file edited"
+                case) or a different path (the "file moved" case — same
+                content_hash, different source_path).
+            allowed_domains: Scope-guard tuple. The existing note's
+                frontmatter ``domain`` MUST be in this tuple — otherwise
+                the update is refused with a QUARANTINED result. Mirrors
+                the :meth:`ingest` Stage 5 scope check.
+
+        Returns:
+            :class:`IngestResult` with status ``OK`` on success / no-op /
+            path-only update. ``QUARANTINED`` when the note's domain is
+            outside ``allowed_domains``. ``FAILED`` on any stage exception
+            (mirrors :meth:`ingest`'s broad failure handler).
+        """
+        now = datetime.now(tz=UTC)
+        run_cost: float = 0.0
+
+        # Pre-compute slug from the existing path for early error paths
+        # (FAILED log + record_failure). The actual slug used downstream is
+        # the same value — preserved per D4.
+        slug = existing_note_path.stem
+
+        try:
+            # Stage A: Scope-guard the existing note path. ``scope_guard``
+            # also covers "the note must be inside the vault" — a caller
+            # that hands us a stray path outside vault_root is rejected
+            # before we read anything.
+            scope_guard(
+                existing_note_path,
+                vault_root=self.vault_root,
+                allowed_domains=allowed_domains,
+            )
+
+            # Stage B: Read existing note's frontmatter + body. Failure here
+            # (missing file, malformed YAML) flows to the FAILED branch.
+            existing_content = existing_note_path.read_text(encoding="utf-8")
+            existing_fm_dict, _existing_body = parse_frontmatter(existing_content)
+            existing_fm = Frontmatter.from_dict(existing_fm_dict)
+
+            # D4: domain is read from existing frontmatter. NEVER re-classify.
+            existing_domain = existing_fm.domain
+            if existing_domain is None:
+                # Defensive: a note with no domain frontmatter cannot be
+                # safely updated (we don't know which domain to bill the
+                # cost against, and we don't know the integrate prompt's
+                # index.md target). Treat as failure rather than QUARANTINED
+                # (which is reserved for "classifier picked outside scope").
+                raise ValueError(
+                    f"existing note {existing_note_path} has no `domain` "
+                    "frontmatter; cannot determine target domain for re-ingest"
+                )
+
+            # Scope check: the existing note's domain must be in allowed_domains.
+            # Without this, a watcher scoped to ("research",) could overwrite a
+            # personal-domain note that happens to share a slug.
+            if existing_domain not in allowed_domains:
+                error = (
+                    f"existing note domain {existing_domain!r} "
+                    f"not in allowed {allowed_domains}"
+                )
+                self._record_history(
+                    source=str(new_source_path),
+                    source_type=None,
+                    domain=existing_domain,
+                    status=IngestStatus.QUARANTINED.value,
+                    patch_id=None,
+                    error=error,
+                    cost_usd=run_cost,
+                )
+                return IngestResult(
+                    status=IngestStatus.QUARANTINED,
+                    note_path=None,
+                    errors=[error],
+                )
+
+            existing_hash = existing_fm.content_hash
+            # ``source_path`` round-trips as a string through YAML — we
+            # compare resolved paths (POSIX or platform-native form is fine
+            # because both sides go through ``Path.resolve``).
+            existing_source_path_str = existing_fm.source_path
+            existing_source_path_resolved: Path | None = (
+                Path(existing_source_path_str).resolve()
+                if existing_source_path_str
+                else None
+            )
+
+            # Stage C: Dispatch + extract (mirrors Stage 2-3 of ingest()).
+            handler = await dispatch(new_source_path, handlers=self.handlers)
+            archive_dir = archive_dir_for(
+                vault_root=self.vault_root, domain=existing_domain, when=now
+            )
+            extracted = await handler.extract(new_source_path, archive_root=archive_dir)
+
+            # Stage D: Hash + branch decision.
+            new_hash = content_hash(extracted.body_text)
+            new_source_resolved = new_source_path.resolve()
+            path_changed = (
+                existing_source_path_resolved is None
+                or existing_source_path_resolved != new_source_resolved
+            )
+            hash_changed = existing_hash != new_hash
+
+            if not hash_changed and not path_changed:
+                # No-op branch: source content + path both unchanged.
+                self._log_update(
+                    domain=existing_domain,
+                    op_summary=f"no_change | {slug}",
+                )
+                self._record_history(
+                    source=str(new_source_path),
+                    source_type=extracted.source_type.value,
+                    domain=existing_domain,
+                    status=IngestStatus.OK.value,
+                    patch_id=None,
+                    error=None,
+                    cost_usd=run_cost,
+                )
+                return IngestResult(
+                    status=IngestStatus.OK,
+                    note_path=existing_note_path,
+                    extracted=extracted,
+                )
+
+            if not hash_changed and path_changed:
+                # Path-only branch: same body, source moved on disk.
+                # Frontmatter ``source_path`` + ``updated`` get refreshed;
+                # the body is unchanged. No LLM calls.
+                new_content = self._rewrite_frontmatter_only(
+                    existing_content=existing_content,
+                    existing_fm_dict=existing_fm_dict,
+                    new_source_path=new_source_resolved,
+                    now=now,
+                )
+                receipt = self._apply_replacement(
+                    note_path=existing_note_path,
+                    domain=existing_domain,
+                    old_content=existing_content,
+                    new_content=new_content,
+                )
+                self._log_update(
+                    domain=existing_domain,
+                    op_summary=f"path_only | {slug}",
+                )
+                self._record_history(
+                    source=str(new_source_path),
+                    source_type=extracted.source_type.value,
+                    domain=existing_domain,
+                    status=IngestStatus.OK.value,
+                    patch_id=receipt.undo_id,
+                    error=None,
+                    cost_usd=run_cost,
+                )
+                return IngestResult(
+                    status=IngestStatus.OK,
+                    note_path=existing_note_path,
+                    extracted=extracted,
+                )
+
+            # Overwrite branch: content changed → run summarize + integrate.
+            # Stage 1 (classify) is skipped per D4 — existing_domain is the
+            # locked target. Stage 4 (archive) is implicitly covered above
+            # since handler.extract() already wrote the new archive copy.
+            summary, summarize_cost = await self._summarize(
+                extracted, domain=existing_domain
+            )
+            run_cost += summarize_cost
+
+            new_content = self._rebuild_note(
+                existing_fm_dict=existing_fm_dict,
+                extracted=extracted,
+                summary=summary,
+                new_source_path=new_source_resolved,
+                new_hash=new_hash,
+                now=now,
+            )
+
+            # Stage E: Integrate — exact same call as ingest(), feeds the LLM
+            # the rendered new note body + the current index.md so it can
+            # propose index/concept patches against the updated content.
+            # NOTE: we intentionally DISCARD the integrate patch's
+            # ``new_files`` and ``log_entry`` fields below — the file we
+            # care about is the existing note, which is replaced via the
+            # Edit (not a new_file), and the log entry uses the ``update``
+            # verb we emit separately. ``edits`` + ``index_entries`` from
+            # integrate ARE applied (they may add cross-domain index
+            # entries for newly-mentioned entities/concepts).
+            integrate_patch, integrate_cost = await self._integrate(
+                extracted=extracted,
+                summary=summary,
+                domain=existing_domain,
+                note_content=new_content,
+            )
+            run_cost += integrate_cost
+
+            receipt = self._apply_replacement(
+                note_path=existing_note_path,
+                domain=existing_domain,
+                old_content=existing_content,
+                new_content=new_content,
+                extra_edits=list(integrate_patch.edits),
+                extra_index_entries=list(integrate_patch.index_entries),
+            )
+            self._log_update(
+                domain=existing_domain,
+                op_summary=f"overwrite | {slug}",
+            )
+            self._record_history(
+                source=str(new_source_path),
+                source_type=extracted.source_type.value,
+                domain=existing_domain,
+                status=IngestStatus.OK.value,
+                patch_id=receipt.undo_id,
+                error=None,
+                cost_usd=run_cost,
+            )
+            return IngestResult(
+                status=IngestStatus.OK,
+                note_path=existing_note_path,
+                extracted=extracted,
+            )
+
+        except ScopeError:
+            # Scope violations bypass record_failure (they're a programmer/
+            # caller error, not a pipeline failure) and propagate to the
+            # caller. Callers (T6 watcher, T5 resync_folder tool) get a
+            # clear PermissionError-shaped exception.
+            raise
+        except Exception as exc:
+            record_failure(
+                vault_root=self.vault_root,
+                slug=slug,
+                stage="update_source",
+                exception=exc,
+            )
+            self._record_history(
+                source=str(new_source_path),
+                source_type=None,
+                domain=None,
+                status=IngestStatus.FAILED.value,
+                patch_id=None,
+                error=str(exc),
+                cost_usd=run_cost,
+            )
+            return IngestResult(
+                status=IngestStatus.FAILED,
+                note_path=None,
+                errors=[str(exc)],
+            )
+
+    def _rewrite_frontmatter_only(
+        self,
+        *,
+        existing_content: str,
+        existing_fm_dict: dict[str, object],
+        new_source_path: Path,
+        now: datetime,
+    ) -> str:
+        """Rewrite the note with new ``source_path`` + ``updated`` only.
+
+        Preserves the body verbatim — used by the path-only branch
+        (content_hash unchanged, source file moved). Returns the full
+        serialized note content (frontmatter + body).
+        """
+        new_fm = dict(existing_fm_dict)
+        new_fm["updated"] = now.date().isoformat()
+        new_fm["source_path"] = str(new_source_path)
+        # Re-parse body so we serialize cleanly with the same body bytes
+        # that were on disk.
+        _fm, body = parse_frontmatter(existing_content)
+        return serialize_with_frontmatter(new_fm, body=body)
+
+    def _rebuild_note(
+        self,
+        *,
+        existing_fm_dict: dict[str, object],
+        extracted: ExtractedSource,
+        summary: SummarizeOutput,
+        new_source_path: Path,
+        new_hash: str,
+        now: datetime,
+    ) -> str:
+        """Rebuild the note content for the overwrite branch.
+
+        Frontmatter fields preserved from the existing note: ``domain``,
+        ``type``, ``created``, ``watched_folder_id``, plus any user-added
+        keys (``aliases``, ``cssclass``, etc.). Frontmatter fields
+        replaced: ``title`` (from new summary), ``updated``, ``source_type``,
+        ``source_url``, ``content_hash``, ``ingested_by``, ``source_path``.
+
+        ``orphaned`` is set to ``False`` and ``orphaned_at`` is cleared:
+        a successful re-ingest is implicit evidence the source is back on
+        disk, so any prior orphan-mark is reverted. (Pinned in tests; T3
+        will set them when the source disappears.)
+        """
+        # Start from the existing dict so user-added extras survive.
+        new_fm: dict[str, object] = dict(existing_fm_dict)
+        # Title comes from the new summary — overwrite contract per D1.
+        new_fm["title"] = summary.title
+        # Re-stamp `updated` to today. `created` is preserved.
+        new_fm["updated"] = now.date().isoformat()
+        new_fm["source_type"] = extracted.source_type.value
+        new_fm["source_url"] = extracted.source_url
+        new_fm["content_hash"] = new_hash
+        new_fm["ingested_by"] = "brain"
+        new_fm["source_path"] = str(new_source_path)
+        # A successful re-ingest implies the source is back; clear any
+        # prior orphan-mark. T3 will write the inverse transition.
+        new_fm["orphaned"] = False
+        new_fm["orphaned_at"] = None
+        body = _render_source_body(summary=summary)
+        return serialize_with_frontmatter(new_fm, body=body)
+
+    def _apply_replacement(
+        self,
+        *,
+        note_path: Path,
+        domain: str,
+        old_content: str,
+        new_content: str,
+        extra_edits: list[Edit] | None = None,
+        extra_index_entries: list[IndexEntryPatch] | None = None,
+    ) -> Receipt:
+        """Atomically replace ``note_path`` content via ``VaultWriter``.
+
+        Builds a PatchSet with a single Edit (old=full prior content,
+        new=full new content). Optional ``extra_edits`` / ``extra_index_entries``
+        are appended so the integrate stage's cross-domain index/entity
+        patches land in the same atomic write + undo record. ``log_entry``
+        on the PatchSet is left ``None`` — the caller emits the ``update``-
+        verb log entry separately via :meth:`_log_update` so the log
+        captures the correct verb (the writer would otherwise stamp
+        ``op="patch"``).
+        """
+        edits: list[Edit] = [
+            Edit(path=note_path, old=old_content, new=new_content),
+        ]
+        if extra_edits:
+            edits.extend(extra_edits)
+        idx_entries: list[IndexEntryPatch] = list(extra_index_entries or [])
+        patch = PatchSet(
+            new_files=[],
+            edits=edits,
+            index_entries=idx_entries,
+            log_entry=None,  # logged separately with op="update"
+            reason="update_source",
+        )
+        return self.writer.apply(patch, allowed_domains=(domain,))
+
+    def _log_update(self, *, domain: str, op_summary: str) -> None:
+        """Append a single ``update``-verb entry to the domain's ``log.md``.
+
+        Uses :class:`LogFile` directly (the same surface ``VaultWriter``
+        uses internally) so we can stamp ``op="update"`` — the writer's
+        :meth:`apply` hardcodes ``op="patch"`` for PatchSet log entries.
+        Greppable per the Plan 22 T2 review criterion (c).
+        """
+        log_path = self.vault_root / domain / "log.md"
+        log = LogFile(log_path)
+        log.append(
+            LogEntry(
+                timestamp=datetime.now(tz=UTC),
+                op="update",
+                summary=op_summary,
+            )
+        )
 
     async def _classify_with_cost(
         self,
