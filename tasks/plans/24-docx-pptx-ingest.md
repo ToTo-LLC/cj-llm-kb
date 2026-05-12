@@ -1232,13 +1232,54 @@ Per D8: NO push.
 
 ## Plan 25 candidate scope
 
-Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
-(unchanged through Plan 23) plus any Plan 24-surfaced candidates.
+Plan 24 closed orthogonally to the Plan 22 watched-folders carry-forward queue (different subsystem). Plan 25 candidate scope = the unchanged 16 Plan 22 carry-forwards PLUS 6 NEW Plan-24-surfaced candidates:
+
+**Plan 22 carry-forward (16 items; unchanged through Plan 23 + Plan 24):**
+- 7 UX polish — native folder picker, AbortController on confirm, cross-store reconcile, orphans-only topbar coverage gap, Open-in-Finder backend, bulk action progress, OrphanEntry fields, topbar entrance transition.
+- 4 architectural — `_build_pipeline` 4-site dup, `_watched_folders_changed` cross-package dup, brain_api + brain_mcp parallel watchers, Stage-4 archive deferral.
+- 1 dev-loop friction — workspace `editable = true` flip for brain_api / brain_mcp / brain_cli.
+- 4 preserved NOT-DOING — seedBrainMd rule-of-three (3/5 callers), per-thread cross-domain confirmation (spec-level NO per Plan 16 D36), topbar scope chip drift watch (lesson-only), PEP 703 free-threaded Python `_cached_ctx` (3.14 trigger).
+
+**NEW — Plan 24-surfaced candidates (6 items):**
+1. Group-shape image extraction in PptxHandler (recurse into `MSO_SHAPE_TYPE.GROUP` for nested pictures) — T2 concern.
+2. Browse-page + chat-context-pill icon mapping audit for docx/pptx coverage — T5 / T5.5 concern.
+3. `IngestType` union missing `transcript` + `tweet` literals (pre-existing Plan 22 gap surfaced by T5) — 4-line change once tackled.
+4. `update_source` doesn't run OCR for watched-folder re-ingests of image-bearing docs — T4 concern.
+5. Per-slide-interleaved OCR blocks (Plan 24 appends end-of-body; ideal placement is after each slide's text) — T4 concern.
+6. `Config.llm.vision_model` field to consolidate the model-default duplicated between `providers/anthropic.py` + `ingest/ocr.py` — T3 concern.
+
+See `tasks/todo.md` Plan 25 candidate-scope tail block for the canonical authoritative list with priority ordering.
 
 ## Review
 
-_Filled in at T6 close. Tag SHA + closure summary + bumps +
-verification receipts + backlog forward._
+Plan 24 lands the first new `SourceType` enum values since v0.1.0 (Plan 09) and the first new pip dependency since Plan 16 (`python-pptx>=0.6`). Scope locked per user choices C (MVP + image OCR) + 2.A (explicit `docx` + `pptx` values) + 3.A (keep TranscriptDOCXHandler; new DocxHandler is the fall-through) + B (always-OCR embedded images). Delivered as 6 substantive tasks + 2 mid-plan mini-fixes (T1.5 content-sniff narrowing; T5.5 frontend integration fixes) + 1 closure = 9 actual work units across 18+ commits.
+
+**Closure summary.** Theme A (T0) — Spec §5 +2 handler-table rows + new "Image OCR rules" subsection + §10 "Vision OCR cost metering" bullet pinning `op="ocr"` + `PerDomainBudgetGuard.check_for`. `SourceType` enum +`DOCX = "docx"` + `PPTX = "pptx"` members with introspection pin. Theme B (T1, T1.5, T2) — `DocxHandler` (190 LOC + 12 tests) registered AFTER TranscriptDOCXHandler per D3; T1.5 narrowed TranscriptDOCXHandler.can_handle to content-sniff via 4 regex patterns + `_TRANSCRIPT_MIN_MATCHES = 3` threshold (10 new tests); `PptxHandler` (220 LOC + 15 tests) + `python-pptx>=0.6` in brain_core pyproject. Theme C (T3, T4) — `LLMProvider.vision_extract` on the Protocol; `AnthropicProvider.vision_extract` via SDK image content blocks; `brain_core.ingest.ocr.ocr_image` helper (158 LOC) wraps budget + LLM + ledger; pipeline Stage 5.5 OCR pass between classify-quarantine and summarize; 34 new tests across vision + ledger + integration. Theme D (T5, T5.5) — `INGEST_ACCEPT` +2 MIME types, `IngestType` union +2 literals, `TypeIcon` +2 cases; T5.5 fixed pre-existing field-name mismatch (`it.source_type` not `it.type`) + drop-zone extension-sniff for optimistic rows (13 new tests total). Closure (T6) — 15-gate demo script + lessons closure section + todo row 24 ✅ + Plan 25 candidate scope tail (16 + 6 items) + tag `plan-24-docx-pptx-ingest`.
+
+**Test counts:**
+- brain_core: 1234 + 5 skipped (rises from Plan 23's 1157 by +77 = exactly the per-task new-test counts).
+- brain_api: 223 + 4 skipped (unchanged — cross-package regression check clean).
+- brain_mcp: 146 + 3 skipped (unchanged).
+- brain_cli: 129 (unchanged).
+- brain_web vitest: 599 + 1 skipped (rises from Plan 23's 586 by +13 = T5's 8 + T5.5's 5).
+- demo-plan-24.py: 15 gates, all green.
+
+**Spec text edits:** 3 — §5 handlers table +2 rows; §5 new "Image OCR rules" subsection; §10 +1 "Vision OCR cost metering" bullet. Zero spec rollback risk.
+
+**Schema changes:** SourceType enum +DOCX +PPTX (2 string-valued members). No frontmatter changes. No SQLite schema change (cost ledger's `operation TEXT` accepts the new `"ocr"` value without migration).
+
+**Dependencies:** +1 explicit (`python-pptx>=0.6` in brain_core pyproject; D12 — first new pip dep since Plan 16 watchdog). +2 transitive (`pillow`, `xlsxwriter`).
+
+**Mid-plan fix-up cadence honored.** T1.5 + T5.5 caught at implementer-review pauses; both adjudicated 1.A (insert mini-task; close gap in current plan). Plan-doc 7 tasks → actual 9 work units mirrors Plan 22's pattern (17 + 3 mini-fixes) at smaller scale. See lessons.md Plan 24 closure section for the canonical "feature plans of size ≥6 budget +1-2 mini-fix-ups" rule.
+
+**Verification receipts:**
+- `unset VIRTUAL_ENV && PYTHONPATH=...:packages/brain_core/src:... uv run python scripts/demo-plan-24.py` → 15 gates pass, final line `PLAN 24 DEMO OK`.
+- brain_core full suite via the chflags recipe (`feedback_uv_uf_hidden.md`): 1234 passed + 5 skipped.
+- Frontend per-task verification: `pnpm vitest run` + `pnpm tsc --noEmit` (per `feedback_tsc_vs_vitest.md`) both clean.
+
+**Tag:** `plan-24-docx-pptx-ingest` cut on green demo (lightweight tag; no push per D8 until user authorization).
+
+**Backlog forward (Plan 25 candidate scope):** See the §"Plan 25 candidate scope" section above and `tasks/todo.md` tail. 22 items total (16 Plan 22 carry-forward + 6 NEW Plan-24-surfaced); priority ordered per CLAUDE.md "thoughtfulness > speed" with NEW signals first.
 
 ---
 
