@@ -84,6 +84,8 @@ class IngestPipeline:
         allowed_domains: tuple[str, ...],
         domain_override: str | None = None,
         apply: bool = True,
+        source_path: Path | None = None,
+        watched_folder_id: str | None = None,
     ) -> IngestResult:
         """Full 9-stage source-to-wiki pipeline.
 
@@ -112,6 +114,27 @@ class IngestPipeline:
                 or staging it via ``PendingPatchStore.put(...)``. Status paths
                 other than OK (SKIPPED_DUPLICATE / QUARANTINED / FAILED) are
                 unaffected by this flag — they never produce a patchset.
+            source_path: Plan 22 T10.5. Optional absolute path on disk of
+                the local source file being ingested. When set, the source
+                note's frontmatter carries ``source_path`` (resolved string
+                form) — required for T6 ``WatchedFolderWatcher`` lookup so
+                subsequent modify/delete events can re-ingest the SAME note
+                (via :meth:`update_source`) or mark it orphaned (via
+                :meth:`mark_orphaned`). Callers that ingest URL / paste /
+                direct-text content MUST leave this ``None`` — the field is
+                spec-defined as "only set when ingestion came from a local
+                file" (per :class:`brain_core.vault.frontmatter.Frontmatter`).
+                Default ``None`` preserves pre-T10.5 behavior for all
+                non-watched-folder call sites (drag-drop, MCP ingest tool,
+                bulk import without watch context).
+            watched_folder_id: Plan 22 T10.5. Optional ``WatchedFolder.path``
+                string identifying the watched folder that triggered this
+                ingest. When set, the source note's frontmatter carries
+                ``watched_folder_id`` — required for T6
+                ``WatchedFolderWatcher._index_vault_for_folder`` to filter
+                vault notes back to their originating watched folder.
+                Default ``None`` preserves pre-T10.5 behavior for all
+                non-watched-folder call sites.
         """
         now = datetime.now(tz=UTC)
 
@@ -195,7 +218,13 @@ class IngestPipeline:
             summary, summarize_cost = await self._summarize(extracted, domain=domain)
             run_cost += summarize_cost
 
-            # Stage 7: Build source note — recompute slug with summary title
+            # Stage 7: Build source note — recompute slug with summary title.
+            # Plan 22 T10.5: thread the optional watched-context kwargs so
+            # the source note's frontmatter carries ``source_path`` +
+            # ``watched_folder_id`` when the caller (T5 bulk import via
+            # ``brain_watch_folder``, T6 :class:`WatchedFolderWatcher`)
+            # supplied them. Non-watched-folder callers pass ``None`` and
+            # the frontmatter shape is unchanged from pre-T10.5.
             slug = self._slug_for(spec, title=summary.title)
             note_path, note_content = self._build_source_note(
                 extracted=extracted,
@@ -204,6 +233,8 @@ class IngestPipeline:
                 chash=chash,
                 now=now,
                 slug=slug,
+                source_path=source_path,
+                watched_folder_id=watched_folder_id,
             )
 
             # Stage 8: Integrate → PatchSet; prepend source note
@@ -1159,6 +1190,8 @@ class IngestPipeline:
         chash: str,
         now: datetime,
         slug: str,
+        source_path: Path | None = None,
+        watched_folder_id: str | None = None,
     ) -> tuple[Path, str]:
         """Build the canonical source note: frontmatter + structured markdown body.
 
@@ -1168,6 +1201,9 @@ class IngestPipeline:
         Frontmatter fields written:
             title, domain, type=source, created, updated, source_type,
             source_url, content_hash, ingested_by
+            (+ ``source_path`` when ``source_path`` is not None — Plan 22 T10.5)
+            (+ ``watched_folder_id`` when ``watched_folder_id`` is not None
+             — Plan 22 T10.5)
 
         Body sections (markdown):
             # <title>
@@ -1182,6 +1218,16 @@ class IngestPipeline:
             - ...
 
         Empty lists render as `_(none)_`.
+
+        Plan 22 T10.5 contract: when ``source_path`` is set, the resulting
+        note's frontmatter carries the resolved absolute-path string
+        (``str(source_path.resolve())``), mirroring T2's :meth:`update_source`
+        convention. When ``watched_folder_id`` is set, the frontmatter
+        carries that string verbatim. These are the two fields T6's
+        :func:`_index_vault_for_folder` filters on to map a source-path
+        event back to its vault note — without them, the watcher's modify
+        path falls through to :meth:`ingest` (creating a duplicate) and
+        delete events silently no-op.
         """
         note_path = self.vault_root / domain / "sources" / f"{slug}.md"
         fm: dict[str, object] = {
@@ -1195,6 +1241,23 @@ class IngestPipeline:
             "content_hash": chash,
             "ingested_by": "brain",
         }
+        # Plan 22 T10.5: thread the watched-context fields when provided.
+        # We omit the keys entirely when the kwargs are ``None`` so that
+        # serialized YAML for non-watched-folder ingests stays byte-identical
+        # to the pre-T10.5 shape (`Frontmatter.from_dict` reads a missing
+        # key as ``None`` anyway, so the consumer contract is unchanged).
+        if source_path is not None:
+            try:
+                fm["source_path"] = str(source_path.resolve())
+            except OSError:
+                # ``resolve()`` can raise on a permission-denied parent on
+                # some platforms. Fall back to the raw path string — the
+                # downstream consumer (T6 watcher) does its own
+                # ``.resolve()`` on lookup so an unresolved value is
+                # tolerated.
+                fm["source_path"] = str(source_path)
+        if watched_folder_id is not None:
+            fm["watched_folder_id"] = watched_folder_id
         body = _render_source_body(summary=summary)
         content = serialize_with_frontmatter(fm, body=body)
         return note_path, content

@@ -177,6 +177,7 @@ class BulkImporter:
         *,
         allowed_domains: tuple[str, ...],
         domain_override: str | None = None,
+        watched_folder_id: str | None = None,
     ) -> list[IngestResult]:
         """Run `IngestPipeline.ingest` for each item in the plan, in order.
 
@@ -190,16 +191,47 @@ class BulkImporter:
         classifier work done during ``plan()`` is thrown away and every item
         gets re-classified inside ``ingest()``.
 
+        Plan 22 T10.5: when ``watched_folder_id`` is provided, every per-item
+        ``pipeline.ingest`` call receives BOTH the per-item ``source_path``
+        (derived from ``item.spec``, which is always a local file path —
+        the dispatcher gate runs at :meth:`plan` time) AND the shared
+        ``watched_folder_id``. The resulting source notes therefore carry
+        the frontmatter fields T6's :class:`WatchedFolderWatcher` lookup
+        depends on. When ``watched_folder_id`` is ``None`` (the default,
+        for bulk-import without watch context — drag-drop, the standalone
+        ``brain_bulk_import`` tool), no ``source_path`` is threaded either:
+        non-watched-folder bulk imports remain spec-clean per
+        :class:`brain_core.vault.frontmatter.Frontmatter` (the field is
+        defined as "only set when ingestion came from a local file" — bulk
+        imports DO satisfy that, but absent a watched-folder linkage we
+        preserve the pre-T10.5 shape to avoid surfacing the path on notes
+        that have no folder to link back to). A future plan can flip this
+        if bulk-import-only ``source_path`` becomes useful.
+
         Returns a list of IngestResult in the same order as plan.items. Does
         NOT short-circuit on FAILED items — each item is independent.
         """
         results: list[IngestResult] = []
         for item in plan.items:
             effective_override = domain_override or item.classified_domain
-            result = await self._pipeline.ingest(
-                item.spec,
-                allowed_domains=allowed_domains,
-                domain_override=effective_override,
-            )
+            # Plan 22 T10.5: thread the per-item source path AND the shared
+            # watched_folder_id ONLY when the caller signaled a watched-
+            # folder context (watched_folder_id is not None). This keeps
+            # non-watched-folder bulk imports byte-identical to pre-T10.5
+            # frontmatter shape.
+            if watched_folder_id is not None:
+                result = await self._pipeline.ingest(
+                    item.spec,
+                    allowed_domains=allowed_domains,
+                    domain_override=effective_override,
+                    source_path=item.spec,
+                    watched_folder_id=watched_folder_id,
+                )
+            else:
+                result = await self._pipeline.ingest(
+                    item.spec,
+                    allowed_domains=allowed_domains,
+                    domain_override=effective_override,
+                )
             results.append(result)
         return results

@@ -472,7 +472,15 @@ class WatchedFolderWatcher:
     def _handle_create(
         self, event: FileCreatedEvent, folder: WatchedFolder
     ) -> None:
-        """Create event → :meth:`IngestPipeline.ingest` with domain override."""
+        """Create event → :meth:`IngestPipeline.ingest` with domain override.
+
+        Plan 22 T10.5: thread ``source_path`` + ``watched_folder_id``
+        into the ingest call so the resulting source note's frontmatter
+        carries the lookup keys :meth:`_find_note_by_source_path` filters
+        on. Without these, every subsequent modify event would fall
+        through to a duplicate ingest and every delete event would
+        silently no-op.
+        """
         src = Path(str(event.src_path))
         if not _any_handler_claims(src, handlers=self._handlers):
             return
@@ -481,6 +489,8 @@ class WatchedFolderWatcher:
                 spec=src,
                 allowed_domains=self._allowed_domains,
                 domain_override=folder.domain,
+                source_path=src,
+                watched_folder_id=folder.path,
             )
         )
 
@@ -494,18 +504,28 @@ class WatchedFolderWatcher:
         first event we saw was a modify, not a create), there is no
         matching vault note yet. Treating it as an ingest covers that
         gap without requiring the user to manually re-trigger.
+
+        Plan 22 T10.5: the fall-through ingest path also passes
+        ``source_path`` + ``watched_folder_id`` so a "first-event-is-
+        modify" recovery still produces a watched-context note. Without
+        this, every modify-as-first-event would re-trigger duplicate
+        ingestion on the NEXT modify.
         """
         src = Path(str(event.src_path))
         if not _any_handler_claims(src, handlers=self._handlers):
             return
         note_path = self._find_note_by_source_path(src, folder=folder)
         if note_path is None:
-            # No vault counterpart — treat as a new ingest.
+            # No vault counterpart — treat as a new ingest. Plan 22
+            # T10.5: thread the watched-context kwargs so the resulting
+            # note is discoverable on the NEXT modify event.
             self._schedule_async(
                 self._pipeline.ingest(
                     spec=src,
                     allowed_domains=self._allowed_domains,
                     domain_override=folder.domain,
+                    source_path=src,
+                    watched_folder_id=folder.path,
                 )
             )
             return

@@ -332,10 +332,17 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             allowed_domains=ctx.allowed_domains,
             domain_override=domain,
         )
+        # Plan 22 T10.5: pass ``watched_folder_id`` so each per-item
+        # ingest writes ``source_path`` + ``watched_folder_id`` frontmatter
+        # — the lookup keys T6 :class:`WatchedFolderWatcher` needs for
+        # subsequent modify (route to :meth:`update_source`) and delete
+        # (route to :meth:`mark_orphaned`) events. The folder's absolute
+        # path string IS the watched_folder_id per Plan 22 D1.
         results = await importer.apply(
             plan,
             allowed_domains=ctx.allowed_domains,
             domain_override=domain,
+            watched_folder_id=folder_str,
         )
 
         applied = sum(1 for r in results if r.status is IngestStatus.OK)
