@@ -603,9 +603,125 @@ task).
 
 ## T2 audit findings
 
-_Filled in at T2 close. Markdown table with columns: Wrapper | Line |
-Root call (or callTool) | Wrapper return type | Root return type | Verdict
-(OK-PROPAGATES / OK-NARROW-INTENTIONAL / DRIFT-HARDCODED) | Notes._
+Closed 2026-05-12. Surface enumerated at `apps/brain_web/src/lib/api/tools.ts`
+current main HEAD. Single-line grep recipe (`grep -nE "Promise<ToolResponse<"`)
+returned 21 lines (matches plan-doc authoring-time count), but multi-line
+return-type declarations push the **actual wrapper count to 45** (38 root +
+7 wrapper-fanout). Plan-doc's "21" figure was a single-line-grep artefact;
+exec-time re-derivation per D4 surfaces the true count. The non-wrapper
+exports `AUTONOMY_CATEGORIES` (l. 786) and `ALL_TOOL_NAMES` (l. 1246) are
+read-only tuples and out of scope.
+
+### Verdict summary
+
+| Verdict | Count |
+|---------|-------|
+| **OK-PROPAGATES** (wrapper-fanout sharing explicit `ToolResponse<Foo>` alias with root) | 7 |
+| **OK-NARROW-INTENTIONAL** (root calling `callTool(...)` directly with explicit shape) | 38 |
+| **DRIFT-HARDCODED** | **0** |
+| **INVESTIGATE** | 0 |
+| **TOTAL** | 45 |
+
+**Plan 19 T4's 7-wrapper drift class is fully closed.** All 7 `configSet`-routed
+wrappers (`setDomainOverride`, `setPrivacyRailed`, `setDomainBudget`,
+`setDomainRateLimit`, `setDomainAutonomy`, `setActiveDomain`,
+`setCrossDomainWarningAcknowledged`) now declare
+`Promise<ToolResponse<ConfigSetData>>` — identical to `configSet`'s root
+return type — via the shared explicit named alias `ConfigSetData` (defined
+once at l. 628-634, referenced by `configSet` at l. 639 + each wrapper).
+Per the verdict guidance, this is OK-PROPAGATES — the wrappers share an
+explicit alias with the root, so IDE hover/auto-complete at any of the 8
+sites surfaces the same five-field shape (`status`, `key`, `value`,
+`persisted`, `note`). No DRIFT-HARDCODED rows surfaced across the broader
+38-root surface either; every root wrapper is intentionally narrow per the
+"wrapper IS the typed surface" design.
+
+### Findings table
+
+| Wrapper | Line | Root call | Wrapper return type | Root return type | Verdict | Notes |
+|---------|-----:|-----------|---------------------|------------------|---------|-------|
+| `listDomains` | 100 | `callTool` (l. 107) | `ToolResponse<{ domains, entries?, active_domain? }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape. Plan 10/11 added optional fields. |
+| `getIndex` | 123 | `callTool` (l. 132) | `ToolResponse<{ domain, frontmatter, body }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.2 narrowed to backend shape. |
+| `readNote` | 139 | `callTool` (l. 148) | `ToolResponse<{ path, frontmatter, body }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape. |
+| `search` | 155 | `callTool` (l. 158) | `ToolResponse<{ hits: SearchHit[], top_k_used }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `SearchHit` interface. |
+| `recent` | 171 | `callTool` (l. 174) | `ToolResponse<{ items: RecentEntry[], limit_used }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 19 T4.1 widened to include `limit_used`. |
+| `listThreads` | 189 | `callTool` (l. 192) | `ToolResponse<{ threads: ChatThreadEntry[] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `ChatThreadEntry` interface. |
+| `exportThread` | 197 | `callTool` (l. 209) | `ToolResponse<{ thread_id, path, domain, markdown, filename, byte_length }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape (Issue #17). |
+| `getBrainMd` | 228 | `callTool` (l. 231) | `ToolResponse<{ exists, body }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.3 narrowed to backend shape. |
+| `ingest` | 263 | `callTool` (l. 268) | `ToolResponse<IngestResultData>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `IngestResultData` discriminated union (l. 253). |
+| `classify` | 271 | `callTool` (l. 281) | `ToolResponse<{ domain, confidence, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape with escape hatch. |
+| `bulkImport` | 336 | `callTool` (l. 341) | `ToolResponse<BulkImportData>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `BulkImportData` discriminated union (l. 319). |
+| `proposeNote` | 356 | `callTool` (l. 363) | `ToolResponse<{ status, patch_id, target_path }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 19 T4.2 widened to include `status`. |
+| `listPendingPatches` | 379 | `callTool` (l. 382) | `ToolResponse<{ count, patches: PendingPatch[] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 19 T4.3 widened to include `count`. |
+| `getPendingPatch` | 394 | `callTool` (l. 402) | `ToolResponse<{ envelope, patchset }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — opaque `Record<string, unknown>` payload shape. |
+| `applyPatch` | 408 | `callTool` (l. 418) | `ToolResponse<{ patch_id, undo_id, applied_files, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape with escape hatch. |
+| `rejectPatch` | 438 | `callTool` (l. 444) | `ToolResponse<{ status: "rejected", patch_id, reason }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.6 narrowed to backend shape. |
+| `undoLast` | 472 | `callTool` (l. 475) | `ToolResponse<UndoLastData>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `UndoLastData` discriminated union (l. 468). |
+| `costReport` | 496 | `callTool` (l. 504) | `ToolResponse<{ today_usd, month_usd, by_domain, by_mode }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.8 narrowed to backend shape. |
+| `lint` | 526 | `callTool` (l. 529) | `ToolResponse<{ status, message }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.4 narrowed to stub-reality shape. |
+| `configGet` | 532 | `callTool` (l. 535) | `ToolResponse<{ key, value }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape; read-only counterpart to `configSet`. |
+| `repairConfig` | 582 | `callTool` (l. 583) | `ToolResponse<RepairConfigData>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `RepairConfigData` interface (l. 569). |
+| `repairConfigApply` | 593 | `callTool` (l. 598) | `ToolResponse<{ status, path, config_version }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape. |
+| `configSet` | 636 | `callTool` (l. 640) | `ToolResponse<ConfigSetData>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `ConfigSetData` interface (l. 628). Plan 19 T4.4 widened to include `status`/`persisted`/`note`. **Spot-check root for the 7 fanout rows below.** |
+| `setDomainOverride` | 663 | `configSet` (l. 668) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Shares explicit `ConfigSetData` alias with root. Plan 19 T4 closure verified — was DRIFT-HARDCODED pre-`7cd2b72`, now aligned. |
+| `setPrivacyRailed` | 680 | `configSet` (l. 683) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Shares explicit `ConfigSetData` alias. Plan 19 T4 closure verified. |
+| `setDomainBudget` | 714 | `configSet` (l. 718) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Whole-`BudgetCap`-payload semantics (see docstring l. 699-713). Plan 19 T4 closure verified. |
+| `setDomainRateLimit` | 756 | `configSet` (l. 761) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Whole-`RateLimitOverride`-payload semantics. Plan 19 T4 closure verified. |
+| `setDomainAutonomy` | 812 | `configSet` (l. 817) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Per-leaf semantics (one Switch = one wrapper call). Plan 19 T4 closure verified. |
+| `setActiveDomain` | 832 | `configSet` (l. 835) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Self-documenting wrapper around `configSet({key:"active_domain", value:slug})`. Plan 19 T4 closure verified. |
+| `setCrossDomainWarningAcknowledged` | 850 | `configSet` (l. 853) | `ToolResponse<ConfigSetData>` | `ToolResponse<ConfigSetData>` (l. 639) | OK-PROPAGATES | Wrapper-fanout. Self-documenting wrapper for the cross-domain-modal acknowledgment flag. Plan 19 T4 closure verified. |
+| `recentIngests` | 865 | `callTool` (l. 868) | `ToolResponse<{ ingests: RecentIngestEntry[] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.1 renamed outer key `items` → `ingests`. |
+| `createDomain` | 882 | `callTool` (l. 893) | `ToolResponse<{ status: "created", domain: {slug, name, accent_color}, note }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.10 narrowed to backend-nested shape. |
+| `renameDomain` | 900 | `callTool` (l. 912) | `ToolResponse<{ from, to, files_updated, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape with escape hatch. |
+| `budgetOverride` | 936 | `callTool` (l. 947) | `ToolResponse<{ status: "override_set", override_until, override_delta_usd, note }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — Plan 18 T3.11 narrowed to backend shape. |
+| `forkThread` | 962 | `callTool` (l. 969) | `ToolResponse<{ new_thread_id }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline single-field shape. |
+| `brainMcpInstall` | 980 | `callTool` (l. 995) | `ToolResponse<{ status, config_path, backup_path, server_name, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape with escape hatch. |
+| `brainMcpUninstall` | 1007 | `callTool` (l. 1018) | `ToolResponse<{ status, config_path, backup_path?, server_name, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape; `backup_path` optional vs install. |
+| `brainMcpStatus` | 1030 | `callTool` (l. 1044) | `ToolResponse<{ status, config_path, config_exists, entry_present, executable_resolves, command, server_name, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape (7 fields + extra). |
+| `brainMcpSelftest` | 1060 | `callTool` (l. 1075) | `ToolResponse<{ status, ok, config_exists, entry_present, executable_resolves, command, config_path, server_name, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape (8 fields + extra). |
+| `brainSetApiKey` | 1094 | `callTool` (l. 1107) | `ToolResponse<{ status, provider, env_key, masked, path, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape; plaintext key NEVER echoed. |
+| `brainPingLlm` | 1122 | `callTool` (l. 1134) | `ToolResponse<{ ok, provider, model, latency_ms, error?, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape; failures returned in envelope. |
+| `brainBackupCreate` | 1156 | `callTool` (l. 1170) | `ToolResponse<{ status, backup_id, path, trigger, created_at, size_bytes, file_count, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape (7 fields + extra). |
+| `brainBackupList` | 1182 | `callTool` (l. 1184) | `ToolResponse<{ backups: BackupEntry[] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — references `BackupEntry` interface (l. 1145). |
+| `brainBackupRestore` | 1191 | `callTool` (l. 1202) | `ToolResponse<{ status, backup_id, trash_path, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape; requires `typed_confirm=true`. |
+| `brainDeleteDomain` | 1216 | `callTool` (l. 1229) | `ToolResponse<{ status, slug, trash_path, files_moved, undo_id, [extra] }>` | n/a (root) | OK-NARROW-INTENTIONAL | Root — explicit inline shape; requires `typed_confirm=true`. |
+
+### Surface count → T3 scope decision
+
+**0 DRIFT-HARDCODED rows.** Per D2's audit-then-size shape, T3's tiered
+`AskUserQuestion` will surface a zero-fix branch (option 2.C "Defer all"
+becomes the structural default — there's nothing to fix). Plan 19 T4's
+commit `7cd2b72` already aligned the 7 known wrappers, and the broader
+38-root surface has zero rows where TS covariance was masking
+narrower-than-root return types. The 4-task Plan 20 budget closes cleanly
+with T3 as a zero-fix closure plus a pointer-to-this-section receipt.
+
+### Reproducibility
+
+For any row above, the verdict can be re-derived in <30 seconds via:
+
+1. Open `apps/brain_web/src/lib/api/tools.ts` to the cited wrapper line.
+2. Inspect the body (`callTool` = root, anything else = fanout).
+3. For fanouts: open the root function's line, compare the return-type
+   declarations character-by-character.
+4. For the 7 OK-PROPAGATES rows: each wrapper's return type is
+   `Promise<ToolResponse<ConfigSetData>>` (matches `configSet`'s line 639
+   declaration exactly).
+
+Spot-check seeds (for reviewer's 2-3-row sampling):
+
+- **`setActiveDomain` (l. 832)** — wrapper body at l. 835 is
+  `configSet({ key: "active_domain", value: slug })`; root return type at
+  l. 639 is `Promise<ToolResponse<ConfigSetData>>`; wrapper return type at
+  l. 834 is also `Promise<ToolResponse<ConfigSetData>>`. Match. Verdict
+  OK-PROPAGATES.
+- **`brainBackupList` (l. 1182)** — wrapper body at l. 1184 is
+  `callTool<{ backups: BackupEntry[] }>("brain_backup_list")`; no
+  intermediate fanout. Verdict OK-NARROW-INTENTIONAL.
+- **`bulkImport` (l. 336)** — wrapper body at l. 341 is
+  `callTool<BulkImportData>("brain_bulk_import", args)`; references the
+  `BulkImportData` discriminated union (l. 319). Root, explicit alias.
+  Verdict OK-NARROW-INTENTIONAL.
 
 ## T3 outcome
 
