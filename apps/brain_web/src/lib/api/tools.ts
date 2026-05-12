@@ -1349,6 +1349,62 @@ export const unwatchFolder = (args: {
 }): Promise<ToolResponse<UnwatchFolderData>> =>
   callTool<UnwatchFolderData>("brain_unwatch_folder", args);
 
+/**
+ * ``brain_resync_folder`` ``ToolResult.data`` shape. Pinned by
+ * ``packages/brain_core/tests/tools/test_resync_folder.py`` —
+ * ``test_data_shape_pin_empty_folder`` asserts the exact key set
+ * (``status / folder / summary``) with the four summary counts
+ * (``updated`` / ``no_change`` / ``newly_orphaned`` /
+ * ``restored_from_orphan``). Drift on either side fails RED on the
+ * Python pin, so the TS interface stays in lock-step with the wire
+ * shape.
+ *
+ * Single branch on success (``status: "resynced"``). Failure modes
+ * (relative-path / missing-folder / unwatched-folder) raise exceptions
+ * server-side, not alternate-shape error branches — the wrapper
+ * surfaces them as :class:`ApiError` rejections (Plan 22 T12 fix-up
+ * docs the matching toast at the panel's call site).
+ *
+ *  - ``updated`` — vault notes whose source file changed since the
+ *    last sync; content overwritten this run.
+ *  - ``no_change`` — vault notes whose source file content_hash
+ *    matched the cached value; skipped.
+ *  - ``newly_orphaned`` — vault notes whose source file disappeared
+ *    since the last sync; frontmatter ``orphaned: true`` flipped on.
+ *  - ``restored_from_orphan`` — vault notes that were previously
+ *    orphaned but whose source file reappeared; orphan flag cleared.
+ */
+export interface ResyncFolderData {
+  status: "resynced";
+  folder: string;
+  summary: {
+    updated: number;
+    no_change: number;
+    newly_orphaned: number;
+    restored_from_orphan: number;
+  };
+}
+
+/**
+ * Force a re-walk + re-ingest of every file under a watched folder
+ * (Plan 22 T5). Updates vault notes whose source content_hash changed,
+ * flags as orphan any vault note whose source file disappeared, and
+ * restores the orphan flag on notes whose source reappeared.
+ *
+ * The Settings → Watched folders panel calls this from the row's
+ * "Resync now" action (Plan 22 T12 fix-up — the earlier T12 mistakenly
+ * disabled the button on the false claim that the backend tool didn't
+ * ship in T5; it did. Wiring is now correct).
+ *
+ * Refuses non-absolute paths, missing paths, or paths that aren't in
+ * :attr:`Config.watched_folders` (server-side ``ValueError`` /
+ * ``FileNotFoundError`` — surfaced as :class:`ApiError` rejections).
+ */
+export const resyncFolder = (args: {
+  folder: string;
+}): Promise<ToolResponse<ResyncFolderData>> =>
+  callTool<ResyncFolderData>("brain_resync_folder", args);
+
 // ---------- registry ----------
 
 /**
@@ -1406,15 +1462,18 @@ export const ALL_TOOL_NAMES = [
   // Plan 16 Task 33 — Settings Repair-config dialog (diagnostic + apply).
   "brain_repair_config",
   "brain_repair_config_apply",
-  // Plan 22 — Watched folders (live source → vault sync). Only the two
-  // read/write tools the Settings panel (T12) consumes are wired here.
+  // Plan 22 — Watched folders (live source → vault sync). T12 wired the
+  // panel-facing read + unwatch tools; the T12 fix-up wires
+  // ``brain_resync_folder`` (the prior T12 mistakenly disabled the
+  // "Resync now" button on the false claim that the backend handler
+  // didn't ship in T5; it did — see
+  // ``packages/brain_core/src/brain_core/tools/resync_folder.py``).
   // ``brain_watch_folder`` is wired in T15 (watch-enable modal) and
-  // ``brain_resync_folder`` / ``brain_list_orphans`` / ``brain_restore_orphan``
-  // / ``brain_delete_orphan`` are wired in T13 (Orphans panel) and a
-  // later resync follow-up (the resync handler did not ship in T5 —
-  // tracked as Plan 22 / Plan 23 candidate).
+  // ``brain_list_orphans`` / ``brain_restore_orphan`` /
+  // ``brain_delete_orphan`` are wired in T13 (Orphans panel).
   "brain_list_watched_folders",
   "brain_unwatch_folder",
+  "brain_resync_folder",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];

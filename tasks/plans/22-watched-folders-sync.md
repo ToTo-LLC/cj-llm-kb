@@ -2757,6 +2757,140 @@ modal.
   `feedback_tsc_vs_vitest.md` is satisfied — both vitest and tsc were
   run after every save; neither leaked an error.
 
+## T12 fix-up outcome
+
+**Status:** ✅ DONE.
+
+**Why a fix-up?** The original T12 outcome (above) flagged the "Resync
+now" button as a placeholder, claiming `brain_resync_folder` "did not
+ship in T5." This was a false negative: the handler exists at
+`packages/brain_core/src/brain_core/tools/resync_folder.py` (276 LOC),
+is registered in `packages/brain_core/src/brain_core/tools/__init__.py:107`,
+appears in `brain_core.tools.list_tools()` (the registry returns 45
+tools including `brain_resync_folder`), and has its INPUT_SCHEMA +
+`ToolResult.data` shape pinned by
+`packages/brain_core/tests/tools/test_resync_folder.py`. T12 shipped a
+disabled button + "Coming soon" tooltip on a feature that was already
+ready to wire. The fix-up wires it correctly.
+
+**Files modified:**
+
+- `apps/brain_web/src/lib/api/tools.ts` — added `ResyncFolderData`
+  named interface (mirrors Plan 19 T4 + Plan 22 T12 pattern; the
+  Python pin in `test_resync_folder.py` `test_data_shape_pin_empty_folder`
+  fails RED on drift). Added `resyncFolder` typed wrapper. Registered
+  `brain_resync_folder` in `ALL_TOOL_NAMES`. Updated the registry
+  comment block to remove the "did not ship in T5" claim and reflect
+  the fix-up wiring. Tool count: 40 → 41.
+- `apps/brain_web/src/lib/state/watched-folders-store.ts` — added the
+  `resyncFolder(folder)` action. Resolve-rejects semantics (unlike
+  the `refresh()` action's resolve-always — callers await the result
+  to drive the per-row spinner + toast lifecycle). On success the
+  store fires a follow-up `void refresh()` so any row stats
+  invalidated by the resync (file_count, orphan_count, last_sync)
+  reconcile with the canonical backend list. Errors are propagated
+  to the caller's catch arm rather than landed on `error` state
+  (which is reserved for `refresh()` failures the inline banner reads).
+- `apps/brain_web/src/components/settings/panel-watched-folders.tsx` —
+  replaced the disabled "Resync now" button + "Coming soon" tooltip
+  with a fully-wired button. While in flight: button is disabled,
+  `aria-busy="true"`, `aria-label` swaps to "Resyncing &lt;path&gt;,
+  please wait" (mockup §"Accessibility annotations"), label swaps to
+  "Syncing…" + spinner replaces the icon (mockup §"Mutation in-flight
+  state"). The sibling Unwatch action on the same row also disables
+  during a resync so the user can't queue a competing mutation.
+  Per-row in-flight tracking uses a `Set` keyed by path (not a
+  boolean) so concurrent resyncs on different rows don't trample
+  each other's spinner. Success toast: lead "Resync complete.", msg
+  surfaces all four backend summary counts (`updated` / `no_change` →
+  "unchanged" / `newly_orphaned` / `restored_from_orphan` →
+  "restored"). Failure toast: lead "Resync failed.", msg from
+  error.message. Updated the panel docstring to reflect the wire-up.
+- `apps/brain_web/tests/unit/panel-watched-folders.test.tsx` — added
+  the `resyncFolderMock` hoisted factory + mock factory entry; added
+  `resyncFolderMock.mockReset()` to `beforeEach`. Added a new
+  `describe` block "PanelWatchedFolders — Resync action (T12 fix-up)"
+  with 5 tests (the prior file had NO resync coverage — the original
+  T12 didn't write a disabled-assertion test for it):
+    1. Button is NOT disabled when a row is present + has no
+       `aria-busy` at rest.
+    2. Clicking Resync calls `brain_resync_folder({folder})` with the
+       row's path.
+    3. In-flight state asserts: button disabled, `aria-busy="true"`,
+       `aria-label="Resyncing /p/A, please wait"`, label is
+       "Syncing…", sibling Unwatch button also disabled. After
+       resolve, button re-enables and label returns to "Resync now".
+    4. Success toast carries all four backend summary fields verbatim
+       in the message.
+    5. Failure path: danger toast with the error message; spinner
+       clears via the `finally` arm.
+  Plus a docstring entry (#9) describing the new coverage.
+- `apps/brain_web/tests/unit/api-client.test.ts` — bumped tool-count
+  pin from 40 → 41 and updated the comment trail to record the
+  fix-up addition.
+
+**Mock-default trap learned the hard way:** the first run of the new
+tests had 3 failures rooted in `mockResolvedValue()` being overwritten
+by a subsequent `mockResolvedValue()` for the same mock. The fix
+pattern is `mockResolvedValueOnce` for the mount-fetch followed by a
+default `mockResolvedValue` for the reconcile-refresh — same precedent
+as the existing "unwatch toast" test (line 412 onward). Documented in
+the test file's inline comments at the failure sites.
+
+**Verification gates:**
+
+- `pnpm vitest run tests/unit/panel-watched-folders.test.tsx`:
+  21/21 passing (was 16; +5 fix-up tests), 0.83s.
+- `pnpm vitest run` (full suite): 517 passing / 1 skipped, 6.07s
+  (was 512/1 in T12 outcome).
+- `pnpm tsc --noEmit`: exit 0. Per auto-memory
+  `feedback_tsc_vs_vitest.md`, both gates run; both clean.
+
+**What this fix-up did NOT address:**
+
+- "Open in Finder" button — still disabled with the "Coming soon"
+  tooltip. The OS-native open helper genuinely does not exist in the
+  codebase today (no `Integrations` module under `apps/brain_web/`,
+  and the brain backend doesn't ship an `open <path>` shim). Plan 23
+  candidate, unchanged from the original T12 §"Concerns" item #2.
+  This was confirmed before the fix-up started, not assumed.
+- "Include subfolders" checkbox — still disabled (T12 didn't wire
+  re-watch flow; the toggle is for visual rhythm only). Plan 22 T15
+  (watch-enable modal) is the canonical re-watch path; no change here.
+- The fix-up does NOT add an e2e test for the resync action — that's
+  T16's deliverable per the original task split.
+
+**Self-review:**
+
+- Backend contract match verified against
+  `packages/brain_core/tests/tools/test_resync_folder.py` lines 50-60
+  (INPUT_SCHEMA) and lines 88-118 (`ToolResult.data` shape pin).
+  Wire shape: `{folder: string}` in, `{status: "resynced", folder,
+  summary: {updated, no_change, newly_orphaned, restored_from_orphan}}`
+  out. TS interface mirrors exactly; drift on either side fails RED
+  on the Python pin.
+- Toast microcopy maps backend keys to user-facing words: `no_change`
+  → "unchanged", `restored_from_orphan` → "restored" — these are
+  small adaptations from the raw backend keys for readability. The
+  mockup §"Microcopy" line 166 specified an older keyset
+  (`checked / new / updated / marked_orphan`) that doesn't match the
+  shipped backend; the fix-up prefers backend reality and crafts
+  user-friendly terms from it. Documented in the panel's
+  `handleResync` callback for the next engineer.
+- Plan 19 T4 named-interface discipline honored: `ResyncFolderData`
+  exported from `tools.ts` rather than inlined at the wrapper site,
+  so a future backend shape change ripples through one type alias.
+- Per-row spinner state uses a `Set<string>` not a `boolean` so
+  concurrent resyncs on independent rows don't share the spinner
+  (defensive — the UI doesn't expose a way to start two
+  simultaneously today, but the data shape supports it without a
+  refactor when bulk-resync lands).
+- `aria-busy="true"` while syncing + reworded `aria-label` per
+  mockup §"Accessibility annotations" line 200. Static review only
+  (axe-core is T16's e2e deliverable).
+- Sibling action disable during resync prevents competing mutations
+  on the same row (mockup §"Mutation in-flight state" line 142).
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards

@@ -1,7 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { Eye, ExternalLink, FolderPlus, RotateCw, X } from "lucide-react";
+import {
+  Eye,
+  ExternalLink,
+  FolderPlus,
+  Loader2,
+  RotateCw,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -21,13 +28,15 @@ import { useWatchedFoldersStore } from "@/lib/state/watched-folders-store";
  *
  * Implements the mockup at ``docs/design/plan-22/watched-folders-settings.md``.
  * Reads watched-folder rows from :func:`useWatchedFoldersStore`; mutates
- * via :func:`unwatchFolder` (and, in T15, ``brain_watch_folder`` via the
- * watch-enable modal). The "Resync now" + "Open in Finder" affordances
- * are placeholders pending follow-up tooling (the backend
- * ``brain_resync_folder`` did not ship in T5 — tracked below; the
- * Integrations open-in-OS helper does not exist yet either). They render
- * as disabled buttons with tooltips so the visual rhythm of the row
- * matches the mockup; T15 + a future resync-handler task wire them up.
+ * via :func:`unwatchFolder` and :func:`resyncFolder` (and, in T15,
+ * ``brain_watch_folder`` via the watch-enable modal). The "Open in
+ * Finder" affordance is the only remaining placeholder — the
+ * Integrations open-in-OS helper does not exist yet (Plan 23 candidate).
+ * It renders as a disabled button with a tooltip so the visual rhythm
+ * of the row matches the mockup. Plan 22 T12 fix-up: the "Resync now"
+ * button is now fully wired (the original T12 mistakenly disabled it on
+ * the false claim that the backend handler didn't ship in T5; it did —
+ * ``packages/brain_core/src/brain_core/tools/resync_folder.py``).
  *
  * State management mirrors :func:`PanelDomains` (Plan 12 T5 / Plan 13
  * T2): single source of truth is the zustand store, first-mount
@@ -119,6 +128,11 @@ function subLineLabel(entry: WatchedFolderEntry): string {
 interface WatchedFolderRowProps {
   entry: WatchedFolderEntry;
   onUnwatch: (folder: string) => void;
+  onResync: (folder: string) => void;
+  /** Set ``true`` while a resync of THIS row is in flight (drives the
+   *  spinner + label swap + aria-busy + sibling-disable per mockup
+   *  §"Mutation in-flight state"). */
+  resyncing: boolean;
 }
 
 /**
@@ -126,16 +140,23 @@ interface WatchedFolderRowProps {
  * up via callback. Mirrors the ``PanelDomainsRow`` discipline so the
  * orchestrator owns optimistic updates + error reconciliation.
  *
- * The "Resync now" + "Open in Finder" buttons render as disabled
- * placeholders pending follow-up tooling — they hold their visual slot
- * in the mockup so the row's gravity stays right (without them the row
- * collapses to two actions and feels lopsided). Both surfaces will wire
- * up in a follow-up Plan 22 task (resync) / Plan 23 (Integrations
- * helper).
+ * The "Resync now" button is fully wired (Plan 22 T12 fix-up — the
+ * earlier T12 disabled it on the false claim that the backend handler
+ * didn't ship in T5; it did, see
+ * ``packages/brain_core/src/brain_core/tools/resync_folder.py``). While
+ * the resync is in flight the button shows a spinner + the label swaps
+ * to "Syncing…" and the sibling row actions disable per the mockup's
+ * §"Mutation in-flight state" annotation.
+ *
+ * The "Open in Finder" button remains a disabled placeholder — the
+ * Integrations open-in-OS helper genuinely does not exist yet (Plan 23
+ * candidate, see T12 outcome §"Concerns").
  */
 function WatchedFolderRow({
   entry,
   onUnwatch,
+  onResync,
+  resyncing,
 }: WatchedFolderRowProps): React.ReactElement {
   const subLine = subLineLabel(entry);
   const personalDomain = entry.domain === "personal";
@@ -216,7 +237,10 @@ function WatchedFolderRow({
 
         {/* Action row — "Include subfolders" checkbox, Resync, Open in
             Finder, Unwatch. Per the mockup's row-keyboard-order spec:
-            checkbox → resync → open → unwatch. */}
+            checkbox → resync → open → unwatch. Per §"Mutation in-flight
+            state": while a resync is in flight, the sibling actions
+            disable (``aria-disabled`` via ``disabled``) so the user
+            can't queue a competing mutation on the same row. */}
         <div className="flex flex-wrap items-center gap-3 pl-4">
           <span className="inline-flex items-center gap-1.5">
             <Checkbox
@@ -234,31 +258,36 @@ function WatchedFolderRow({
             </label>
           </span>
 
-          {/* Resync placeholder — backend ``brain_resync_folder`` did
-              not ship in T5; tooltip explains the disabled state so the
-              user understands it's intentional, not a UI bug. */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled
-                  data-testid={`watched-folder-resync-${entry.path}`}
-                  aria-label={`Resync now ${entry.path}`}
-                  className="h-7 gap-1 px-2 text-xs"
-                >
-                  <RotateCw className="h-3 w-3" />
-                  Resync now
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              Coming soon — manual resync ships in a follow-up.
-            </TooltipContent>
-          </Tooltip>
+          {/* Resync — fully wired (Plan 22 T12 fix-up). While syncing:
+              spinner replaces the icon, "Syncing…" label per mockup
+              §"Mutation in-flight state", ``aria-busy`` + reworded
+              ``aria-label`` so screen readers announce the in-flight
+              state correctly (mockup §"Accessibility annotations"). */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onResync(entry.path)}
+            disabled={resyncing}
+            aria-busy={resyncing}
+            data-testid={`watched-folder-resync-${entry.path}`}
+            aria-label={
+              resyncing
+                ? `Resyncing ${entry.path}, please wait`
+                : `Resync now ${entry.path}`
+            }
+            className="h-7 gap-1 px-2 text-xs"
+          >
+            {resyncing ? (
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCw className="h-3 w-3" aria-hidden="true" />
+            )}
+            {resyncing ? "Syncing…" : "Resync now"}
+          </Button>
 
-          {/* Open-in-Finder placeholder — no Integrations helper yet. */}
+          {/* Open-in-Finder placeholder — no Integrations helper yet
+              (Plan 23 candidate; T12 fix-up does NOT wire this — the
+              backend OS-open shim genuinely doesn't exist). */}
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
@@ -284,6 +313,7 @@ function WatchedFolderRow({
             variant="ghost"
             size="sm"
             onClick={() => onUnwatch(entry.path)}
+            disabled={resyncing}
             data-testid={`watched-folder-unwatch-${entry.path}`}
             aria-label={`Unwatch ${entry.path}`}
             className="ml-auto h-7 gap-1 px-2 text-xs text-red-400 hover:text-red-300"
@@ -356,9 +386,18 @@ export function PanelWatchedFolders(): React.ReactElement {
   const loaded = useWatchedFoldersStore((s) => s.loaded);
   const storeError = useWatchedFoldersStore((s) => s.error);
 
+  // Per-row in-flight tracking for resync. A Set (not boolean) so two
+  // concurrent resyncs on different rows don't trample each other's
+  // spinner state. Cleared via ``remove`` in ``finally`` so the row's
+  // spinner clears whether the API succeeds or fails. Plan 22 T12 fix-
+  // up — wires the previously-disabled "Resync now" button.
+  const [resyncingPaths, setResyncingPaths] = React.useState<Set<string>>(
+    () => new Set(),
+  );
+
   // First-mount fetch. Subsequent fetches fire after mutations
-  // (handleUnwatch) so the row list reconciles with the backend after
-  // every change.
+  // (handleUnwatch / handleResync) so the row list reconciles with the
+  // backend after every change.
   React.useEffect(() => {
     void useWatchedFoldersStore.getState().refresh();
   }, []);
@@ -401,6 +440,56 @@ export function PanelWatchedFolders(): React.ReactElement {
       }
     },
     [folders, pushToast],
+  );
+
+  const handleResync = React.useCallback(
+    async (folderPath: string) => {
+      // Per-row spinner via a Set keyed by path (concurrent resyncs on
+      // different rows don't trample). The store's ``resyncFolder``
+      // helper uses resolve-rejects semantics so the catch arm fires
+      // on backend failure; ``finally`` clears the spinner regardless.
+      setResyncingPaths((prev) => {
+        const next = new Set(prev);
+        next.add(folderPath);
+        return next;
+      });
+      try {
+        const data = await useWatchedFoldersStore
+          .getState()
+          .resyncFolder(folderPath);
+        // Success toast — mockup §microcopy specifies the exact
+        // template. The backend's summary keys (`updated`,
+        // `no_change`, `newly_orphaned`, `restored_from_orphan`) map
+        // to the mockup's user-facing names; we surface
+        // ``no_change`` as "unchanged" so the user can see the
+        // walk-complete signal even when nothing moved. The
+        // ``restored_from_orphan`` count is included so users who
+        // had files reappear see the recovery acknowledged.
+        const { updated, no_change, newly_orphaned, restored_from_orphan } =
+          data.summary;
+        pushToast({
+          lead: "Resync complete.",
+          msg:
+            `${updated} updated, ${no_change} unchanged, ` +
+            `${newly_orphaned} newly orphaned, ` +
+            `${restored_from_orphan} restored.`,
+          variant: "success",
+        });
+      } catch (err) {
+        pushToast({
+          lead: "Resync failed.",
+          msg: err instanceof Error ? err.message : "Unknown error.",
+          variant: "danger",
+        });
+      } finally {
+        setResyncingPaths((prev) => {
+          const next = new Set(prev);
+          next.delete(folderPath);
+          return next;
+        });
+      }
+    },
+    [pushToast],
   );
 
   return (
@@ -522,6 +611,8 @@ export function PanelWatchedFolders(): React.ReactElement {
                   key={entry.path}
                   entry={entry}
                   onUnwatch={(folder) => void handleUnwatch(folder)}
+                  onResync={(folder) => void handleResync(folder)}
+                  resyncing={resyncingPaths.has(entry.path)}
                 />
               ))}
             </ul>

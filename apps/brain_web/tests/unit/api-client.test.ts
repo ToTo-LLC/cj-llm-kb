@@ -132,7 +132,7 @@ describe("apiFetch", () => {
     expect((err as ApiError).code).toBe("unauthorized");
   });
 
-  test("per-tool bindings cover all 40 tools + hit same-origin /api path", async () => {
+  test("per-tool bindings cover all 41 tools + hit same-origin /api path", async () => {
     // Plan 08 Task 2: bindings target ``/api/tools/<name>`` directly
     // (no proxy prefix). Issue #18 brought the count to 35 by adding
     // ``brain_list_threads``; issue #17 brought it to 36 by adding
@@ -140,11 +140,15 @@ describe("apiFetch", () => {
     // adding ``brain_repair_config`` + ``brain_repair_config_apply``
     // for the Settings Repair-config dialog. Plan 22 T12 brought it to
     // 40 by adding ``brain_list_watched_folders`` + ``brain_unwatch_folder``
-    // for the Settings Watched-folders panel (the remaining 5 Plan 22
-    // tools — ``brain_watch_folder``, ``brain_resync_folder``,
-    // ``brain_list_orphans``, ``brain_restore_orphan``, ``brain_delete_orphan``
-    // — land with the modals + Orphans panel in T13 / T15).
-    expect(ALL_TOOL_NAMES.length).toBe(40);
+    // for the Settings Watched-folders panel. Plan 22 T12 fix-up
+    // brought it to 41 by adding ``brain_resync_folder`` (the original
+    // T12 mistakenly disabled the "Resync now" button on the false
+    // claim that the backend handler didn't ship in T5; it did — the
+    // fix-up wires it). The remaining 4 Plan 22 tools —
+    // ``brain_watch_folder``, ``brain_list_orphans``,
+    // ``brain_restore_orphan``, ``brain_delete_orphan`` — land with the
+    // modals + Orphans panel in T13 / T15.
+    expect(ALL_TOOL_NAMES.length).toBe(41);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "", data: { domains: ["research"] } }), {

@@ -26,6 +26,14 @@
  *      header-anchored CTA; the empty branch shows the centered
  *      empty-state CTA. Clicking either pushes the placeholder toast
  *      until T15 wires the watch-enable modal.
+ *   9. Resync action (T12 fix-up) — the per-row "Resync now" button is
+ *      wired to ``brain_resync_folder``; button is NOT disabled when
+ *      row data is present, calls the tool with the row's path, shows
+ *      a spinner + ``aria-busy`` while in flight, surfaces a success
+ *      toast with the backend's summary fields, and a danger toast on
+ *      backend failure. (The earlier T12 mistakenly disabled this
+ *      button on the false claim that the backend handler did not
+ *      ship in T5; it did. Plan 22 T12 fix-up wires it.)
  */
 
 import { describe, expect, test, beforeEach, vi } from "vitest";
@@ -35,10 +43,12 @@ import "@testing-library/jest-dom/vitest";
 
 // ---- Hoisted mock factories ----
 
-const { unwatchFolderMock, listWatchedFoldersMock } = vi.hoisted(() => ({
-  unwatchFolderMock: vi.fn(),
-  listWatchedFoldersMock: vi.fn(),
-}));
+const { unwatchFolderMock, listWatchedFoldersMock, resyncFolderMock } =
+  vi.hoisted(() => ({
+    unwatchFolderMock: vi.fn(),
+    listWatchedFoldersMock: vi.fn(),
+    resyncFolderMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/api/tools", async () => {
   const actual =
@@ -48,6 +58,7 @@ vi.mock("@/lib/api/tools", async () => {
     unwatchFolder: (...args: unknown[]) => unwatchFolderMock(...args),
     listWatchedFolders: (...args: unknown[]) =>
       listWatchedFoldersMock(...args),
+    resyncFolder: (...args: unknown[]) => resyncFolderMock(...args),
   };
 });
 
@@ -107,6 +118,7 @@ function primeListRejected(error: Error) {
 beforeEach(() => {
   unwatchFolderMock.mockReset();
   listWatchedFoldersMock.mockReset();
+  resyncFolderMock.mockReset();
   resetSystemStore();
   useWatchedFoldersStore.getState()._resetForTesting();
 });
@@ -526,6 +538,210 @@ describe("PanelWatchedFolders — Watch-new CTA placement", () => {
       expect(toasts).toHaveLength(1);
       expect(toasts[0].lead).toBe("Coming soon.");
       expect(toasts[0].msg).toContain("T15");
+    });
+  });
+});
+
+describe("PanelWatchedFolders — Resync action (T12 fix-up)", () => {
+  test("Resync button is NOT disabled when a row is present", async () => {
+    primeListResolved([makeEntry({ path: "/p/A", domain: "research" })]);
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
+    );
+    const btn = screen.getByTestId("watched-folder-resync-/p/A");
+    // The earlier T12 disabled this button with a "Coming soon"
+    // tooltip; the fix-up wires it. The button must be interactive at
+    // rest (only disabled while a resync is in flight).
+    expect(btn).not.toBeDisabled();
+    expect(btn).not.toHaveAttribute("aria-busy", "true");
+  });
+
+  test("clicking Resync calls brain_resync_folder with the row path", async () => {
+    const user = userEvent.setup();
+    // Order matters: ``mockResolvedValueOnce`` queue is consumed first
+    // for the mount fetch + post-resync reconcile fetch; falls through
+    // to the default ``mockResolvedValue`` after that. Same pattern as
+    // the unwatch toast test above. Critically: we must NOT call
+    // ``primeListResolved`` here because that uses ``mockResolvedValue``
+    // which would be overwritten by the empty-list default below.
+    listWatchedFoldersMock.mockResolvedValueOnce({
+      text: "",
+      data: {
+        folders: [
+          makeEntry({
+            path: "/Users/test/Notes/Research-Papers",
+            domain: "research",
+          }),
+        ],
+      },
+      isError: false,
+    });
+    listWatchedFoldersMock.mockResolvedValue({
+      text: "",
+      data: { folders: [] },
+      isError: false,
+    });
+    resyncFolderMock.mockResolvedValue({
+      text: "",
+      data: {
+        status: "resynced",
+        folder: "/Users/test/Notes/Research-Papers",
+        summary: {
+          updated: 4,
+          no_change: 138,
+          newly_orphaned: 0,
+          restored_from_orphan: 0,
+        },
+      },
+      isError: false,
+    });
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
+    );
+    await user.click(
+      screen.getByTestId(
+        "watched-folder-resync-/Users/test/Notes/Research-Papers",
+      ),
+    );
+    await waitFor(() =>
+      expect(resyncFolderMock).toHaveBeenCalledWith({
+        folder: "/Users/test/Notes/Research-Papers",
+      }),
+    );
+  });
+
+  test("Resync shows spinner + aria-busy + 'Syncing…' label while in flight", async () => {
+    const user = userEvent.setup();
+    primeListResolved([makeEntry({ path: "/p/A", domain: "research" })]);
+    // Hold the resync open so we can observe the in-flight state.
+    let resolveFn: ((v: unknown) => void) | undefined;
+    resyncFolderMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFn = resolve;
+        }),
+    );
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId("watched-folder-resync-/p/A"));
+    // In-flight state assertions per mockup §"Mutation in-flight state".
+    await waitFor(() => {
+      const btn = screen.getByTestId("watched-folder-resync-/p/A");
+      expect(btn).toBeDisabled();
+      expect(btn).toHaveAttribute("aria-busy", "true");
+      expect(btn).toHaveAttribute(
+        "aria-label",
+        "Resyncing /p/A, please wait",
+      );
+      expect(btn).toHaveTextContent("Syncing…");
+    });
+    // Sibling Unwatch on the same row must also disable during resync.
+    expect(screen.getByTestId("watched-folder-unwatch-/p/A")).toBeDisabled();
+    // Drain the promise so the test doesn't leak it. The reconcile-
+    // refresh after resync needs the row to STILL exist (the resync
+    // shouldn't remove the folder — just update its stats), so we
+    // queue the same single-row payload, not an empty list.
+    listWatchedFoldersMock.mockResolvedValueOnce({
+      text: "",
+      data: { folders: [makeEntry({ path: "/p/A", domain: "research" })] },
+      isError: false,
+    });
+    resolveFn?.({
+      text: "",
+      data: {
+        status: "resynced",
+        folder: "/p/A",
+        summary: {
+          updated: 0,
+          no_change: 0,
+          newly_orphaned: 0,
+          restored_from_orphan: 0,
+        },
+      },
+      isError: false,
+    });
+    // After resolve the spinner must clear.
+    await waitFor(() => {
+      const btn = screen.getByTestId("watched-folder-resync-/p/A");
+      expect(btn).not.toBeDisabled();
+      expect(btn).toHaveTextContent("Resync now");
+    });
+  });
+
+  test("Resync success toast includes summary counts from the backend", async () => {
+    const user = userEvent.setup();
+    // Don't call ``primeListResolved`` here — its default would be
+    // overwritten by the reconcile-refresh default below. Queue the
+    // mount fetch with ``mockResolvedValueOnce`` instead.
+    listWatchedFoldersMock.mockResolvedValueOnce({
+      text: "",
+      data: {
+        folders: [makeEntry({ path: "/p/A", domain: "research" })],
+      },
+      isError: false,
+    });
+    listWatchedFoldersMock.mockResolvedValue({
+      text: "",
+      data: { folders: [] },
+      isError: false,
+    });
+    resyncFolderMock.mockResolvedValue({
+      text: "",
+      data: {
+        status: "resynced",
+        folder: "/p/A",
+        summary: {
+          updated: 4,
+          no_change: 138,
+          newly_orphaned: 2,
+          restored_from_orphan: 1,
+        },
+      },
+      isError: false,
+    });
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId("watched-folder-resync-/p/A"));
+    await waitFor(() => {
+      const toasts = useSystemStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].lead).toBe("Resync complete.");
+      expect(toasts[0].variant).toBe("success");
+      // All four summary counts must surface in the message.
+      expect(toasts[0].msg).toContain("4 updated");
+      expect(toasts[0].msg).toContain("138 unchanged");
+      expect(toasts[0].msg).toContain("2 newly orphaned");
+      expect(toasts[0].msg).toContain("1 restored");
+    });
+  });
+
+  test("Resync failure pushes a danger toast with the error message", async () => {
+    const user = userEvent.setup();
+    primeListResolved([makeEntry({ path: "/p/A", domain: "research" })]);
+    resyncFolderMock.mockRejectedValue(new Error("source unreachable"));
+    render(<PanelWatchedFolders />);
+    await waitFor(() =>
+      expect(screen.getByTestId("watched-folder-row")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId("watched-folder-resync-/p/A"));
+    await waitFor(() => {
+      const toasts = useSystemStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].lead).toBe("Resync failed.");
+      expect(toasts[0].msg).toBe("source unreachable");
+      expect(toasts[0].variant).toBe("danger");
+    });
+    // After the failure the spinner clears (finally arm runs).
+    await waitFor(() => {
+      const btn = screen.getByTestId("watched-folder-resync-/p/A");
+      expect(btn).not.toBeDisabled();
+      expect(btn).toHaveTextContent("Resync now");
     });
   });
 });

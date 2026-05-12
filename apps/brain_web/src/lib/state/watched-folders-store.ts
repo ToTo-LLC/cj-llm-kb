@@ -4,6 +4,8 @@ import { create } from "zustand";
 
 import {
   listWatchedFolders,
+  resyncFolder,
+  type ResyncFolderData,
   type WatchedFolderEntry,
 } from "@/lib/api/tools";
 
@@ -67,6 +69,18 @@ export interface WatchedFoldersState {
    *  restore the row on failure). No-op when ``path`` is not in
    *  ``folders``. */
   removeFolderOptimistic: (path: string) => void;
+  /** Resolve-rejects semantics (unlike ``refresh``): the caller awaits
+   *  the result to drive the per-row spinner + toast lifecycle. On
+   *  success: returns the backend's ``ResyncFolderData`` AND triggers
+   *  a follow-up ``refresh()`` so any row stats invalidated by the
+   *  resync (file_count, orphan_count, last_sync) reconcile with the
+   *  canonical backend list. On failure: rejects with the original
+   *  error so the caller can push a danger toast — the store does NOT
+   *  swallow the error onto ``error`` state (which is reserved for
+   *  ``refresh()`` failures that the inline error banner reads).
+   *  Plan 22 T12 fix-up — replaces the earlier "Coming soon" tooltip
+   *  with a fully-wired action. */
+  resyncFolder: (folder: string) => Promise<ResyncFolderData>;
   /** Test-only: reset the store to initial state + clear any in-flight
    *  promise. Used by ``beforeEach`` in unit tests so cases don't leak
    *  through the singleton store. */
@@ -120,6 +134,26 @@ export const useWatchedFoldersStore = create<WatchedFoldersState>(
 
     removeFolderOptimistic: (path) => {
       set((s) => ({ folders: s.folders.filter((f) => f.path !== path) }));
+    },
+
+    resyncFolder: async (folder) => {
+      // Resolve-rejects semantics (per JSDoc): the caller awaits to
+      // drive the per-row spinner + toast lifecycle. We do NOT mutate
+      // ``error`` on failure — that's the ``refresh()`` banner's
+      // reserved channel. The follow-up ``refresh()`` is fire-and-
+      // forget (``void``) so the toast lands without waiting on a
+      // potentially slow stats walk; if the refresh fails it lands on
+      // the banner per existing semantics.
+      const response = await resyncFolder({ folder });
+      if (!response.data) {
+        // Defensive: backend always emits ``data`` on success per the
+        // T5 pin, but the response envelope's TS shape allows
+        // ``undefined``. Map to a plain Error so the caller's catch
+        // arm gets a consistent shape.
+        throw new Error("brain_resync_folder returned no data");
+      }
+      void useWatchedFoldersStore.getState().refresh();
+      return response.data;
     },
 
     _resetForTesting: () => {
