@@ -214,7 +214,18 @@ export const useInboxStore = create<InboxState>((set, get) => ({
         id: it.patch_id ?? `ingest-${it.classified_at}-${idx}`,
         source: it.source,
         title: (it.title as string) ?? inferTitle(it.source), // title not emitted by backend — Task 25 sweep
-        type: (it.type as IngestType) ?? inferType(it.source), // type not emitted by backend — Task 25 sweep
+        // Plan 24 T5.5: read backend field name ``source_type`` (NOT
+        // ``type``). The typed shape on line 202 declares the field
+        // correctly as ``source_type``; the pre-T5.5 code at this read
+        // site spelled it ``it.type``, which was always ``undefined``
+        // → fall-through to ``inferType(it.source)``. That produced a
+        // generic ``url``/``text`` IngestType regardless of the actual
+        // backend SourceType, and downstream the Inbox row's
+        // ``TypeIcon`` rendered the generic ``FileIcon`` instead of
+        // the dedicated ``FileText`` / ``Presentation`` glyph for
+        // docx / pptx (Plan 24 T5 added those branches). The fix is
+        // a 1-token rename to match the backend's emitted field name.
+        type: (it.source_type as IngestType) ?? inferType(it.source),
         // Backend emits status as `string`; cast narrows to the IngestStatus literal union.
         status: (it.status as IngestStatus) ?? "done",
         domain: it.domain ?? null,

@@ -165,6 +165,82 @@ describe("useInboxStore", () => {
     expect(state.sources[1].id).toBe("existing");
   });
 
+  // Plan 24 T5.5: backend `brain_recent_ingests` emits each row with a
+  // ``source_type`` field (NOT ``type``). The pre-T5.5 read site in
+  // ``inbox-store.loadRecent`` spelled it ``it.type``, which was always
+  // ``undefined`` → fall-through to ``inferType(it.source)`` produced
+  // generic url/text values regardless of the real backend SourceType.
+  // The end-to-end symptom was docx / pptx rows rendering as the
+  // generic ``FileIcon`` in the Inbox row (Plan 24 T5 had wired the
+  // dedicated FileText / Presentation icons but they never fired
+  // through ``recentIngests`` because the field name was wrong). This
+  // regression-pin asserts the fix: a ``source_type: "docx"`` response
+  // lands in the store with ``type: "docx"`` so ``<TypeIcon />``
+  // renders the FileText branch.
+  test("loadRecent() reads `source_type` field from backend response (Plan 24 T5.5 regression)", async () => {
+    recentIngestsMock.mockResolvedValue({
+      text: "",
+      data: {
+        ingests: [
+          {
+            source: "strategy.docx",
+            source_type: "docx",
+            domain: "work",
+            status: "done",
+            classified_at: "2026-04-21T10:00:00Z",
+            cost_usd: 0,
+            patch_id: "p-docx-1",
+          },
+          {
+            source: "all-hands.pptx",
+            source_type: "pptx",
+            domain: "work",
+            status: "done",
+            classified_at: "2026-04-21T11:00:00Z",
+            cost_usd: 0,
+            patch_id: "p-pptx-1",
+          },
+        ],
+      },
+    });
+    await useInboxStore.getState().loadRecent();
+    const state = useInboxStore.getState();
+    expect(state.sources).toHaveLength(2);
+    // The Plan 24 T5.5 fix: ``source_type`` lands in ``type`` field.
+    expect(state.sources[0].type).toBe("docx");
+    expect(state.sources[1].type).toBe("pptx");
+  });
+
+  // Plan 24 T5.5: defensive — when the backend response is missing the
+  // ``source_type`` field entirely (legacy data, partial response), the
+  // store must NOT crash. The existing fallback (``inferType(it.source)``)
+  // kicks in and produces a sensible default (url for http(s) sources,
+  // text otherwise). Pre-T5.5 this case was the COMMON case (since
+  // ``it.type`` was always undefined) — post-T5.5 it's the genuine
+  // edge case the fallback was designed for.
+  test("loadRecent() falls back to inferred type when source_type is absent", async () => {
+    recentIngestsMock.mockResolvedValue({
+      text: "",
+      data: {
+        ingests: [
+          {
+            source: "https://example.com/foo",
+            // source_type intentionally absent
+            domain: "research",
+            status: "done",
+            classified_at: "2026-04-21T10:00:00Z",
+            cost_usd: 0,
+          },
+        ],
+      },
+    });
+    await useInboxStore.getState().loadRecent();
+    const state = useInboxStore.getState();
+    expect(state.sources).toHaveLength(1);
+    // Fallback inferType() recognizes the http:// prefix → "url".
+    expect(state.sources[0].type).toBe("url");
+  });
+
   test("updateStatus() transitions a source from queued → classifying → done", () => {
     useInboxStore.setState({
       sources: [mkSource("opt-1", { status: "queued", progress: 0 })],

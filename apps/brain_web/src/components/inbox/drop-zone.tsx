@@ -11,7 +11,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { uploadFile } from "@/lib/ingest/upload";
 import { triggerIngest } from "@/lib/ingest/url-paste";
-import { ingestAcceptAttribute, useInboxStore } from "@/lib/state/inbox-store";
+import {
+  ingestAcceptAttribute,
+  useInboxStore,
+  type IngestType,
+} from "@/lib/state/inbox-store";
 import { useSystemStore } from "@/lib/state/system-store";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +39,44 @@ function optimisticIdFor(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Plan 24 T5.5: infer the ``IngestType`` from a dropped file's name so
+ * the optimistic inbox row shows the right icon DURING the upload
+ * window (between drop and backend completion). Pre-T5.5 every drop
+ * created an optimistic row with ``type: "file"`` regardless of
+ * extension, so docx / pptx uploads briefly rendered as the generic
+ * ``FileIcon`` before the ``recentIngests`` poll filled in the real
+ * backend ``source_type``. The extension list mirrors
+ * ``INGEST_ACCEPT`` in ``inbox-store.ts`` — the canonical advertised
+ * formats — plus the email export type for paste-from-Mail flows.
+ * Unknown extensions fall back to ``"file"`` (the previous behavior)
+ * so drag-drop of an arbitrary text-ish file still produces a typed
+ * optimistic row rather than throwing.
+ *
+ * Note: keep this in sync with the ``IngestType`` union — if a new
+ * literal is added there, the corresponding extension(s) should be
+ * added here (and the backend's ``SourceType`` enum updated too).
+ */
+function inferIngestTypeFromFilename(filename: string): IngestType {
+  const ext = filename.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "docx":
+      return "docx";
+    case "pptx":
+      return "pptx";
+    case "pdf":
+      return "pdf";
+    case "txt":
+    case "md":
+    case "markdown":
+      return "text";
+    case "eml":
+      return "email";
+    default:
+      return "file";
+  }
+}
+
 export function DropZone(): React.ReactElement {
   const [dragOver, setDragOver] = React.useState(false);
   const [urlOpen, setUrlOpen] = React.useState(false);
@@ -47,11 +89,17 @@ export function DropZone(): React.ReactElement {
   const handleFile = React.useCallback(
     (file: File) => {
       const id = optimisticIdFor("upload");
+      // Plan 24 T5.5: sniff the filename's extension so the optimistic
+      // row carries the right ``IngestType`` (which drives the inbox
+      // row's icon). Pre-T5.5 every drop hardcoded ``"file"`` and the
+      // generic ``FileIcon`` flashed for the upload-window duration
+      // even for docx / pptx files where T5 had wired dedicated
+      // icons. Unknown extensions still fall through to ``"file"``.
       addOptimistic({
         id,
         source: file.name,
         title: file.name,
-        type: "file",
+        type: inferIngestTypeFromFilename(file.name),
       });
       // Fire-and-forget — the row lives in the inbox list, which is
       // where the UI surfaces progress. Failures flip the row to

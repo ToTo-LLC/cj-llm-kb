@@ -136,6 +136,69 @@ describe("DropZone", () => {
     expect(accept).toContain(".pptx");
   });
 
+  // Plan 24 T5.5: the optimistic inbox row inserted on drop must carry
+  // the right ``IngestType`` based on the filename's extension. Pre-T5.5
+  // every drop hardcoded ``type: "file"`` so docx / pptx uploads
+  // briefly rendered the generic ``FileIcon`` for the upload-window
+  // duration (between drop and backend completion) even though Plan 24
+  // T5 wired dedicated FileText / Presentation icons.
+  test("handleFile infers `docx` type from .docx extension (Plan 24 T5.5)", () => {
+    useInboxStore.setState({ sources: [], activeTab: "progress" });
+    render(<DropZone />);
+    const root = screen.getByTestId("drop-zone");
+    const file = new File(["fake docx bytes"], "strategy.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+
+    fireEvent.drop(root, {
+      dataTransfer: { files: [file], types: ["Files"] },
+    });
+
+    const sources = useInboxStore.getState().sources;
+    expect(sources).toHaveLength(1);
+    // The optimistic row's type matches the extension-sniff result —
+    // NOT the pre-T5.5 hardcoded "file".
+    expect(sources[0].type).toBe("docx");
+  });
+
+  test("handleFile infers `pptx` type from .pptx extension (Plan 24 T5.5)", () => {
+    useInboxStore.setState({ sources: [], activeTab: "progress" });
+    render(<DropZone />);
+    const root = screen.getByTestId("drop-zone");
+    const file = new File(["fake pptx bytes"], "deck.pptx", {
+      type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    });
+
+    fireEvent.drop(root, {
+      dataTransfer: { files: [file], types: ["Files"] },
+    });
+
+    const sources = useInboxStore.getState().sources;
+    expect(sources).toHaveLength(1);
+    expect(sources[0].type).toBe("pptx");
+  });
+
+  test("handleFile falls back to `file` for unknown extension (Plan 24 T5.5)", () => {
+    // The fallback branch — unknown extensions still produce a typed
+    // optimistic row rather than throwing, matching the pre-T5.5
+    // default behavior for the surface area not covered by the
+    // extension-sniff helper.
+    useInboxStore.setState({ sources: [], activeTab: "progress" });
+    render(<DropZone />);
+    const root = screen.getByTestId("drop-zone");
+    const file = new File(["binary bytes"], "data.xyz", {
+      type: "application/octet-stream",
+    });
+
+    fireEvent.drop(root, {
+      dataTransfer: { files: [file], types: ["Files"] },
+    });
+
+    const sources = useInboxStore.getState().sources;
+    expect(sources).toHaveLength(1);
+    expect(sources[0].type).toBe("file");
+  });
+
   test("drop forwards a .docx file to uploadFile() (Plan 24 T5)", () => {
     // End-to-end wiring smoke: a .docx file with the canonical
     // wordprocessingml MIME type lands at ``uploadFile`` unchanged.
