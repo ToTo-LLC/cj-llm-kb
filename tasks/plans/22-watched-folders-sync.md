@@ -3203,6 +3203,164 @@ No tsc errors; no vitest regressions; the new file uses no `any` casts.
 
 Bundled — feat + test + docs in one commit per the plan-19 / T13 outcome shape.
 
+## T14.5 outcome — dry_run mode on brain_watch_folder (cost estimate without writes)
+
+Inserted per user adjudication Q3=3.A locked at the T11 review: the
+watch-enable modal (T15) needs an inline cost-estimate panel BEFORE the
+user clicks "Watch and sync now". Backend wiring picked over a
+separate `brain_estimate_watch_cost` tool because the estimate code is
+already inside `watch_folder.py` (T9's `_estimate_initial_sync_cost` +
+the same `classify_model` resolution that the real-run path uses) —
+a `dry_run: bool` gate is a one-flag extension that keeps both paths
+synchronized; a separate tool would have to re-derive everything and
+drift.
+
+### Status field semantics
+
+Three terminal statuses on `ToolResult.data["status"]`:
+
+- `"watched"` — real write path, Config mutated, optionally synced.
+- `"already_watched"` — idempotent no-op short-circuit (also returned
+  when `dry_run=True` on an already-watched folder, because the
+  "nothing to do" meaning is truthful regardless of dry-run intent).
+- `"dry_run"` — Plan 22 T14.5: estimate-only, no writes.
+
+The early `already_watched` short-circuit was kept BEFORE the dry-run
+branch on purpose. A dry-run against an already-watched folder is also
+a no-op estimate, and `already_watched` is the more truthful status
+for the modal to render (whereas `"dry_run"` would imply "a write is
+pending if you confirm" — which is false for an already-watched
+folder).
+
+### Skip paths
+
+`dry_run=True` skips:
+
+1. **Config mutation** — `Config.watched_folders.append` does NOT run;
+   `persist_config_or_revert` is NOT entered (so no `.brain/config.json`
+   write either).
+2. **Backup snapshot** — `create_snapshot(..., trigger="pre_watched_folder_sync")`
+   does NOT fire (snapshot retention budget is preserved).
+3. **BulkImporter** — neither `_build_pipeline`, `BulkImporter(...)`,
+   `.plan(...)`, nor `.apply(...)` runs (no LLM spend, no vault writes).
+
+Validation IS still performed (so the modal surfaces clear errors):
+
+- Folder absolute + exists + is a directory.
+- Config presence (`raise_if_no_config`).
+- Cross-field `domain` membership in `Config.domains` (when supplied)
+  — the Plan 16 T36 pre-check pattern.
+
+The cost-estimate file walk (`_estimate_initial_sync_cost`) IS reused
+verbatim — same helper, same token math, same classify-model
+resolution. The dry-run path and real-run path project the same
+projected spend.
+
+### Return shape parity
+
+`dry_run=True` returns the same 5-key data shape as the real-run path:
+
+```python
+{
+  "status": "dry_run",
+  "folder": <abs path str>,
+  "domain": <effective domain slug>,
+  "initial_sync_summary": None,         # no sync ran
+  "cost_estimate": {                    # 4-key payload, same as T9
+    "file_count": int,
+    "estimated_tokens": int,
+    "estimated_usd": float | None,
+    "classify_model": str,
+  } | None,                             # None when initial_sync=False
+}
+```
+
+When `initial_sync=False` AND `dry_run=True`: `cost_estimate=None`
+(symmetric with the non-dry-run `initial_sync=False` shape — there is
+no sync to project either way).
+
+### Pin tests (7)
+
+Added in `packages/brain_core/tests/tools/test_watch_folder.py`:
+
+1. **`test_dry_run_does_not_mutate_config`** — `dry_run=True` returns
+   without appending; `Config.watched_folders` unchanged; on-disk
+   `config.json` never created.
+2. **`test_dry_run_does_not_call_backup`** — monkey-patched
+   `create_snapshot` is NOT called in dry-run.
+3. **`test_dry_run_does_not_call_bulk_importer`** — monkey-patched
+   `BulkImporter.plan` AND `.apply` are NOT called in dry-run.
+4. **`test_dry_run_returns_cost_estimate`** — 4-key `cost_estimate`
+   payload is populated with the same shape T9's real-run path
+   produces.
+5. **`test_dry_run_returns_status_dry_run`** — `data["status"]` is
+   `"dry_run"` (NOT `"watched"`); full 5-key data shape parity.
+6. **`test_dry_run_still_validates_folder`** — missing folder /
+   non-absolute folder / orphan domain all raise BEFORE the
+   cost-estimate work starts; no state leaks onto Config across any
+   of the three failure modes.
+7. **`test_dry_run_then_real_run_works_idempotently`** — dry-run
+   followed by real-run mutates Config as if the dry-run never
+   happened; `cost_estimate` payloads from preview vs real match
+   exactly.
+
+`test_input_schema_shape` was also updated to pin the new `dry_run`
+property: `type=boolean`, `default=False`, `description` present.
+
+### Verification
+
+```
+$ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+    uv run --package brain_core pytest packages/brain_core/tests/tools/test_watch_folder.py -v
+23 passed in 0.55s          # 16 baseline + 7 new T14.5 pins
+
+$ unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_core pytest packages/brain_core/tests/ -q
+1156 passed, 5 skipped       # baseline 1149 → 1156 (+7 T14.5)
+
+$ uv run --package brain_core mypy packages/brain_core/src/brain_core/tools/watch_folder.py
+Success: no issues found in 1 source file
+```
+
+### Decisions touched
+
+- **Q3=3.A (locked)** — dry_run mode on `brain_watch_folder` is the
+  cost-estimate plumbing the watch-enable modal consumes.
+- **D11 (no new dependencies)** — respected; this is a pure-Python
+  one-flag extension.
+- Backend-only; T15 will consume from the frontend.
+
+### Concerns / follow-ups (non-blocking)
+
+1. **`dry_run=True` does NOT validate that BulkImporter would actually
+   plan-succeed.** The estimate walks the folder via `rglob` (same
+   path as `_estimate_initial_sync_cost` uses on the real path), but
+   it doesn't dry-run the classifier or check per-file budgets. If a
+   user has an exhausted per-domain budget, the dry-run will project
+   a normal cost estimate and the real call will then refuse mid-sync.
+   This is consistent with T9's D3 ("estimate is informational; budget
+   caps are the hard ceilings"), so T14.5 inherits the same contract.
+   The modal's CTA copy should clarify this if testers report
+   surprises.
+2. **No "ETA" or duration estimate.** The task spec asked whether to
+   add a duration alongside the USD. Skipped — the per-file classify
+   latency varies too much (haiku at ~1-3s/file conservatively, but
+   subject to rate-limit backoff) to project usefully from file-count
+   alone. The text readout already says "classify only;
+   summarize+integrate cost is per-file post-classify" — a duration
+   added on top would imply more precision than the projection
+   carries.
+3. **`dry_run=True` + `initial_sync=False`** returns
+   `cost_estimate=None` (consistent with the real-run shape on
+   `initial_sync=False`). The modal will likely only ever fire
+   `dry_run=True` + `initial_sync=True` since the cost preview is the
+   whole point — but the no-cost combination is supported for shape
+   parity.
+
+### Commit cadence
+
+Bundled — feat + test + docs in one commit per the plan-19 / T13 / T14
+outcome shape.
+
 ## Review
 
 _Filled in at T18 close. Tag SHA + closure summary + bumps + verification

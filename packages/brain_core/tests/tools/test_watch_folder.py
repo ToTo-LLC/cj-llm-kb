@@ -71,19 +71,30 @@ def test_name() -> None:
 
 
 def test_input_schema_shape() -> None:
-    """Pin the INPUT_SCHEMA's property set + required key."""
+    """Pin the INPUT_SCHEMA's property set + required key.
+
+    Plan 22 T14.5 added the ``dry_run`` property — default False so the
+    real-write path is the schema default and the modal opt-in to the
+    estimate-only path is explicit.
+    """
     assert INPUT_SCHEMA["type"] == "object"
     assert set(INPUT_SCHEMA["properties"].keys()) == {
         "folder",
         "domain",
         "include_subdirs",
         "initial_sync",
+        "dry_run",
     }
     assert INPUT_SCHEMA["required"] == ["folder"]
     assert INPUT_SCHEMA["properties"]["folder"]["type"] == "string"
     assert INPUT_SCHEMA["properties"]["domain"]["type"] == ["string", "null"]
     assert INPUT_SCHEMA["properties"]["include_subdirs"]["default"] is True
     assert INPUT_SCHEMA["properties"]["initial_sync"]["default"] is True
+    assert INPUT_SCHEMA["properties"]["dry_run"]["type"] == "boolean"
+    assert INPUT_SCHEMA["properties"]["dry_run"]["default"] is False
+    # description present so the schema is self-documenting for MCP / API
+    # clients that surface tool docs.
+    assert "description" in INPUT_SCHEMA["properties"]["dry_run"]
 
 
 async def test_refuses_relative_folder(tmp_path: Path) -> None:
@@ -476,3 +487,287 @@ async def test_cost_estimate_omitted_when_initial_sync_false(
     assert result.data is not None
     assert result.data["cost_estimate"] is None
     assert "initial sync estimate" not in result.text
+
+
+# ---------------------------------------------------------------------------
+# Plan 22 T14.5 — dry_run mode (cost estimate without writes) pin tests.
+#
+# The watch-enable modal (T15) calls brain_watch_folder with dry_run=True
+# on open to preview the projected classify-only spend BEFORE the user
+# clicks "Watch and sync now". The pins below catch any regression that
+# would either (a) leak a write through the dry-run path or (b) break
+# the modal's expected return shape.
+# ---------------------------------------------------------------------------
+
+
+async def test_dry_run_does_not_mutate_config(tmp_path: Path) -> None:
+    """T14.5 pin: dry_run=True returns without appending to
+    Config.watched_folders. The modal must be able to preview the cost
+    estimate without writing to disk."""
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    folder = tmp_path / "dry-run-folder"
+    folder.mkdir()
+    (folder / "note.txt").write_text("hello", encoding="utf-8")
+
+    pre_count = len(cfg.watched_folders)
+    result = await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": True,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert isinstance(result, ToolResult)
+    # Config.watched_folders unchanged.
+    assert len(cfg.watched_folders) == pre_count
+    # The on-disk config was never persisted either.
+    assert not (tmp_path / ".brain" / "config.json").exists()
+
+
+async def test_dry_run_does_not_call_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T14.5 pin: dry_run skips the pre-sync backup. The modal preview
+    must not consume snapshot retention budget."""
+    snapshot_calls = _install_fakes(monkeypatch)
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    folder = tmp_path / "dry-backup"
+    folder.mkdir()
+    (folder / "note.txt").write_text("hello", encoding="utf-8")
+
+    await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": True,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert snapshot_calls == []
+
+
+async def test_dry_run_does_not_call_bulk_importer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T14.5 pin: dry_run skips ``BulkImporter.plan`` and
+    ``BulkImporter.apply``. The modal preview must not actually classify
+    or write any vault files."""
+    plan_calls: list[tuple[Any, ...]] = []
+    apply_calls: list[tuple[Any, ...]] = []
+
+    class _ExplodingBulkImporter:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        async def plan(self, *args: Any, **kwargs: Any) -> BulkPlan:
+            plan_calls.append((args, kwargs))
+            return BulkPlan()
+
+        async def apply(
+            self, *args: Any, **kwargs: Any
+        ) -> list[IngestResult]:
+            apply_calls.append((args, kwargs))
+            return []
+
+    monkeypatch.setattr(
+        "brain_core.tools.watch_folder.BulkImporter", _ExplodingBulkImporter
+    )
+    monkeypatch.setattr(
+        "brain_core.tools.watch_folder._build_pipeline",
+        lambda _ctx: object(),
+    )
+    monkeypatch.setattr(
+        "brain_core.tools.watch_folder.create_snapshot",
+        lambda *_a, **_kw: object(),
+    )
+
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    folder = tmp_path / "dry-bulk"
+    folder.mkdir()
+    (folder / "note.txt").write_text("hello", encoding="utf-8")
+
+    await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": True,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert plan_calls == []
+    assert apply_calls == []
+
+
+async def test_dry_run_returns_cost_estimate(tmp_path: Path) -> None:
+    """T14.5 pin: dry_run=True returns the same 4-key ``cost_estimate``
+    payload as the real-run path (file_count, estimated_tokens,
+    estimated_usd, classify_model). The modal renders these four
+    fields in its preview panel."""
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    folder = tmp_path / "dry-estimate"
+    folder.mkdir()
+    for i in range(3):
+        (folder / f"f-{i}.txt").write_text("hello", encoding="utf-8")
+
+    result = await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": True,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert result.data is not None
+    cost_est = result.data["cost_estimate"]
+    assert cost_est is not None
+    assert set(cost_est.keys()) == {
+        "file_count",
+        "estimated_tokens",
+        "estimated_usd",
+        "classify_model",
+    }
+    assert cost_est["file_count"] == 3
+    assert cost_est["estimated_tokens"] == 3 * _CLASSIFY_TOKEN_COST
+    assert cost_est["estimated_usd"] is not None
+    assert cost_est["classify_model"] == "claude-haiku-4-5-20251001"
+    # Text echoes the readout so CLI / MCP callers see it too.
+    assert "initial sync estimate" in result.text
+    assert "3 files" in result.text
+
+
+async def test_dry_run_returns_status_dry_run(tmp_path: Path) -> None:
+    """T14.5 pin: dry_run=True returns ``status="dry_run"`` (NOT
+    "watched"). The modal switches its CTA copy off this status so the
+    pin guards against a regression that leaks the watched status
+    through the estimate-only path."""
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    folder = tmp_path / "dry-status"
+    folder.mkdir()
+    (folder / "note.txt").write_text("x", encoding="utf-8")
+
+    result = await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": True,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert result.data is not None
+    assert result.data["status"] == "dry_run"
+    # Full 5-key shape parity with the real-run path so the modal can
+    # render the same component without conditional branching.
+    assert set(result.data.keys()) == {
+        "status",
+        "folder",
+        "domain",
+        "initial_sync_summary",
+        "cost_estimate",
+    }
+    assert result.data["folder"] == str(folder)
+    assert result.data["domain"] == "research"
+    # No sync ran, so the summary is None.
+    assert result.data["initial_sync_summary"] is None
+
+
+async def test_dry_run_still_validates_folder(tmp_path: Path) -> None:
+    """T14.5 pin: validation fires even on dry_run. A bad folder path
+    (missing / non-absolute) raises BEFORE the cost-estimate work
+    starts — the modal surfaces the error immediately rather than
+    silently producing a zero-file estimate."""
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+
+    # Missing folder.
+    with pytest.raises(FileNotFoundError):
+        await handle(
+            {
+                "folder": str(tmp_path / "ghost"),
+                "domain": "research",
+                "dry_run": True,
+            },
+            _mk_ctx(tmp_path, config=cfg),
+        )
+
+    # Non-absolute folder.
+    with pytest.raises(ValueError, match="absolute"):
+        await handle(
+            {
+                "folder": "relative/path",
+                "domain": "research",
+                "dry_run": True,
+            },
+            _mk_ctx(tmp_path, config=cfg),
+        )
+
+    # Orphan domain. The cross-field pre-check fires in dry-run mode
+    # so the modal can surface "domain not in Config.domains" without
+    # also having to write the entry.
+    folder = tmp_path / "dry-orphan"
+    folder.mkdir()
+    with pytest.raises(ValueError, match="not in domains"):
+        await handle(
+            {
+                "folder": str(folder),
+                "domain": "nonexistent",
+                "dry_run": True,
+            },
+            _mk_ctx(tmp_path, config=cfg),
+        )
+
+    # None of the failed calls leaked state onto the config.
+    assert len(cfg.watched_folders) == 0
+
+
+async def test_dry_run_then_real_run_works_idempotently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T14.5 pin: a dry_run preview leaves NO state behind, so a
+    subsequent real (non-dry-run) call mutates Config as if the dry-run
+    never happened. Catches a regression that accidentally appends in
+    dry-run and then short-circuits the real call as ``already_watched``.
+    """
+    _install_fakes(monkeypatch)
+    cfg = Config(domains=["research", "personal"], active_domain="research")
+    folder = tmp_path / "dry-then-real"
+    folder.mkdir()
+    (folder / "note.txt").write_text("hello", encoding="utf-8")
+
+    # 1. Dry-run preview.
+    preview = await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": True,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert preview.data is not None
+    assert preview.data["status"] == "dry_run"
+    assert len(cfg.watched_folders) == 0
+
+    # 2. Real call — mutates as if no dry-run had happened.
+    real = await handle(
+        {
+            "folder": str(folder),
+            "domain": "research",
+            "initial_sync": True,
+            "dry_run": False,
+        },
+        _mk_ctx(tmp_path, config=cfg),
+    )
+    assert real.data is not None
+    assert real.data["status"] == "watched"
+    assert len(cfg.watched_folders) == 1
+    assert cfg.watched_folders[0].path == str(folder)
+    assert cfg.watched_folders[0].domain == "research"
+    # The real call's cost estimate matches the dry-run's projection
+    # (same file_count + token math); the modal can compare them to
+    # detect last-second folder changes.
+    assert preview.data["cost_estimate"] == real.data["cost_estimate"]

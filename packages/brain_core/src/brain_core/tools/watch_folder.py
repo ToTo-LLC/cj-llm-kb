@@ -7,6 +7,14 @@ and (when ``initial_sync=True``) calls
 :meth:`brain_core.ingest.bulk.BulkImporter.plan` /
 :meth:`brain_core.ingest.bulk.BulkImporter.apply` against the folder.
 
+**Dry-run mode (Plan 22 T14.5)**: when ``dry_run=True``, the tool runs
+only the validation + cost-estimate paths and returns
+``status="dry_run"`` WITHOUT mutating ``Config.watched_folders``, taking
+a backup, or invoking ``BulkImporter``. The watch-enable confirmation
+modal (T15) calls this on open to preview the projected classify-only
+spend before the user clicks "Watch and sync now". A subsequent real
+(non-dry-run) call mutates as usual — dry-run leaves no state.
+
 **Cross-field invariant**: when ``domain`` is provided, the slug MUST
 exist in :attr:`Config.domains` BEFORE the append. Per Plan 16 T36, a
 Pydantic ``model_validator(mode="after")`` raise under
@@ -94,6 +102,18 @@ INPUT_SCHEMA: dict[str, Any] = {
             "description": (
                 "When true, run a full BulkImporter plan + apply pass against "
                 "the folder immediately after watch is registered."
+            ),
+        },
+        "dry_run": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "When true, validate the folder + compute the initial-sync "
+                "cost estimate WITHOUT mutating Config.watched_folders, "
+                "taking a backup, or running BulkImporter. Returns "
+                "status='dry_run' with the same cost_estimate payload as "
+                "the non-dry-run path. Used by the watch-enable modal "
+                "(Plan 22 T15) to preview spend before the user confirms."
             ),
         },
     },
@@ -216,9 +236,13 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     domain: str | None = str(domain_arg) if domain_arg is not None else None
     include_subdirs = bool(arguments.get("include_subdirs", True))
     initial_sync = bool(arguments.get("initial_sync", True))
+    dry_run = bool(arguments.get("dry_run", False))
 
     # Folder validation — checked before any config touch so a missing
     # folder fails fast (and a typo on Settings doesn't pollute config.json).
+    # Per Plan 22 T14.5, validation also fires in dry-run mode so the
+    # modal's pre-write preview surfaces clear "folder not found" errors
+    # before the user clicks confirm.
     if not folder.is_absolute():
         raise ValueError(
             f"folder path must be absolute, got {folder_str!r}"
@@ -229,7 +253,13 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     raise_if_no_config(ctx, "brain_watch_folder")
     cfg = ctx.config
 
-    # Idempotency: already-watched is a status, not an error.
+    # Idempotency: already-watched is a status, not an error. This
+    # short-circuits BEFORE the dry-run branch on purpose: a dry-run
+    # against an already-watched folder is also a no-op estimate, and
+    # the ``already_watched`` status carries the same "nothing to do"
+    # meaning the modal needs to render. Returning ``status="dry_run"``
+    # here would imply a write is pending; ``already_watched`` is
+    # truthful for both real and dry-run calls.
     for wf in cfg.watched_folders:
         if wf.path == folder_str:
             return ToolResult(
@@ -252,6 +282,10 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # check to per-file classification, where every classified slug is
     # constrained to ``ctx.allowed_domains`` (which is a subset of
     # ``cfg.domains``).
+    #
+    # Plan 22 T14.5: domain validation also runs in dry-run mode so a
+    # bad slug surfaces during the modal's pre-write preview rather
+    # than only on confirm.
     effective_domain = domain if domain is not None else "personal"
     if domain is not None:
         _check_domain_membership(domain, list(cfg.domains))
@@ -264,6 +298,68 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         effective_domain = next(
             (s for s in cfg.domains if s != "personal"),
             cfg.active_domain,
+        )
+
+    # ``cost_estimate`` is shared by the dry-run early-return AND the
+    # real-run path below — declare once up-front so both branches
+    # assign the same name with the same annotation.
+    cost_estimate: dict[str, Any] | None = None
+
+    # Plan 22 T14.5 dry-run branch: compute the cost estimate but skip
+    # ALL state-mutating side effects (config append, backup snapshot,
+    # BulkImporter plan/apply). Returns ``status="dry_run"`` with the
+    # same 5-key data shape as the real-run path. A subsequent
+    # non-dry-run call mutates as usual — dry_run leaves zero state
+    # behind.
+    if dry_run:
+        if initial_sync:
+            cfg_llm = (
+                resolve_llm_config(cfg, None) if cfg is not None else None
+            )
+            classify_model = (
+                getattr(cfg_llm, "classify_model", None)
+                or _CLASSIFY_MODEL_FALLBACK
+            )
+            (
+                estimate_file_count,
+                estimated_tokens,
+                estimated_usd,
+            ) = _estimate_initial_sync_cost(folder, classify_model)
+            cost_estimate = {
+                "file_count": estimate_file_count,
+                "estimated_tokens": estimated_tokens,
+                "estimated_usd": estimated_usd,
+                "classify_model": classify_model,
+            }
+        # else: initial_sync=False + dry_run=True — leave cost_estimate
+        # at the pre-branch default of ``None``. Mirrors the non-dry-run
+        # ``initial_sync=False`` return-shape.
+
+        if cost_estimate is not None:
+            if cost_estimate["estimated_usd"] is not None:
+                usd_str = f"${cost_estimate['estimated_usd']:.4f}"
+            else:
+                usd_str = "n/a (no pricing entry)"
+            cost_text = (
+                f" | initial sync estimate: ~{cost_estimate['file_count']} "
+                f"files, ~{usd_str} (classify only; summarize+integrate "
+                f"cost is per-file post-classify)"
+            )
+        else:
+            cost_text = ""
+
+        return ToolResult(
+            text=(
+                f"dry-run preview for {folder_str} → {effective_domain}"
+                + cost_text
+            ),
+            data={
+                "status": "dry_run",
+                "folder": folder_str,
+                "domain": effective_domain,
+                "initial_sync_summary": None,
+                "cost_estimate": cost_estimate,
+            },
         )
 
     # Append the WatchedFolder INSIDE persist_config_or_revert so any
@@ -281,7 +377,6 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         cfg.watched_folders.append(new_wf)
 
     initial_sync_summary: dict[str, Any] | None = None
-    cost_estimate: dict[str, Any] | None = None
     if initial_sync:
         # Cost estimate fires BEFORE the backup + plan/apply so the user
         # sees the projected classify-only spend on the ToolResult. Per
