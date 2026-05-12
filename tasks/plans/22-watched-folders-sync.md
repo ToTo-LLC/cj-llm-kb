@@ -1734,6 +1734,168 @@ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:... \
   delete-orphan)`
 - _(docs commit SHA backfilled by the docs commit itself)_
 
+### T6 outcome — `WatchedFolderWatcher` core (symmetric watchdog observer)
+
+**Files created:**
+
+- `packages/brain_core/src/brain_core/watch/__init__.py` (14 LOC) —
+  package init, exports `WatchedFolderWatcher`.
+- `packages/brain_core/src/brain_core/watch/folder_watcher.py`
+  (~720 LOC incl. module + class docstrings) — the watcher class,
+  `_FolderEventHandler`, `_index_vault_for_folder` helper.
+- `packages/brain_core/tests/watch/__init__.py` (0 LOC).
+- `packages/brain_core/tests/watch/test_folder_watcher.py`
+  (~470 LOC) — 12 pin tests using `PollingObserver` +
+  `_FakePipeline`.
+
+**ConfigWatcher mirror points hit:**
+
+1. **Lifecycle.** `start()` / `stop()` are idempotent. `start()`
+   captures the running asyncio loop, walks the folder list, builds
+   one `_FolderEventHandler` per `WatchedFolder`, schedules them
+   all on a single `Observer`, then starts it. `stop()` cancels
+   pending debounce timers, stops + joins the observer with a 2s
+   timeout, clears the source-path cache.
+2. **Debounce.** Per-path rolling `threading.Timer` keyed on
+   `event.src_path` (or `src::dest` for moves). Window defaults to
+   100ms — matches `ConfigWatcher._DEFAULT_DEBOUNCE_SECONDS`.
+3. **Threading.** Watchdog runs its observer thread; event handlers
+   fire on that thread. Async pipeline calls bridge via
+   `asyncio.run_coroutine_threadsafe` onto the loop captured at
+   `start()`. Sync `mark_orphaned` runs on the debounce-timer
+   thread directly (writer's filelock provides cross-thread
+   safety).
+4. **Failure resilience.** Every event handler call is wrapped in
+   try/except + `structlog.warning`. A coroutine that raises gets
+   its exception logged via `add_done_callback`; the observer
+   thread stays alive. Pin test #10 (`test_pipeline_exception_keeps_observer_running`)
+   verifies this directly.
+5. **Symmetric per D7.** No IPC, no signal handler — one watcher
+   per process, started at T7's brain_api lifespan and T8's
+   brain_mcp `_cached_ctx`. The watcher's scope is `Config.watched_folders`
+   filtered by `enabled=True`.
+
+**`_find_note_by_source_path` strategy + cache (option B):**
+
+In-memory `dict[str, Path]` (resolved source path string → vault
+note path). Lazy-populated on the first lookup via
+`_index_vault_for_folder` — a one-time `rglob("*.md")` walk
+across the configured domains filtering on
+`Frontmatter.watched_folder_id == folder.path`. Subsequent events
+hit the cache without re-walking. The delete handler calls
+`_invalidate_source(src)` on success so a re-ingest of the same
+path triggers a fresh walk (preventing a stale orphan mapping
+from masking the new note). A future plan can migrate to
+`state.sqlite` if vault size makes the walk impractical; flagged
+in the module docstring.
+
+**on_moved handling decision:**
+
+`FileMovedEvent` fans out into a synthetic `FileDeletedEvent` on
+the old path + a synthetic `FileCreatedEvent` on the new path.
+This matches Plan 22 §T6 explicit guidance ("content-hash-aware
+move detection is OUT of v1 scope"). User-visible effect: a
+rename produces an orphan-marked vault note for the old source
+plus a freshly-ingested note for the new source. The hidden-file
+filter is re-applied on both synthetic events so a rename
+into / out of a dotfile path doesn't bypass the filter.
+PollingObserver may also surface a rename as create+delete
+directly; pin test #7 (`test_on_moved_fires_synthetic_delete_and_create`)
+asserts the user-visible outcome regardless of which path
+watchdog took.
+
+**Single-observer-multi-folder vs observer-per-folder:**
+
+Single `Observer` instance schedules a separate
+`_FolderEventHandler` per `WatchedFolder`. This mirrors
+`ConfigWatcher` (one observer, one handler) and avoids the
+thread-fanout cost of N observers. The `observer_factory`
+constructor parameter (defaults to `Observer`) lets tests
+inject `PollingObserver` for deterministic event delivery.
+
+**Filter pipeline:**
+
+- Directory events: dropped (only file mutations matter).
+- Hidden files (any dot-prefixed path component relative to the
+  watched root): dropped at `_on_event` BEFORE the debounce timer
+  schedule, mirroring `BulkImporter._is_hidden` semantics.
+- Files no `SourceHandler` claims (e.g. `.xlsx`, `.zip`): dropped
+  in `_handle_create` / `_handle_modify` via
+  `_any_handler_claims(spec, handlers=self._handlers)` — keeps
+  unclaimed extensions out of the FAILED branch noise.
+
+**Verification receipts:**
+
+```
+$ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:...
+   uv run --package brain_core pytest packages/brain_core/tests/watch/ -q
+12 passed, 5 warnings in 5.03s
+
+$ unset VIRTUAL_ENV && uv run --package brain_core mypy \
+   packages/brain_core/src/brain_core/watch/
+Success: no issues found in 2 source files
+
+$ unset VIRTUAL_ENV && uv run --package brain_core ruff check \
+   packages/brain_core/src/brain_core/watch/ \
+   packages/brain_core/tests/watch/
+All checks passed!
+
+$ unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_core pytest \
+   packages/brain_core/tests/ -q
+1128 passed, 5 skipped, 5 warnings in 8.76s   (baseline 1116 → +12)
+```
+
+**Concerns / forward notes for T7-T8:**
+
+1. **Lifespan integration seams.** The watcher needs:
+   - The `Config.watched_folders` list (filtered to `enabled=True`).
+   - An `IngestPipeline` instance built per the same recipe as
+     `resync_folder._build_pipeline` (LLM provider, writer,
+     handlers, guard, config).
+   - A running asyncio loop at `start()` time. FastAPI's
+     `lifespan` context is async by default → no extra wiring.
+     `brain_mcp` boots inside `asyncio.run`; the watcher belongs
+     in `_cached_ctx` so the loop is live when `start()` runs.
+   - An `allowed_domains` tuple. Defaults to the union of every
+     folder's domain; T7/T8 may pass a narrower tuple to enforce
+     stricter scoping at the lifespan seam.
+2. **Config hot-reload + watcher restart.** When `Config.watched_folders`
+   changes (user adds / removes / disables a folder via Settings),
+   the watcher needs to be `stop()`ed + reconstructed with the new
+   folder set. The cleanest seam is to wire the watcher restart
+   into the existing `ConfigWatcher`'s `on_change` callback at
+   the lifespan layer — T7 / T8 will land that bridge. The
+   watcher's `_source_to_note` cache is cleared in `stop()` so a
+   restart sees fresh state.
+3. **`WatchedFolder.last_sync` field still unused.** The watcher
+   doesn't update `last_sync` on event-driven ingests (it's a
+   bulk-sync timestamp). T5 left the field as `None`; T6 leaves
+   it `None`. A future plan could repurpose it as
+   "last_event_processed_at" if the Settings UI wants a
+   liveness indicator, but that's out of scope here.
+4. **Coroutine-cancellation on `stop()`.** Pending
+   `run_coroutine_threadsafe` futures are NOT cancelled on
+   `stop()` — they run to completion on the loop. The producer
+   thread (debounce timers) IS cancelled. This matches
+   watchdog's own teardown contract; an in-flight ingest
+   completing after `stop()` is the expected behavior. T7's
+   lifespan teardown should await the loop's pending tasks (FastAPI
+   does this automatically via lifespan exit).
+5. **PollingObserver vs default Observer move semantics.**
+   `PollingObserver` may surface a rename as `created` +
+   `deleted` rather than a `FileMovedEvent`. The watcher's
+   synthetic delete-on-`_handle_delete` already drops events
+   for paths it doesn't track, so a polling-surfaced rename
+   degrades cleanly. Production uses the platform Observer
+   (FSEvents / inotify / ReadDirectoryChangesW), which surfaces
+   real `FileMovedEvent`s. Pin test #7 covers both code paths.
+
+**Commits:**
+
+- `6a6d784` — `feat(plan-22): T6 — WatchedFolderWatcher core
+  (symmetric watchdog observer; mirrors ConfigWatcher shape)`
+- _(docs commit SHA backfilled by the docs commit itself)_
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
