@@ -132,14 +132,19 @@ describe("apiFetch", () => {
     expect((err as ApiError).code).toBe("unauthorized");
   });
 
-  test("per-tool bindings cover all 38 tools + hit same-origin /api path", async () => {
+  test("per-tool bindings cover all 40 tools + hit same-origin /api path", async () => {
     // Plan 08 Task 2: bindings target ``/api/tools/<name>`` directly
     // (no proxy prefix). Issue #18 brought the count to 35 by adding
     // ``brain_list_threads``; issue #17 brought it to 36 by adding
     // ``brain_export_thread``. Plan 16 Task 33 brought it to 38 by
     // adding ``brain_repair_config`` + ``brain_repair_config_apply``
-    // for the Settings Repair-config dialog.
-    expect(ALL_TOOL_NAMES.length).toBe(38);
+    // for the Settings Repair-config dialog. Plan 22 T12 brought it to
+    // 40 by adding ``brain_list_watched_folders`` + ``brain_unwatch_folder``
+    // for the Settings Watched-folders panel (the remaining 5 Plan 22
+    // tools — ``brain_watch_folder``, ``brain_resync_folder``,
+    // ``brain_list_orphans``, ``brain_restore_orphan``, ``brain_delete_orphan``
+    // — land with the modals + Orphans panel in T13 / T15).
+    expect(ALL_TOOL_NAMES.length).toBe(40);
 
     (global.fetch as unknown as FetchMock).mockResolvedValue(
       new Response(JSON.stringify({ text: "", data: { domains: ["research"] } }), {

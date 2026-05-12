@@ -1235,6 +1235,120 @@ export const brainDeleteDomain = (args: {
     [extra: string]: unknown;
   }>("brain_delete_domain", args);
 
+// ---------- Plan 22 — Watched folders (3 tools) ----------
+
+/**
+ * One row in :func:`listWatchedFolders`'s response. Mirrors the backend
+ * ``brain_list_watched_folders`` handler's per-entry dict exactly (see
+ * ``packages/brain_core/src/brain_core/tools/list_watched_folders.py:96-106``).
+ *
+ * The keys are pinned by ``test_list_watched_folders.py``'s
+ * ``test_data_shape_pin_with_one_folder`` (Plan 22 T5) — drift on either
+ * side fails RED on the Python pin, so the TS interface stays in lock-
+ * step with the wire shape.
+ *
+ * - ``path`` — absolute folder path on disk (string, not URL).
+ * - ``domain`` — target domain slug. When the user picked "lazy classify"
+ *   at watch-enable time, this lands on the first non-personal
+ *   configured domain (see ``watch_folder.py:252-267``); the per-file
+ *   classifier is the real domain decider for the initial sync.
+ * - ``enabled`` — whether the watcher fires on file events for this
+ *   folder. Plan 22 v1 always sets ``true`` on watch-enable; the Settings
+ *   toggle's OFF path goes through the watch-disable modal (which calls
+ *   :func:`unwatchFolder` rather than flipping ``enabled``).
+ * - ``last_sync`` — ISO-8601 timestamp of the most recent successful sync,
+ *   or ``null`` when the folder was watched but no sync has run yet
+ *   (e.g. ``initial_sync=false``). Frontend renders "never synced" /
+ *   "Pending initial sync…" for this state.
+ * - ``policy`` — currently always ``"overwrite"`` (Plan 22 D1: source is
+ *   canonical, vault edits to watched notes are overwritten on next
+ *   sync). Future policies (e.g. ``"merge"``) would land here.
+ * - ``include_subdirs`` — whether the watcher recurses into subdirectories.
+ *   Defaults to ``true`` at watch-enable; surfaced as a checkbox in the
+ *   row so users can flip it post-hoc (writes route through the watch-
+ *   enable modal's re-watch flow in T15).
+ * - ``file_count`` — number of vault notes whose frontmatter
+ *   ``watched_folder_id`` matches this entry's ``path``. Walked at request
+ *   time (no cache).
+ * - ``orphan_count`` — subset of ``file_count`` whose frontmatter
+ *   ``orphaned == true``. Walked at request time.
+ */
+export interface WatchedFolderEntry {
+  path: string;
+  domain: string;
+  enabled: boolean;
+  last_sync: string | null;
+  policy: string;
+  include_subdirs: boolean;
+  file_count: number;
+  orphan_count: number;
+}
+
+/**
+ * ``brain_list_watched_folders`` ``ToolResult.data`` shape. Single key
+ * (``folders``) holding the array — wraps the list in a struct so the
+ * outer envelope has room to grow (e.g. a future ``stats`` summary)
+ * without a breaking shape change. Plan 22 T12: the Settings panel's
+ * single data source — `WatchedFolderRow` consumers and the (future)
+ * topbar status indicator (T14) read off the same shape.
+ */
+export interface ListWatchedFoldersData {
+  folders: WatchedFolderEntry[];
+}
+
+/**
+ * List every watched folder in :attr:`Config.watched_folders` with the
+ * runtime stats (file_count, orphan_count, last_sync) walked from the
+ * vault. Read-only. Safe to call without ``typed_confirm``.
+ *
+ * The Settings → Watched folders panel (Plan 22 T12) calls this on
+ * first mount and after every mutation (watch / unwatch / resync) so
+ * the row list stays canonical with the backend.
+ */
+export const listWatchedFolders = (): Promise<
+  ToolResponse<ListWatchedFoldersData>
+> =>
+  callTool<ListWatchedFoldersData>("brain_list_watched_folders");
+
+/**
+ * ``brain_unwatch_folder`` ``ToolResult.data`` shape. Two branches
+ * discriminated by ``status`` — mirrors the backend handler at
+ * ``packages/brain_core/src/brain_core/tools/unwatch_folder.py:92-122``:
+ *
+ *  - ``"unwatched"``: the matching entry was removed from
+ *    ``Config.watched_folders``; ``remaining_notes`` counts vault notes
+ *    whose frontmatter ``watched_folder_id`` matches (those notes are
+ *    intentionally left in place per Plan 22 D2 — the user adjudicates
+ *    them via the Orphans tab).
+ *  - ``"not_watched"``: idempotent no-op; the folder wasn't in the
+ *    config to begin with. ``remaining_notes`` still walks the vault so
+ *    the caller can surface the same advisory count.
+ */
+export type UnwatchFolderData =
+  | {
+      status: "unwatched";
+      folder: string;
+      remaining_notes: number;
+    }
+  | {
+      status: "not_watched";
+      folder: string;
+      remaining_notes: number;
+    };
+
+/**
+ * Remove a watched folder entry from :attr:`Config.watched_folders`.
+ * Non-destructive (Plan 22 D2): existing vault notes stay on disk;
+ * orphans remain marked. Idempotent on a folder that isn't watched.
+ *
+ * The Settings → Watched folders panel calls this from the row's
+ * "Unwatch" action (after the watch-disable confirmation modal — T15).
+ */
+export const unwatchFolder = (args: {
+  folder: string;
+}): Promise<ToolResponse<UnwatchFolderData>> =>
+  callTool<UnwatchFolderData>("brain_unwatch_folder", args);
+
 // ---------- registry ----------
 
 /**
@@ -1292,6 +1406,15 @@ export const ALL_TOOL_NAMES = [
   // Plan 16 Task 33 — Settings Repair-config dialog (diagnostic + apply).
   "brain_repair_config",
   "brain_repair_config_apply",
+  // Plan 22 — Watched folders (live source → vault sync). Only the two
+  // read/write tools the Settings panel (T12) consumes are wired here.
+  // ``brain_watch_folder`` is wired in T15 (watch-enable modal) and
+  // ``brain_resync_folder`` / ``brain_list_orphans`` / ``brain_restore_orphan``
+  // / ``brain_delete_orphan`` are wired in T13 (Orphans panel) and a
+  // later resync follow-up (the resync handler did not ship in T5 —
+  // tracked as Plan 22 / Plan 23 candidate).
+  "brain_list_watched_folders",
+  "brain_unwatch_folder",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];

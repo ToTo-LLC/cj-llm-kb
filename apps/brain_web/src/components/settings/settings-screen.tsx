@@ -8,6 +8,7 @@ import {
   BookOpen,
   Bot,
   DollarSign,
+  Eye,
   Folder,
   Plug,
   Settings as SettingsIcon,
@@ -22,6 +23,7 @@ import { PanelDomains } from "./panel-domains";
 import { PanelGeneral } from "./panel-general";
 import { PanelIntegrations } from "./panel-integrations";
 import { PanelProviders } from "./panel-providers";
+import { PanelWatchedFolders } from "./panel-watched-folders";
 import { cn } from "@/lib/utils";
 
 /**
@@ -50,9 +52,13 @@ export type SettingsTabId =
   | "autonomous"
   | "integrations"
   | "domains"
+  | "watched-folders"
   | "brain-md"
   | "backups";
 
+// Plan 22 T12 (per mockup hand-off note): "Watched folders" lives
+// between "Domains" and "BRAIN.md" — semantically grouped with the
+// content-source settings. The Orphans tab (T13) lands after this one.
 const TABS: readonly TabDef[] = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "providers", label: "LLM providers", icon: Plug },
@@ -60,6 +66,7 @@ const TABS: readonly TabDef[] = [
   { id: "autonomous", label: "Autonomous", icon: Bot },
   { id: "integrations", label: "Integrations", icon: Shuffle },
   { id: "domains", label: "Domains", icon: Folder },
+  { id: "watched-folders", label: "Watched folders", icon: Eye },
   { id: "brain-md", label: "BRAIN.md", icon: BookOpen },
   { id: "backups", label: "Backups", icon: Archive },
 ];
@@ -80,6 +87,8 @@ function renderPanel(tab: SettingsTabId): React.ReactElement {
       return <PanelIntegrations />;
     case "domains":
       return <PanelDomains />;
+    case "watched-folders":
+      return <PanelWatchedFolders />;
     case "brain-md":
       return <PanelBrainMd />;
     case "backups":
