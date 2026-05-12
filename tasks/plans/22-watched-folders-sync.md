@@ -757,6 +757,104 @@ tasks/
 _Filled in at each task close. Standard receipt format mirrors Plan
 19/20/21._
 
+### T0 outcome — Spec update (§4 / §5 / §10)
+
+**Status:** DONE.
+
+**File touched:** `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md`
+(spec is the only file modified for T0 per the docs-only constraint).
+
+**Edits landed:**
+
+1. **§4 frontmatter list** — 4 new fields added at lines 175-178,
+   inserted between `source_url` (line 174) and `tags` (now line 179)
+   so the source-related fields cluster (`source_type` → `source_url`
+   → `source_path` → `orphaned` → `orphaned_at` → `watched_folder_id`).
+   Fields: `source_path` (str, abs path), `orphaned` (bool, default
+   false), `orphaned_at` (date, null when not orphaned),
+   `watched_folder_id` (str, links note → `Config.watched_folders[*].path`).
+
+2. **§5 "Watched folders" subsection** — inserted at lines 249-292,
+   between "Bulk import" (ends line 247) and "Failure handling" (now
+   starts line 294). Subsection covers: live source → vault sync intro
+   with Plan 16 T35 watchdog precedent; `WatchedFolder` schema yaml
+   block; 3-step lifecycle (watch enable → live created/modified/
+   deleted events → watch disable); source-canonical contract +
+   overwrite policy + v2 deferral; classify-once-preserve behavior;
+   orphan policy with `scope_guard(..., include_orphans=False)`;
+   initial sync rate-limit/budget integration with informational cost
+   estimate; 7-tool surface bullet list; pointer to §4 for frontmatter
+   canonicality.
+
+3. **§10 Safety rails bullet** — single bullet inserted at line 557,
+   between "Domain firewall" (line 556) and "Canonical Config entry
+   point" (line 558). Bullet covers: opt-in only triggering; backup
+   trigger `pre_watched_folder_sync`; non-destructive orphan marks +
+   typed_confirm delete; `scope_guard(..., include_orphans=False)`
+   default-hide + `include_orphans=True` explicit-surface for the
+   Orphan management screen; cross-reference to §5 subsection.
+
+**Wording adjustments vs the template:** None substantive. All three
+templates from the plan-doc T0 section landed verbatim. The §4 list
+insertion location (before `tags`) was the natural cluster point per
+the plan-doc guidance.
+
+**Internal-consistency review:**
+
+- §3 Domain separation (line 188) + §10 `scope_guard` (line 556): the
+  new `include_orphans` kwarg is purely additive — no existing
+  `scope_guard(path, allowed_domains)` signature contradiction.
+  scope_guard remains the single-function firewall; the orphan filter
+  is a default-true behavior with an opt-out kwarg.
+- Prior to this edit, the spec had ZERO `orphan` mentions and exactly
+  one `scope_guard` signature mention (line 556 in §10). No
+  conflicting prose. The new "vault is sacred" alignment is explicitly
+  reinforced in the §5 orphan-policy paragraph + the §10 bullet.
+- The plan-22 D8 non-negotiable ("spec update lands at T0 per
+  CLAUDE.md `Changes to vault schema, prompts, or safety rails: spec
+  update first`") is satisfied: §4 (vault schema), §5 (ingest pipeline
+  surface area), §10 (safety rails) are all updated BEFORE T1.
+
+**Self-review findings:**
+
+- All locked decisions D1-D14 from the plan doc are reflected in the
+  spec edits:
+  - D1 (overwrite contract) → §5 "Contract" paragraph.
+  - D2 (per-folder domain override) → §5 lifecycle step 1
+    `domain_override=domain`.
+  - D3 (preserve domain on re-ingest) → §5 "Classify behavior"
+    paragraph.
+  - D4 (classify once) → §5 "Classify behavior" paragraph.
+  - D5 (rate-limit + budget enforce; no file-count cap) → §5 "Initial
+    sync" paragraph.
+  - D6 (orphan marks non-destructive) → §5 "Orphan policy" + §10
+    bullet.
+  - D7 (manual delete via `brain_delete_orphan` with `typed_confirm`)
+    → §5 "Orphan policy" + §10 bullet.
+  - D8 (spec-first at T0) → this commit lands the spec edit.
+  - D9 (cost estimate informational) → §5 "Initial sync" paragraph.
+  - D10 (resume after budget exhaust) → §5 "Initial sync" paragraph.
+  - D11 (no new deps) → trivially held; T0 is docs-only.
+  - D12 (no push) → outcome receipt notes commits, no push.
+  - D13 (`pre_watched_folder_sync` trigger) → §5 lifecycle step 1 +
+    §10 bullet.
+  - D14 (Orphan management screen surfaces orphans via
+    `include_orphans=True`) → §10 bullet.
+
+- No phrase-level ambiguities flagged. "Source is canonical" (§5
+  Contract), "orphans non-destructive" (§5 Orphan policy + §10), and
+  "explicit user action, never auto-triggered" (§10) are all present
+  verbatim and unambiguous.
+
+**Concerns:** None.
+
+**Commits:**
+- `5937862` — `docs(plan-22): T0 — spec update §4 frontmatter + §5
+  Watched folders + §10 safety rails` (spec edit; 1 file, +50 lines).
+- _This receipt commit follows in the next SHA._
+
+
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
