@@ -724,15 +724,76 @@ same PYTHONPATH recipe to keep the demo gate clean.)
 
 ## T3 outcome
 
-_Filled in at T3 close. Demo gate count + commits + tag SHA + push
-receipt._
+**Status:** DONE.
+
+**(a) Demo gate count.** `scripts/demo-plan-21.py` lands with **6 gates**
+(per D7 — gate count not pinned; 6 is the natural count for Plan 21's
+surface: 2 sub-gates per substantive task + 1 closure gate). Gate map:
+
+1. **T1.a** — `static_ui.py` defines `_find_repo_root(start, *, marker)`
+   (regex match on `def _find_repo_root(` + `marker` keyword arg).
+2. **T1.b** — `resolve_out_dir` body references `_find_repo_root` AND
+   retains `.parents[4]` secondary fallback inside `try/except IndexError`.
+3. **T1.c** — `test_static_ui_find_repo_root.py` exists with ≥ 5
+   `def test_` functions.
+4. **T2.a** — `app.py` `mount_static_ui` block contains a
+   `_lifespan_logger.warning("spa_mount_skipped", ...)` call inside
+   `except RuntimeError`.
+5. **T2.b** — `test_app_silent_degrade_warning.py` exists with ≥ 3
+   `def test_` functions.
+6. **T3** — `tasks/todo.md` row 21 ✅ + `tasks/lessons.md` has a
+   `## Plan 21` closure section.
+
+All 6 gates use file-content regex + Path-based existence (no
+`import brain_api`) — Plan 21 T2 surfaced the install-as-copy class so
+runtime introspection is fragile. Plan 20's `model_fields`-style
+runtime gates were not applicable here (Plan 21 ships no Pydantic
+schema; the deliverables are a helper function + a warning call).
+
+**(b) Demo run output (final line).**
+
+```
+PLAN 21 DEMO OK
+```
+
+Ran under `python3 scripts/demo-plan-21.py` from the repo root — no
+PYTHONPATH bypass needed because the demo intentionally avoids the
+`import brain_api` path that exposed the install-as-copy issue.
+
+**(c) Commits.** T3 closure landed as a 4-commit split mirroring Plan 20
+T4's cadence + 1 auto-memory commit (option-2 expanded scope):
+
+- `chore(plan-21): T3.1 — demo-plan-21.py asserting all 6 closure gates`
+- `docs(plan-21): T3.2 — lessons.md Plan 21 closure section`
+- `docs(plan-21): T3.3 — todo.md row 21 ✅ + plan-doc Review + Plan 22
+  candidate scope`
+- `docs(plan-21): T3.4 — feedback_uv_uf_hidden.md 2026-05-12 update for
+  install-as-copy + .venv duplication shapes`
+
+**(d) Tag.** `plan-21-resolve-out-dir-hardening` cut at HEAD after all
+4 T3 commits land. SHA recorded in `## Review` below.
+
+**(e) Auto-memory file update.** `feedback_uv_uf_hidden.md` (at
+`/Users/chrisjohnson/.claude/projects/-Users-chrisjohnson-Documents-Code-TomorrowToday-cj-llm-kb/memory/feedback_uv_uf_hidden.md`)
+gained a 2026-05-12 update section documenting two NEW failure modes
+that surfaced during Plan 21 dev iteration: (A) install-as-copy stale
+site-packages (workspace pyproject pins `editable = false`; source
+edits don't propagate without `--reinstall-package -e` flip), and
+(B) .venv file duplication (every file gets ` 2.py`/` 3.py` suffix AND
+canonical files disappear — beyond chflags recovery; requires
+`rm -rf .venv` rebuild). The pre-existing 2026-05-07 update section
+(PYTHONPATH escape-hatch promoted to primary recipe) is preserved
+untouched.
+
+**(f) No push.** Per D10, tag is cut locally; controller relays to user
+for push authorization. Pre-T3 the branch was 0 commits ahead of
+origin/main; T3 lands 4 new commits + 1 tag.
 
 ## Plan 22 candidate scope
 
-Filled in at T3 closure. The canonical record is the tail block of
-`tasks/todo.md`; this section is a brief pointer. Preserved Plan 17 /
-earlier carry-forwards per D5 (4 NOT-DOING items, unchanged from Plan
-20 tail):
+The canonical record is the tail block of `tasks/todo.md`; this section
+is a brief pointer. Preserved Plan 17 / earlier carry-forwards per D5
+(4 NOT-DOING items, unchanged from Plan 20 tail):
 
 - `seedBrainMd` / `seedScope` rule-of-three (threshold not met).
 - Per-thread cross-domain confirmation (architectural NO per spec §3 +
@@ -741,12 +802,90 @@ earlier carry-forwards per D5 (4 NOT-DOING items, unchanged from Plan
 - Free-threaded Python PEP 703 for `_cached_ctx` (3.14 timeline
   trigger).
 
-Plus any new candidates surfacing from Plan 21 execution.
+Plus 1 NEW candidate surfaced during Plan 21 dev iteration:
+
+- Workspace `editable = true` flip for `brain_api` / `brain_mcp` /
+  `brain_cli` (excluding `brain_core`). Closes the dev-loop friction
+  class (install-as-copy stale site-packages) hit by T1 + T2
+  implementers. Trade-off: editable mode brings `.pth` UF_HIDDEN
+  masking class back into scope. Mixed-mode workspace is the likely
+  path forward.
+
+These are NOT a Plan 22 commitment — Plan 22 will be authored
+just-in-time once the user reviews the carry-forward list and locks
+scope.
 
 ## Review
 
-_Filled in at T3 close. Tag SHA + closure summary + bumps + verification
-receipts + backlog forward._
+**Tag.** `plan-21-resolve-out-dir-hardening` at `HEAD` (post-T3.4
+commit). Lightweight tag per Plan 17 / 18 / 19 / 20 convention. Cut
+locally — push deferred per D10 to controller-relayed user
+authorization.
+
+**Closes.**
+
+- Plan 19 T2 surprise #2 (`resolve_out_dir parents[4]` silent-degrade
+  under uv editable install + iCloud `.pth` masking) — replaced
+  depth-based fallback with content-based walk-up + retained
+  `parents[4]` as documented secondary fallback for tarball-extracted
+  source dirs without `.git`.
+- Plan 20 1.A deferral (resolve_out_dir hardening explicitly punted
+  per user scope-locking "Small Plan 20 = #6 + #7, NOT #5").
+- Silent-degrade-by-design observability gap in `app.py`'s
+  `mount_static_ui` branch (bare `except RuntimeError: pass` replaced
+  with structured `_lifespan_logger.warning("spa_mount_skipped", ...)`).
+
+**Bumps.**
+
+- Test counts: brain_api **+8 tests** (5 in
+  `test_static_ui_find_repo_root.py` + 3 in
+  `test_app_silent_degrade_warning.py`) — 211 passed / 4 skipped total
+  (up from pre-T1's 203/4).
+- New helper: `_find_repo_root(start, *, marker)` at
+  `static_ui.py:70-89` — pure pathlib content-based walk-up.
+- New structured log event: `spa_mount_skipped` at `app.py:295` —
+  emitted only when SPA mount asked-for + resolver raised.
+- No schema changes, no new dependencies, no spec text changes.
+
+**Verification.**
+
+- `scripts/demo-plan-21.py` → all 6 gates pass; final line
+  `PLAN 21 DEMO OK`.
+- `pytest packages/brain_api/tests/` → 211 passed / 4 skipped / 5
+  warnings in 2.43s (T2 baseline).
+- In-process visual-QA receipt (T1 §(f)): walk-up from both `.venv`
+  site-packages copy AND workspace source resolves to the iCloud repo
+  root; `resolve_out_dir()` returns the right path with NO
+  `BRAIN_WEB_OUT_DIR` env override needed (the env-override workaround
+  documented in the auto-memory is now unnecessary in dev).
+
+**Backlog forward (handed to Plan 22 candidate scope).**
+
+- 4 preserved NOT-DOING carry-forwards (unchanged since Plan 17 / 18
+  / 19 / 20): `seedBrainMd` / `seedScope` rule-of-three; per-thread
+  cross-domain confirmation (architectural NO per spec §3 + Plan 16
+  D36); topbar scope chip drift watch (lesson-only per Plan 12);
+  PEP 703 `_cached_ctx` 3.14 trigger.
+- 1 NEW Plan 21-surfaced candidate: workspace `editable = true` flip
+  for the 3 wrapper packages (`brain_api` / `brain_mcp` / `brain_cli`)
+  to close the dev-loop friction class. Trade-off: editable mode
+  brings the `.pth` UF_HIDDEN masking class back into scope; mixed-mode
+  is the likely path forward. Captured in
+  `feedback_uv_uf_hidden.md` 2026-05-12 update section.
+
+**Process notes.**
+
+- T1 + T2 implementer surprises were the dominant load-bearing event
+  this plan: both implementers hit install-as-copy stale site-packages
+  (workspace pin `editable = false` for `brain_api`), and T1 also
+  hit .venv file duplication beyond chflags recovery. The recovery
+  recipes are now in `feedback_uv_uf_hidden.md` 2026-05-12 update so
+  Plan 22+ implementers don't re-discover them.
+- Plan 21 T1 § (a) D4 adjudication is a worked example of the
+  "grep-before-assuming" discipline at runtime-marker scope:
+  `pyproject.toml` is a plausible workspace-root marker, but
+  `find . -name pyproject.toml` shows 5 hits on this repo, ruling it
+  out at exec time before the helper landed. `.git` won unambiguously.
 
 ---
 
