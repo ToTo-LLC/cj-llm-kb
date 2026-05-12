@@ -513,11 +513,107 @@ tasks/
 
 ## T1 outcome
 
-_Filled in at T1 close. Per-step receipts: helper added at static_ui.py:<line>;
-resolve_out_dir updated; test file + test count + pass/fail; brain_api
-full-suite run output; marker choice adjudication (per D4); optional
-supplemental visual-QA verification receipt if the implementer chose to
-run it._
+**(a) Marker choice + D4 adjudication.** Chose `.git` as the walk-up
+marker, matching the plan-doc recommendation. Exec-time verification:
+
+- `/Users/chrisjohnson/Documents/Code/TomorrowToday/cj-llm-kb/.git` is a
+  real directory (drwxr-xr-x, 24 entries) — NOT a git-worktree pointer
+  file. Walk-up will reach it via pathlib's `.exists()`.
+- `find . -name .git` (excluding `node_modules` / `.venv`) returned
+  EXACTLY ONE hit at the repo root. No nested `.git` files or directories
+  at `packages/<name>/.git` or `apps/<name>/.git` would short-circuit the
+  walk-up incorrectly. No git-submodule edge cases on this repo.
+- `find . -name pyproject.toml` returned 5 hits: root + each of
+  `packages/{brain_api,brain_cli,brain_core,brain_mcp}/pyproject.toml`.
+  This confirms uv-workspace layout and rules OUT `pyproject.toml` as a
+  marker — it would short-circuit at the sub-package level
+  (`parents[3]`) instead of repo root (`parents[4]`). `.git` is the
+  unambiguous choice.
+
+**(b) Helper added at** `packages/brain_api/src/brain_api/static_ui.py`
+**lines 70-89.** Pure pathlib (no `os.path`, no `shell=True`), with the
+docstring referencing Plan 21 T1 + the auto-memory `feedback_brain_web_out_dir.md`.
+Default `marker=".git"`. Returns `None` if walk-up reaches `/` without a
+hit. Accepts both directory and file starting paths (`start.parent` for
+files).
+
+**(c) `resolve_out_dir` updated at** `static_ui.py` **lines 115-129
+(the dev-fallback block; full function spans lines 92-141).**
+Walk-up is the primary dev-fallback; `here.parents[4]` retained as
+secondary inside `try: ... except IndexError: pass` (preserves
+tarball-extracted source-dir behavior when `.git` is absent). The
+env-override (`BRAIN_WEB_OUT_DIR`) and install-layout
+(`BRAIN_INSTALL_DIR/web/out`) candidates are unchanged.
+
+**(d) Test file +
+count.** `packages/brain_api/tests/test_static_ui_find_repo_root.py`
+(95 LOC). 5 tests covering: marker-at-start, intermediate first-hit-
+wins, missing-marker-returns-None, starting-path-as-directory,
+starting-path-as-file. All use unique sentinel names
+(`BRAIN_TEST_SENTINEL` / `UNLIKELY_NAME_BRAIN_TEST_SENTINEL`) so the
+test runner's own `.git` ancestor chain cannot contaminate assertions.
+
+```
+$ uv run --active --no-sync pytest packages/brain_api/tests/test_static_ui_find_repo_root.py -v
+...
+collected 5 items
+
+test_find_repo_root_finds_marker_at_start PASSED                [ 20%]
+test_find_repo_root_finds_marker_at_intermediate_level PASSED   [ 40%]
+test_find_repo_root_returns_none_when_marker_absent PASSED      [ 60%]
+test_find_repo_root_accepts_starting_path_as_directory PASSED   [ 80%]
+test_find_repo_root_accepts_starting_path_as_file PASSED        [100%]
+
+5 passed, 5 warnings in 0.01s
+```
+
+**(e) Brain_api full-suite run.** Regression coverage for
+`resolve_out_dir`'s production callers:
+
+```
+$ uv run --active --no-sync pytest packages/brain_api/tests/ -q
+ssss.................................................................... [ 33%]
+........................................................................ [ 67%]
+....................................................................     [100%]
+208 passed, 4 skipped, 5 warnings in 3.31s
+```
+
+**(f) Optional visual-QA receipt.** Ran in-process (lighter than full
+uvicorn boot, same code-path correctness):
+
+```python
+from brain_api.static_ui import resolve_out_dir, _find_repo_root
+# Walk-up from .venv site-packages copy (the path resolve_out_dir() sees
+# in production under uv non-editable install + iCloud .pth masking):
+_find_repo_root(Path(".venv/lib/python3.12/site-packages/brain_api/static_ui.py"))
+#   -> Path('/Users/chrisjohnson/Documents/Code/TomorrowToday/cj-llm-kb')
+# Walk-up from source location (the path under editable install):
+_find_repo_root(Path("packages/brain_api/src/brain_api/static_ui.py"))
+#   -> Path('/Users/chrisjohnson/Documents/Code/TomorrowToday/cj-llm-kb')
+# resolve_out_dir() with no env overrides:
+resolve_out_dir()
+#   -> Path('/Users/chrisjohnson/Documents/Code/TomorrowToday/cj-llm-kb/apps/brain_web/out')
+```
+
+Both walk-up entry points resolve correctly to the iCloud repo root.
+`resolve_out_dir()` returns the right path WITHOUT `BRAIN_WEB_OUT_DIR`
+set — the env-override workaround documented in the auto-memory is now
+unnecessary in dev. (Full uvicorn `curl /` skipped to avoid the
+additional flake surface; the in-process check exercises the exact
+code path the static-mount uses.)
+
+**Implementer note re: chflags recipe.** During verification the
+existing iCloud `.venv` was found in an inconsistent state (every
+file duplicated with " 2.py", " 3.py" suffixes — symptoms of iCloud
+sync corruption beyond simple `.pth` hidden-flag masking). Resolved by
+`rm -rf .venv && uv sync --all-packages` and then
+`uv pip install --reinstall-package brain_api -e packages/brain_api`
+to switch brain_api to editable mode (the workspace pyproject pins
+`editable = false`, so source edits do not auto-propagate to
+site-packages). Documented here so future implementers reaching
+the same state know the recovery path. The chflags+pytest recipe from
+auto-memory `feedback_uv_uf_hidden.md` is still correct for the
+NORMAL state; the venv-rebuild was a deeper recovery step.
 
 ## T2 outcome
 
