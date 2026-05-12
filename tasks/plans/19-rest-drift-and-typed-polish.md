@@ -1300,22 +1300,45 @@ Plus any new candidates surfacing from Plan 19 execution.
 
 ## Review
 
-- **Tag:** `plan-19-rest-drift-and-typed-polish` (cut on green demo
-  by the user after final approval).
-- **Closes:** the Plan 18 candidate scope tail block (preserved here
-  for traceability): Track A REST-endpoint drift (T1 audit + T2
-  fixes); Track B cost-badge UX (T3 suppression); Track C 4
-  informational extras (T4 bundled with sub-fixes); Track D
-  `planToFiles` type-tighten (T5).
-- **Bumps:** to be filled in at closure.
-- **Verification:** `scripts/demo-plan-19.py` → `PLAN 19 DEMO OK`
-  (gate count not pinned per D7); pytest + vitest + Playwright
-  green on the implementer's local Mac (Windows CI cut at user-tag
-  + push time per D10).
+- **Tag:** `plan-19-rest-drift-and-typed-polish` cut at HEAD on the
+  green `scripts/demo-plan-19.py` run (2026-05-12). Tag points at
+  the final closure commit (T6.3 plan-doc Review finalization);
+  earlier T6 commits are reachable via the tag's history.
+- **Closes:** the Plan 18 candidate scope tail block end-to-end —
+  Track A REST-endpoint drift (T1 3-endpoint audit + T2 `/api/upload`
+  `UploadResult` narrow + 2 live consumer fixes + dead-fallback
+  tripwire + Python pin); Track B cost-badge UX (T3 `cost > 0`
+  suppression + breadcrumb update at `inbox-store.ts:160`); Track C
+  4 informational extras (T4 bundled — `recent`/`proposeNote`/
+  `listPendingPatches`/`configSet` widens + 7 downstream wrapper
+  retypes + 4 Python pin tests with 7 cases); Track D `planToFiles`
+  type-tighten (T5 helper signature → `readonly BulkImportPlannedItem[]`
+  + cast removal + 6-field dead-probe pruning, ~40 → ~17 LOC).
+- **Bumps:** none. Zero schema changes; zero new dependencies; zero
+  spec text changes (per D11 mirroring Plan 17's discipline). All
+  fixes were typed-surface alignments to existing backend reality
+  plus dead-code cleanup.
+- **Verification:** `scripts/demo-plan-19.py` 16-gate demo prints
+  `PLAN 19 DEMO OK` (gate count not pinned per D7; bundled T4's 4
+  sub-fixes under one gate + a shared pins-existence gate to mirror
+  Plan 18's 16-gate shape). Test counts at plan-close: brain_api +2
+  pins in `test_endpoint_upload_shape.py`; brain_core +7 pin test
+  cases across 4 new files in `packages/brain_core/tests/tools/`;
+  brain_web +3 source-row tests + 1 drop-zone test. `pnpm tsc
+  --noEmit` clean (per-task; per the `0ac02a9` lesson). Mac local
+  verified; Windows CI cut at push time per D10.
 - **Backlog forward:** Plan 20 candidate scope per the tail block
-  of `tasks/todo.md` (preserved Plan 17 carry-forwards + any new
-  candidates surfacing from Plan 19 execution).
+  of `tasks/todo.md` — 4 preserved NOT-DOING carry-forwards from
+  Plan 18 (seedBrainMd/seedScope rule-of-three; per-thread cross-
+  domain confirmation = architectural NO per spec §3 + Plan 16 D36;
+  topbar scope chip drift watch = lesson-only per Plan 12; PEP 703
+  `_cached_ctx` 3.14 trigger) plus 3 new candidates from Plan 19
+  execution: `resolve_out_dir` `parents[4]` iCloud hardening (T2
+  surprise #2), FastAPI `response_model` field-set pin pattern
+  adoption across all REST endpoints (T2.b precedent), and
+  `configSet`-routed wrapper-shape audit (T4 surprise #1 — propagate
+  vs hardcoded types lint).
 
 ---
 
-**End of Plan 19 (draft, awaiting approval).**
+**End of Plan 19.**
