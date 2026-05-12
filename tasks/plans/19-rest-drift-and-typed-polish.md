@@ -812,6 +812,69 @@ commits:
 (Or a single combined commit if the user prefers; commits stay
 ~150 LOC total.)
 
+## T3 outcome
+
+**Status:** DONE on 2026-05-12.
+
+Track B closure: the ingest-row cost badge is suppressed when `cost
+=== 0` (cached / zero-token rows the backend emits as `cost_usd: 0.0`).
+The strict `cost > 0` form also suppresses `undefined` / `null` / `NaN`
+by JS coercion — defensive against bad data and matches D4's locked
+"suppression is decisive" direction.
+
+### Per-finding receipts
+
+**(a) Suppression at `apps/brain_web/src/components/inbox/source-row.tsx`
+(lines 109-115 post-fix).** The pre-fix conditional was `typeof
+source.cost === "number" && ( ... )` — a type-guard that accepted `0`
+and rendered `· $0.000`. Post-fix: `typeof source.cost === "number" &&
+source.cost > 0 && ( ... )`. Strict `> 0` was chosen over `cost ? ...`
+loose-truthy per the plan doc's "explicit over clever" preference: `>
+0` is decisive about which values mean "no badge", and the inline
+comment cites D4 + the defensive-against-NaN rationale.
+
+**(b) Breadcrumb resolved at `apps/brain_web/src/lib/state/inbox-store.ts`
+(lines 160-164 post-fix).** The Plan 18-era comment flagged "Plan 19
+candidate" — updated to "Plan 19 T3 (D4) resolved the UX question
+downstream in <SourceRow>" so future readers see the closure cross-
+reference without having to git-blame to find it.
+
+**(c) Unit tests at `apps/brain_web/tests/unit/source-row.test.tsx`
+(lines 78-122, 3 new cases).** Names:
+- `"done status renders the cost badge when cost > 0"` (positive case)
+- `"done status suppresses the cost badge when cost === 0"` (the live
+  bug case)
+- `"done status suppresses the cost badge when cost is undefined"`
+  (defensive — same suppression path)
+
+RED-then-GREEN sanity check: I temporarily reverted the `source.cost
+> 0` guard back to the pre-fix `typeof source.cost === "number"`
+shape and re-ran the test file. The `cost === 0` case failed with
+`expected document not to contain element, found <span>... · $0.000
+</span>` — confirms the test fails RED if the suppression is reverted.
+Restored the fix; re-ran; 7/7 GREEN.
+
+### Smoke + verification
+
+- `pnpm vitest run tests/unit/source-row.test.tsx` → 7/7 pass.
+- `pnpm vitest run tests/unit/inbox-store.test.ts tests/unit/inbox-store-loadRecent.test.ts`
+  → 9/9 pass (related store tests unaffected by the breadcrumb change).
+- `pnpm tsc --noEmit` → exit 0 (no type regressions; mirrors the T2
+  follow-up commit `0ac02a9` lesson about vitest leniency vs tsc).
+- **Visual verification (per CLAUDE.md):** started `pnpm dev` on
+  `:4316`, stubbed `/api/setup-status` / `/api/token` /
+  `/api/tools/brain_recent_ingests` to feed 3 synthetic done-rows
+  (`cost_usd: 0`, `cost_usd: 0.123`, `cost_usd` omitted). Clicked the
+  "Recent" inbox tab. Verified sublines:
+  - `cost=0` row → `"Filed to research"` (badge suppressed) ✅
+  - `cost=0.123` row → `"Filed to research · $0.123"` (badge renders) ✅
+  - `cost=undefined` row → `"Filed to research"` (badge suppressed) ✅
+
+### Commit
+
+Single atomic commit (per D8 review style and the ~20-40 LOC scope).
+Commit SHA recorded after `git commit`. No push per D10.
+
 ## T4 outcome
 
 To be filled in at T4 execution. Per-sub-fix receipts (T4.1 / T4.2 /

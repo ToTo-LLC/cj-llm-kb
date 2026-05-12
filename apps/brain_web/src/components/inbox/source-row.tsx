@@ -106,7 +106,11 @@ export function SourceRow({
           ) : source.status === "done" ? (
             <span>
               Filed to <strong>{source.domain ?? "unclassified"}</strong>
-              {typeof source.cost === "number" && (
+              {/* Plan 19 T3 (D4): suppress the cost badge when ``cost === 0``
+                  (cached / zero-token rows the backend emits as 0.0). The
+                  strict ``cost > 0`` form also suppresses undefined / null /
+                  NaN by JS coercion — defensive against bad data. */}
+              {typeof source.cost === "number" && source.cost > 0 && (
                 <> · ${source.cost.toFixed(3)}</>
               )}
             </span>

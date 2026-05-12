@@ -75,6 +75,57 @@ describe("SourceRow", () => {
     expect(fill!.style.width).toBe("85%");
   });
 
+  // Plan 19 T3 (D4): the ``done`` row's cost badge should render when
+  // ``cost > 0`` and be suppressed for ``cost === 0`` and ``cost ===
+  // undefined``. The strict ``cost > 0`` form is decisive about which
+  // values mean "no badge" — cached / zero-token rows the backend emits
+  // as 0.0 used to render as the visually-noisy and semantically
+  // ambiguous "$0.000".
+  test("done status renders the cost badge when cost > 0", () => {
+    render(
+      <SourceRow
+        source={mkSource({
+          status: "done",
+          progress: 100,
+          domain: "research",
+          cost: 0.123,
+        })}
+      />,
+    );
+    expect(screen.getByText(/\$0\.123/)).toBeInTheDocument();
+  });
+
+  test("done status suppresses the cost badge when cost === 0", () => {
+    render(
+      <SourceRow
+        source={mkSource({
+          status: "done",
+          progress: 100,
+          domain: "research",
+          cost: 0,
+        })}
+      />,
+    );
+    // No "$" cost segment anywhere on the row — the "Filed to <domain>"
+    // line stands alone.
+    expect(screen.queryByText(/\$0\.000/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/·\s*\$/)).not.toBeInTheDocument();
+  });
+
+  test("done status suppresses the cost badge when cost is undefined", () => {
+    render(
+      <SourceRow
+        source={mkSource({
+          status: "done",
+          progress: 100,
+          domain: "research",
+          // cost intentionally omitted — IngestSource.cost is optional.
+        })}
+      />,
+    );
+    expect(screen.queryByText(/·\s*\$/)).not.toBeInTheDocument();
+  });
+
   test("failed status renders the error line AND a Retry button", () => {
     const onRetry = vi.fn();
     render(

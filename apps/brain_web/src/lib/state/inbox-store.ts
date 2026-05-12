@@ -157,9 +157,11 @@ export const useInboxStore = create<InboxState>((set, get) => ({
               : 0,
         at: it.classified_at,
         error: it.error,
-        // Backend always emits cost_usd (0.0 for cached / zero-token rows). Renders
-        // as $0.000 in <SourceRow>; future UX pass may want to suppress the badge
-        // when cost === 0 specifically. Plan 19 candidate.
+        // Backend always emits cost_usd (0.0 for cached / zero-token rows).
+        // Plan 19 T3 (D4) resolved the UX question downstream in <SourceRow>:
+        // the badge is suppressed when ``cost === 0``. The store still
+        // forwards the raw value so consumers can distinguish 0 from
+        // undefined if a future surface needs to.
         cost: it.cost_usd,
       }),
     );
