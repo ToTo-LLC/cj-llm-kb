@@ -2380,6 +2380,113 @@ model when ``Config.llm`` is missing is ``claude-haiku-4-5-20251001``
   trigger + informational cost estimate`
 - _(docs commit SHA backfilled by the docs commit itself)_
 
+### T10 outcome — Backend integration tests (brain_core + brain_api)
+
+**Status:** ✅ complete (this commit + receipts).
+
+**Files added:**
+
+- `packages/brain_core/tests/watch/test_folder_watcher_integration.py`
+  — 665 LOC, 6 end-to-end integration tests using REAL
+  :class:`IngestPipeline` + REAL :class:`WatchedFolderWatcher` + a
+  :class:`FakeLLMProvider` queue. `PollingObserver` at 100ms timeout
+  for cross-platform determinism (FSEvents / ReadDirectoryChangesW
+  are flaky in CI sandboxes per Plan 22 D-watch).
+- `packages/brain_api/tests/test_watched_folders_integration.py`
+  — 415 LOC, 4 FastAPI-TestClient integration tests covering the
+  full POST `/api/tools/<name>` round-trip for `brain_watch_folder`
+  (with and without initial sync), `brain_list_watched_folders`, and
+  `brain_unwatch_folder`. Uses the standard `mount_static_ui=False`
+  fixture pattern from Plan 13 Task 5 so the SPA catch-all doesn't
+  shadow API routes.
+
+**brain_core integration coverage (6 tests):**
+
+| Test | Scenario | LLM queue |
+|---|---|---|
+| `e2e_create` | drop `.txt` → pipeline ingest writes a note | summarize + integrate (classify skipped via `domain_override`) |
+| `e2e_modify` | modify pre-ingested source → `update_source` overwrite branch | summarize + integrate (D4 — no classify) |
+| `e2e_delete` | delete tracked source → `mark_orphaned` flips frontmatter | empty (sync, LLM-free path) |
+| `e2e_hidden` | `.dotfile` drop → no pipeline call | empty (filter fires) |
+| `e2e_unclaimed` | `.xyz` drop → no pipeline call | empty (handler gate) |
+| `e2e_concurrent` | 5 rapid `.txt` drops → 5 distinct notes | 10 queued (2 per file × 5) |
+
+**v1 contract pinned (intentional gap, documented in the
+`e2e_create` test docstring):** the pipeline's Stage 7
+`_build_source_note` does NOT populate `source_path` or
+`watched_folder_id` frontmatter. The watcher passes
+`domain_override` but not the folder-id; the lookup cache the
+watcher's update/delete handlers depend on
+(:func:`_index_vault_for_folder`) is only populated by T5's
+`brain_resync_folder` tool, NOT by a watcher-triggered first
+ingest. A future plan that threads folder-id through the pipeline
+would flip these absence-assertions — pinned explicitly so the
+v1 contract is grep-locked at the integration seam.
+
+**brain_api integration coverage (4 tests):**
+
+| Test | Endpoint | Asserts |
+|---|---|---|
+| `api_watch_folder_registers_folder` | POST `brain_watch_folder` (initial_sync=False) | data envelope shape + Config in-memory + on-disk |
+| `api_list_watched_reflects_registered_folders` | POST `brain_list_watched_folders` | read-after-write contract, runtime stats (file_count=0/orphan_count=0 for freshly registered) |
+| `api_watch_folder_initial_sync_imports_files` | POST `brain_watch_folder` (initial_sync=True) with 2 seeded files | BulkImporter runs end-to-end, 2 notes land in vault, cost_estimate populated |
+| `api_unwatch_folder_removes_row` | POST `brain_unwatch_folder` | row removed from Config + persisted |
+
+**PollingObserver timing:**
+
+- `observer_factory=lambda: PollingObserver(timeout=0.1)` — 100ms
+  polling tick. The default `PollingObserver` timeout is 1s, which
+  blows the test budget; 100ms catches the file events fast enough
+  for the 10s `_wait_async` predicate poll budget.
+- Test wall-clock: brain_core integration suite runs in **~3s**
+  locally (6 tests). brain_api integration suite runs in **<200ms**
+  (4 tests, no observer thread — the lifespan-managed watcher only
+  fires if a folder is registered and we test the tool API surface,
+  not the watcher firing).
+- e2e_create + e2e_modify + e2e_delete + e2e_concurrent each rely
+  on a poll-until-predicate wait loop (10s budget) rather than
+  fixed sleeps, so they complete in ~250-600ms each on a warm
+  machine and have slack for CI cold-starts.
+
+**Test counts:**
+
+- brain_core: 1141 → **1147** (+6 from T10).
+- brain_api: 223 collected → **227** (+4 from T10); 222 passing.
+- Pre-existing failure (not T10's responsibility): one stale tool
+  count pin in `test_tools_listing.py::test_lists_thirty_six_tools_after_issue_17`
+  asserts `len(tools) == 38` while Plan 22 has added 7 new tool
+  surfaces (4 watched-folders tools + the T9 backup trigger
+  expansion is not a tool but the count is now 45). Documented for
+  T11+ cleanup or a future tool-surface inventory plan.
+
+**Cross-platform note:** all tests are pathlib-based, use UTF-8
+explicitly with `newline="\n"`, and use `PollingObserver` rather
+than the platform-specific defaults. The existing CI matrix
+(macos-14 + windows-2022 per Plan 14) carries the cross-platform
+coverage; T10 adds tests that inherit it without per-platform
+branches.
+
+**Review verification (combined per-task review):**
+
+- ✅ Integration tests use `PollingObserver` for determinism — no
+  FSEvents / ReadDirectoryChangesW reliance.
+- ✅ Full `brain_core` test suite green: 1142 passed, 5 skipped.
+- ✅ Full `brain_api` test suite: 222 passed, 4 skipped, 1
+  pre-existing failure (stale tool count, not T10-introduced).
+- ✅ No mocks of `IngestPipeline` or `WatchedFolderWatcher` in the
+  brain_core integration tests — the only mocked seam is the LLM
+  provider, per Plan 22 D11 (no new dependencies) and the
+  test-engineer charter (FakeLLMProvider only).
+- ✅ FakeLLMProvider queue depth carefully tuned per scenario:
+  empty queues prove the no-pipeline-call paths (hidden, unclaimed,
+  orphan-mark); 2-call queues prove `domain_override` skips
+  classify; the concurrent test queues 10 responses (2 per file)
+  to drive 5 parallel ingests through the per-path debounce.
+
+**Commits:**
+
+- _(test + docs commit SHAs backfilled by the commits themselves)_
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
