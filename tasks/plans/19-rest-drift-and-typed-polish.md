@@ -1139,8 +1139,149 @@ Per the plan-doc workflow note (atomic commits preferred), T4 produces
 
 ## T5 outcome
 
-To be filled in at T5 execution. `planToFiles` signature tighten +
-consumer cast removal receipts.
+**Status:** DONE.
+
+### Surprise: `planToFiles` lives in the consumer, not `tools.ts`
+
+The plan-doc T5 spec named `apps/brain_web/src/lib/api/tools.ts` as
+the file to modify for the `planToFiles` signature. In reality
+`planToFiles` is a **local helper inside the consumer module**
+(`apps/brain_web/src/components/bulk/step-pick-folder.tsx:57`) —
+`tools.ts` only owns the `BulkImportPlannedItem` interface (line
+288) consumed by the helper. Both files were still edited per spec;
+the type-tighten happened at the helper definition, the
+interface-import + cast-removal happened at the call site.
+
+### Signature change
+
+`apps/brain_web/src/components/bulk/step-pick-folder.tsx:57`
+
+Before:
+
+```ts
+function planToFiles(plan: Array<Record<string, unknown>>): BulkFile[] {
+```
+
+After:
+
+```ts
+function planToFiles(plan: readonly BulkImportPlannedItem[]): BulkFile[] {
+```
+
+`readonly` chosen over plain `BulkImportPlannedItem[]` because the
+helper doesn't mutate the array — defensive immutability with zero
+caller cost (covariant in the planned argument).
+
+### Body cleanup (dead-code pruning)
+
+Pre-T5 the body probed for **six** fields that the real backend
+tool envelope **never emits** —
+`packages/brain_core/src/brain_core/tools/bulk_import.py:196-204`
+confirms the `planned`-branch items dict has exactly the 4 keys
+`BulkImportPlannedItem` declares (`path`, `slug`,
+`classified_domain`, `confidence`). The dead probes were:
+`item.source`, `item.classified` (legacy mock name superseded by
+`classified_domain`), `item.domain` (legacy mock name), `item.size`
+(picker-path-only, derived locally in `inputToFiles`),
+`item.duplicate` (never carried on the dry-run plan branch — the
+applied branch surfaces duplicates in a separate top-level array),
+`item.skip` (same — top-level `skipped_count` on the planned
+branch, no per-item annotation).
+
+Removing those probes shrank `planToFiles` from ~40 LOC to ~17 LOC
+without behavior change for any real backend caller. The plan-doc
+T5 spec called this out (note 3: "if the body reads a field NOT on
+the interface, you may need to either (a) widen the interface to
+include it, or (b) keep a runtime read pattern but tighten the
+parameter type"). Path (c) — prune dead code — was chosen because
+the backend grep proved those probes were defensive cruft from
+mock fixtures predating the `BulkImportPlannedItem` narrow.
+
+### Consumer cast removal
+
+`apps/brain_web/src/components/bulk/step-pick-folder.tsx:137` (was
+:151-153 pre-T5)
+
+Before:
+
+```ts
+// ``planToFiles`` accepts the legacy ``Array<Record<string, unknown>>``
+// shape; the narrower ``BulkImportPlannedItem[]`` is structurally
+// compatible (each item has the keys ``planToFiles`` probes for),
+// so a widening cast is sufficient. Refactoring ``planToFiles`` to
+// take the named interface is a separate cleanup.
+pickFolder(
+  folderPath,
+  planToFiles(data.items as unknown as Array<Record<string, unknown>>),
+);
+```
+
+After:
+
+```ts
+// Plan 19 T5: ``planToFiles`` now accepts
+// ``readonly BulkImportPlannedItem[]`` directly. ``data.items`` is
+// already that shape from the discriminated union narrow above —
+// no cast needed.
+pickFolder(folderPath, planToFiles(data.items));
+```
+
+The `as unknown as Array<Record<string, unknown>>` double-cast is
+gone; the type system now enforces end-to-end shape correctness
+from `bulkImport`'s `planned`-branch narrow → `planToFiles`'s
+parameter. Plan 18 T3.9's residual cleanup is closed.
+
+### Caller-grep audit
+
+`grep -rn "planToFiles" apps/brain_web/` returns exactly one call
+site (`step-pick-folder.tsx:137`) plus the helper's own definition
+(`:57`). No other module imports or invokes `planToFiles`; no
+risk of a second caller passing the looser shape. The helper is
+module-local (not exported) — confirmed by the absence of an
+`export` keyword on its `function` line.
+
+### Verification receipts
+
+- `pnpm tsc --noEmit` in `apps/brain_web/` → exit 0 (clean).
+- `pnpm lint` in `apps/brain_web/` → "No ESLint warnings or
+  errors".
+- `pnpm vitest run` in `apps/brain_web/` → 81 test files, 496
+  passed + 1 skipped (no regressions). The 4 bulk-import-relevant
+  files (`bulk-apply`, `bulk-store`, `bulk-approve`,
+  `dry-run-table`) all green — 18 tests passed.
+
+### Per-task review (combined per D8)
+
+- **Cast removal at named call site:** confirmed —
+  `step-pick-folder.tsx:137` no longer carries `as unknown as
+  Array<Record<string, unknown>>`.
+- **No other call sites regress:** confirmed — `planToFiles` is
+  module-local with exactly one call site.
+- **Type-check clean:** confirmed — `pnpm tsc --noEmit` exit 0.
+- **Body cleanup is safe:** confirmed — backend grep
+  (`packages/brain_core/src/brain_core/tools/bulk_import.py:196-204`)
+  shows the emitted dict has exactly the 4 fields
+  `BulkImportPlannedItem` declares; the pruned probes were
+  defensive code for shapes the real envelope never produces.
+- **`size` field on output:** `BulkFile.size: string` is required;
+  the helper returns `size: ""` (empty string) because the
+  backend's plan dict doesn't carry per-file size. The
+  bulk-import UI's file-size column shows blank for the
+  `Use a path` flow — same observable behavior as pre-T5 (the
+  legacy `item.size` probe always fell through to `""` since
+  backend never emitted that key). Picker path
+  (`inputToFiles`) unchanged — still formats sizes from the
+  browser `File` object.
+
+### Receipts
+
+- **(a)** Code — `apps/brain_web/src/components/bulk/step-pick-folder.tsx`
+  (signature + body + consumer-site).
+- **(b)** Types — `BulkImportPlannedItem` import added at
+  `apps/brain_web/src/components/bulk/step-pick-folder.tsx:26`.
+- **(c)** Tests — vitest 496 pass + 1 skip; bulk-import suite (4
+  files, 18 tests) all green.
+- **(d)** Plan doc — this `## T5 outcome` section.
 
 ## Plan 20 candidate scope
 

@@ -23,7 +23,7 @@ import { Folder, Shield, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { bulkImport } from "@/lib/api/tools";
+import { bulkImport, type BulkImportPlannedItem } from "@/lib/api/tools";
 import {
   useBulkStore,
   type BulkFile,
@@ -54,46 +54,33 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function planToFiles(plan: Array<Record<string, unknown>>): BulkFile[] {
+function planToFiles(plan: readonly BulkImportPlannedItem[]): BulkFile[] {
+  // Plan 19 T5: tightened from the pre-fix ``Array<Record<string, unknown>>``
+  // shape to ``readonly BulkImportPlannedItem[]``. The backend's
+  // ``status === "planned"`` branch emits exactly 4 fields per item
+  // (``path``, ``slug``, ``classified_domain``, ``confidence``) — see
+  // ``packages/brain_core/src/brain_core/tools/bulk_import.py:196-204``.
+  // Pre-T5 the body probed for legacy/mock fields (``source``,
+  // ``classified``, ``domain``, ``duplicate``, ``skip``, ``size``) that
+  // the real tool envelope never emits; those dead probes are gone with
+  // the type narrow. ``size`` is left empty here — the bulk-import UI
+  // surfaces file metadata from the picker path (``inputToFiles``); the
+  // ``Use a path`` flow doesn't carry per-file sizes from the backend.
   return plan.map((item, i) => {
-    const name =
-      (typeof item.source === "string" && item.source) ||
-      (typeof item.path === "string" && item.path) ||
-      `file-${i + 1}`;
-    // ``classified`` is the legacy mock name; the tool envelope emits
-    // ``classified_domain``. Accept both so the UI keeps working on
-    // either shape (Plan 07 Task 25C fix — surfaced by bulk-import e2e).
-    const classified =
-      typeof item.classified === "string"
-        ? (item.classified as string)
-        : typeof item.classified_domain === "string"
-          ? (item.classified_domain as string)
-          : typeof item.domain === "string"
-            ? (item.domain as string)
-            : null;
-    const confidence =
-      typeof item.confidence === "number" ? (item.confidence as number) : null;
-    const duplicate = item.duplicate === true;
-    const skipRaw = typeof item.skip === "string" ? (item.skip as string) : undefined;
-    const size =
-      typeof item.size === "string"
-        ? (item.size as string)
-        : typeof item.size === "number"
-          ? formatSize(item.size as number)
-          : "";
-    const uncertain = confidence != null && confidence < 0.7;
+    const name = item.path || `file-${i + 1}`;
+    const classified = item.classified_domain;
+    const confidence = item.confidence;
+    const uncertain = confidence < 0.7;
     return {
       id: i + 1,
       name: name.split("/").pop() ?? name,
       type: detectType(name),
-      size,
+      size: "",
       classified,
       confidence,
-      include: !skipRaw,
-      duplicate,
+      include: true,
       uncertain: uncertain || undefined,
       flagged: classified === "personal" ? ("personal" as const) : undefined,
-      skip: skipRaw,
     };
   });
 }
@@ -143,15 +130,11 @@ export function StepPickFolder(): React.ReactElement {
           });
           return;
         }
-        // ``planToFiles`` accepts the legacy ``Array<Record<string, unknown>>``
-        // shape; the narrower ``BulkImportPlannedItem[]`` is structurally
-        // compatible (each item has the keys ``planToFiles`` probes for),
-        // so a widening cast is sufficient. Refactoring ``planToFiles`` to
-        // take the named interface is a separate cleanup.
-        pickFolder(
-          folderPath,
-          planToFiles(data.items as unknown as Array<Record<string, unknown>>),
-        );
+        // Plan 19 T5: ``planToFiles`` now accepts
+        // ``readonly BulkImportPlannedItem[]`` directly. ``data.items`` is
+        // already that shape from the discriminated union narrow above —
+        // no cast needed.
+        pickFolder(folderPath, planToFiles(data.items));
       } catch (err) {
         pushToast({
           lead: "Dry-run failed.",
