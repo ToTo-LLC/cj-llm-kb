@@ -1561,6 +1561,179 @@ unset VIRTUAL_ENV && PYTHONPATH=... uv run --package brain_core mypy \
   (D2 default-filter)`
 - _(docs commit SHA backfilled in next docs commit per Plan-19 T6.2 cadence)_
 
+### T5 outcome — 7 watched-folders tool surfaces
+
+**Status:** DONE.
+
+**Files created (7 source + 7 test):**
+
+- `packages/brain_core/src/brain_core/tools/watch_folder.py` — 252 LOC
+  — `brain_watch_folder`. Validates absolute + existing folder;
+  idempotent on already-watched; cross-field domain pre-check per
+  Plan 16 T36 (`_check_domain_membership`); persists via
+  `persist_config_or_revert`; calls `BulkImporter.plan()`/`apply()`
+  on `initial_sync=True` with backup trigger stubbed to `"manual"`
+  (TODO comment ties to T9's `pre_watched_folder_sync` extension).
+- `packages/brain_core/src/brain_core/tools/unwatch_folder.py` — 124
+  LOC — `brain_unwatch_folder`. Removes the matching `WatchedFolder`;
+  idempotent (`status="not_watched"` when missing); counts
+  `remaining_notes` by walking vault for `watched_folder_id`
+  matches; persists via `persist_config_or_revert`.
+- `packages/brain_core/src/brain_core/tools/list_watched_folders.py`
+  — 120 LOC — `brain_list_watched_folders`. Joins
+  `Config.watched_folders` with vault-walked `(file_count,
+  orphan_count)` per entry. Read-only; no `typed_confirm` needed.
+- `packages/brain_core/src/brain_core/tools/list_orphans.py` — 133
+  LOC — `brain_list_orphans`. Walks every configured domain looking
+  for `orphaned: true` notes; optional `folder` filter narrows by
+  `watched_folder_id`. Passes `include_orphans=True` to
+  `scope_guard` per T4 contract.
+- `packages/brain_core/src/brain_core/tools/resync_folder.py` — 217
+  LOC — `brain_resync_folder`. Walks the folder, dispatches
+  `update_source()` per matched file, `mark_orphaned()` per
+  vault note whose source disappeared. Refuses on unwatched folder.
+  Returns `{updated, no_change, newly_orphaned, restored_from_orphan}`.
+  Auto-restore on source-reappear flows through `update_source`'s
+  existing `_rebuild_note` (sets `orphaned=false`) — no separate
+  restore call needed in resync.
+- `packages/brain_core/src/brain_core/tools/restore_orphan.py` — 128
+  LOC — `brain_restore_orphan`. Validates `orphaned == True`,
+  flips frontmatter via `VaultWriter.apply` with
+  `include_orphans=True`; refuses non-orphan notes.
+- `packages/brain_core/src/brain_core/tools/delete_orphan.py` — 178
+  LOC — `brain_delete_orphan`. `typed_confirm=True` MANDATORY per
+  CLAUDE.md "destructive action" rule; refuses non-orphan; moves
+  note to `.brain/trash/<YYYY-MM-DD>/<slug>.md`; writes legacy
+  per-file undo record (PATH + PREV_LEN format) so
+  `brain_undo_last` recreates the file at its original path while
+  the trash copy stays on disk as an audit trail.
+
+**Test files (one per tool, INPUT_SCHEMA + data-shape + branch pins):**
+
+- `packages/brain_core/tests/tools/test_watch_folder.py` — 8 tests.
+  Covers schema, relative/missing folder refusal, cross-field domain
+  pre-check (Plan 16 T36 pattern), data shape with `initial_sync=False`,
+  already-watched idempotency, disk persistence.
+- `packages/brain_core/tests/tools/test_unwatch_folder.py` — 6 tests.
+  Covers schema, happy path, idempotency (`status="not_watched"`),
+  disk persistence, `remaining_notes` counter.
+- `packages/brain_core/tests/tools/test_list_watched_folders.py` — 5
+  tests. Covers schema (no-arg), empty config, per-entry key set,
+  file/orphan count from frontmatter walk.
+- `packages/brain_core/tests/tools/test_list_orphans.py` — 5 tests.
+  Covers schema, empty vault, per-orphan key set, folder filter.
+- `packages/brain_core/tests/tools/test_resync_folder.py` — 6 tests.
+  Covers schema, relative/missing folder refusal, unwatched folder
+  refusal, empty-folder data shape pin (summary keys + zero counts).
+  Full pipeline-integrated coverage lives in T2/T3 fixtures.
+- `packages/brain_core/tests/tools/test_restore_orphan.py` — 7 tests.
+  Covers schema, missing/non-absolute/non-orphan refusals, frontmatter
+  flip (orphaned/orphaned_at), body preservation, undo record persisted.
+- `packages/brain_core/tests/tools/test_delete_orphan.py` — 9 tests.
+  Covers schema, `typed_confirm` enforcement (missing/false both raise),
+  non-orphan refusal, data shape happy path (status/trash_path/undo_id),
+  undo round-trip recreates the note at its original path while the
+  trash copy persists.
+
+**Registry change:**
+`packages/brain_core/src/brain_core/tools/__init__.py` — 7 new eager
+imports added in alphabetical order. All 7 NAMEs (`brain_watch_folder`,
+`brain_unwatch_folder`, `brain_list_watched_folders`, `brain_list_orphans`,
+`brain_resync_folder`, `brain_restore_orphan`, `brain_delete_orphan`)
+surface via `brain_core.tools.list_tools()`.
+
+**Cross-field domain check pattern used:**
+Mirror of `config_set._check_active_domain_membership` — a pre-check
+(`watch_folder._check_domain_membership`) that runs BEFORE the
+`watched_folders.append(...)` mutation. Documented inline why the
+Pydantic `model_validator(mode="after")` on `Config` is insufficient:
+a raise from a model_validator leaves the field mutated to the bad
+value under `validate_assignment=True` (Plan 16 T36 lesson). The
+pre-check ensures the orphan-domain entry never lands on the live
+`Config` even transiently.
+
+**Backup trigger stub-in approach (T9 follow-through):**
+`brain_watch_folder` calls `create_snapshot(ctx.vault_root,
+trigger="manual")` with a `TODO(Plan 22 T9)` comment marking the
+swap to `"pre_watched_folder_sync"` once T9 extends `BackupTrigger`.
+The backup call is wrapped in a narrow `try/except` so a backup
+failure does NOT block the watch + sync flow — the watch was already
+registered above; backup is best-effort safety net here, not a hard
+rail. T9 lands `pre_watched_folder_sync` cleanly: just swap the
+string + drop the TODO comment.
+
+**Decisions resolved in scope:**
+
+- **D2** non-destructive orphan policy — `brain_delete_orphan`
+  requires `typed_confirm=True`; orphans stay marked after
+  `brain_unwatch_folder`; `brain_resync_folder` auto-restores via
+  `update_source`'s existing `_rebuild_note` (clears `orphaned`).
+- **D5** 7-tool surface — all 7 implemented + tested + registered.
+- **D9** no new dependencies — implementation uses only existing
+  primitives (`VaultWriter`, `UndoLog`, `BulkImporter`,
+  `persist_config_or_revert`, `scope_guard`, frontmatter helpers).
+- **CLAUDE.md typed_confirm** — `brain_delete_orphan` mandates
+  `typed_confirm=True`; refusal short-circuits BEFORE the orphan
+  check so a missing confirm never reveals the note's state.
+
+**Verification receipts:**
+
+```bash
+# All 7 new test files
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:... \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/tools/test_watch_folder.py \
+  packages/brain_core/tests/tools/test_unwatch_folder.py \
+  packages/brain_core/tests/tools/test_list_watched_folders.py \
+  packages/brain_core/tests/tools/test_list_orphans.py \
+  packages/brain_core/tests/tools/test_resync_folder.py \
+  packages/brain_core/tests/tools/test_restore_orphan.py \
+  packages/brain_core/tests/tools/test_delete_orphan.py -q
+# 46 passed (8 + 6 + 5 + 5 + 6 + 7 + 9)
+
+# Full brain_core suite
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:... \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# 1116 passed, 5 skipped (baseline 1070 + 46 new T5 = 1116; no regressions)
+```
+
+**Concerns / forward notes for T6+:**
+
+1. **Resync `updated` vs `no_change` bucketing heuristic** —
+   `IngestPipeline.update_source` returns an OK status across the
+   no-op / path-only / overwrite branches without distinguishing
+   them in the IngestResult shape. T5's resync tool currently
+   buckets every OK result as `"updated"` because the precise
+   branch isn't readable from `result` alone. The log emits
+   `no_change | <slug>` / `path_only | <slug>` / `overwrite |
+   <slug>` which is the source of truth for forensics; a future
+   refinement could expose the branch on `IngestResult` if users
+   want a more precise resync readout. Flagged in the source
+   comment.
+2. **T9 trigger swap** — the `"manual"` stub-in is the only thing
+   blocking a clean rename to `"pre_watched_folder_sync"`. The
+   try/except wrapper means a future `BackupTrigger` mismatch
+   (e.g. T9 lands the new enum but the watcher path still calls
+   `"manual"`) won't break the sync.
+3. **Watcher integration (T6)** — the tools rely on the
+   `WatchedFolder.last_sync` field but never update it (last_sync
+   is `None` on every entry created by `brain_watch_folder` today).
+   T6's watcher will update last_sync on each successful sync; T5
+   leaves the slot in the data shape so T6 lands additively.
+4. **Resync auto-restore on source-reappear** — handled implicitly
+   via `update_source`'s `_rebuild_note` (Plan 22 T2 already sets
+   `orphaned=false` on a successful re-ingest). The
+   `restored_from_orphan` counter in resync surfaces this for
+   readability without needing a separate restore call. No future-
+   plan punt needed.
+
+**Commits:**
+
+- `45bcc3a` — `feat(plan-22): T5 — 7 watched-folders tools (watch /
+  unwatch / list-watched / list-orphans / resync / restore-orphan /
+  delete-orphan)`
+- _(docs commit SHA backfilled by the docs commit itself)_
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
