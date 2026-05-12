@@ -393,11 +393,72 @@ into Plan 24 candidate scope unchanged:
 These are NOT a Plan 24 commitment — Plan 24 is just-in-time
 authored when triggered.
 
-## Review
+## T1 outcome
 
-_Filled in at T3 close. Tag SHA + closure summary + bumps +
-verification receipts + backlog forward._
+**Status:** DONE (2026-05-12, brain-core-engineer).
 
----
+**Files modified:**
+- `packages/brain_core/src/brain_core/tools/list_watched_folders.py`
+  — added `import structlog` + `from pydantic import ValidationError`
+  + `logger = structlog.get_logger(__name__)`; split existing single
+  `except (OSError, UnicodeDecodeError, FrontmatterError)` into two
+  blocks — silent skip for I/O errors (unchanged behavior); warning
+  log + skip for `(FrontmatterError, ValidationError)` (new
+  observable + crash-proof). Helper docstring updated to cite Plan
+  23 T1. Net source delta: +13 LOC, -1 LOC.
+- `packages/brain_core/tests/tools/test_list_watched_folders.py` —
+  added `structlog.testing.capture_logs` import + new test
+  `test_validation_error_note_skipped_without_crash` (+72 LOC).
 
-**End of Plan 23.**
+**Helper location verified:** `_walk_watched_folder_counts`
+declared at line 47 (pre-change) / line 52 (post-change). Plan-doc
+cited "line 72" — that was actually the `except` line, not the
+function def line. Existing 5-test file + structure unchanged.
+
+**ValidationError class:** `from pydantic import ValidationError`.
+Verified `pydantic.ValidationError is pydantic_core.ValidationError`
+returns `True` (Pydantic v2 public alias for the internal Rust-
+implemented class). Used the public `pydantic` import for
+consistency with the rest of the codebase (the module already
+imports from `pydantic`, not `pydantic_core`).
+
+**Single combined except vs split:** Split into two except blocks.
+Rationale: `OSError` / `UnicodeDecodeError` are transient I/O
+failures that aren't actionable for ops (file moved/deleted mid-
+walk, encoding edge cases) — preserving the existing silent-skip
+keeps log noise down. `FrontmatterError` / `ValidationError` are
+diagnostic content-corruption signals that ops will want to see —
+adding a warning for the new class while leaving the existing
+class silent would be inconsistent. Bundling them gives uniform
+observability for "this note's frontmatter is broken — please fix
+or migrate" diagnosis. Net: 2 LOC more than a single combined
+except with one log call, but clearer intent and avoids surprise
+log spam for transient I/O.
+
+**Test approach:** Test seeds a vault with one valid watched-folder
+note + one note whose frontmatter is valid YAML (so
+`parse_frontmatter` does NOT raise `FrontmatterError`) but has
+`type: "not-a-valid-literal"` which fails Pydantic's `Literal`
+enforcement at `Frontmatter.model_validate`. This is the cleanest
+ValidationError-specific shape (vs `FrontmatterError`-specific
+shape which would be e.g. unterminated `---` fence). Test asserts:
+(a) handle returns successfully (no uncaught exception); (b) bad
+note skipped from `file_count`; (c) good note still counted; (d)
+exactly one structlog warning captured with event name + `path` +
+`error` fields populated; (e) `log_level == "warning"`.
+
+**RED verification:** Stashed source change, re-ran new test —
+failed RED with `pydantic_core._pydantic_core.ValidationError`
+escaping uncaught from `Frontmatter.from_dict`. Restored fix —
+test passes GREEN. Confirms the test fails RED if the
+`ValidationError` catch is reverted.
+
+**Test counts:** `packages/brain_core/tests/tools/test_list_watched_folders.py`
+5 → 6 tests, all passing. Brain_core full suite baseline 1156 →
+1157 passed (+1), 5 skipped (unchanged), 0 failures.
+
+**mypy:** Clean on the changed file.
+
+**Commit cadence:** Single `fix(plan-23)` commit per Plan 23 D3
+(no push). Plan-doc receipts appended in a separate
+`docs(plan-23)` commit.
