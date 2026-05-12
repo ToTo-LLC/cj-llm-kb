@@ -157,11 +157,21 @@ export const search = (
 ): Promise<ToolResponse<{ hits: SearchHit[]; top_k_used: number }>> =>
   callTool<{ hits: SearchHit[]; top_k_used: number }>("brain_search", args);
 
-/** List recently modified notes. */
+/**
+ * List recently modified notes.
+ *
+ * Mirrors the `brain_recent` backend handler outer shape
+ * (`packages/brain_core/src/brain_core/tools/recent.py:63`); backend emits
+ * `{items, limit_used}`. Plan 19 T4.1 widened this TS interface from the
+ * pre-fix `{items}` shape — `limit_used` (the clamped effective limit per
+ * the `_MAX_LIMIT=50` ceiling) was always emitted but TS had no place
+ * for it. Cosmetic-severity widen (no live consumer read the field;
+ * Plan 18 T2 audit deferred to Plan 19 Track C bundle).
+ */
 export const recent = (
   args: { domain?: string; limit?: number } = {},
-): Promise<ToolResponse<{ items: RecentEntry[] }>> =>
-  callTool<{ items: RecentEntry[] }>("brain_recent", args);
+): Promise<ToolResponse<{ items: RecentEntry[]; limit_used: number }>> =>
+  callTool<{ items: RecentEntry[]; limit_used: number }>("brain_recent", args);
 
 /** Issue #18: list recent chat threads in scope. The state.sqlite
  *  ``chat_threads`` table is the source of truth — populated by the chat
@@ -332,22 +342,47 @@ export const bulkImport = (args: {
 
 // ---------- write / patch tools (5) ----------
 
-/** Stage a new note for approval. */
+/**
+ * Stage a new note for approval.
+ *
+ * Mirrors the `brain_propose_note` backend handler
+ * (`packages/brain_core/src/brain_core/tools/propose_note.py:94-98`);
+ * backend emits `{status: "pending", patch_id, target_path}`. Plan 19 T4.2
+ * widened this TS interface from the pre-fix `{patch_id, target_path}`
+ * shape — `status` was always emitted but TS had no place for it.
+ * Cosmetic-severity widen (no live consumer read the field; Plan 18 T2
+ * audit deferred to Plan 19 Track C bundle).
+ */
 export const proposeNote = (args: {
   path: string;
   content: string;
   reason: string;
-}): Promise<ToolResponse<{ patch_id: string; target_path: string }>> =>
-  callTool<{ patch_id: string; target_path: string }>(
+}): Promise<
+  ToolResponse<{ status: string; patch_id: string; target_path: string }>
+> =>
+  callTool<{ status: string; patch_id: string; target_path: string }>(
     "brain_propose_note",
     args,
   );
 
-/** List pending patches in the approval queue. */
+/**
+ * List pending patches in the approval queue.
+ *
+ * Mirrors the `brain_list_pending_patches` backend handler
+ * (`packages/brain_core/src/brain_core/tools/list_pending_patches.py:54`);
+ * backend emits `{count, patches}`. Plan 19 T4.3 widened this TS interface
+ * from the pre-fix `{patches}` shape — `count` (the rendered envelope
+ * count, equal to `patches.length`) was always emitted but TS had no
+ * place for it. Cosmetic-severity widen (no live consumer read the
+ * field; Plan 18 T2 audit deferred to Plan 19 Track C bundle).
+ */
 export const listPendingPatches = (
   args: { limit?: number } = {},
-): Promise<ToolResponse<{ patches: PendingPatch[] }>> =>
-  callTool<{ patches: PendingPatch[] }>("brain_list_pending_patches", args);
+): Promise<ToolResponse<{ count: number; patches: PendingPatch[] }>> =>
+  callTool<{ count: number; patches: PendingPatch[] }>(
+    "brain_list_pending_patches",
+    args,
+  );
 
 /**
  * Fetch one pending patch by id — envelope metadata PLUS the full patchset
@@ -565,12 +600,44 @@ export const repairConfigApply = (
     { repaired_config: repaired },
   );
 
-/** Write a single config key. ``value`` is validated server-side. */
+/**
+ * Write a single config key. ``value`` is validated server-side.
+ *
+ * Mirrors the `brain_config_set` backend handler
+ * (`packages/brain_core/src/brain_core/tools/config_set.py:832-845, 901-910`);
+ * backend emits `{status, key, value, persisted, note}` from BOTH branches
+ * (persisted Config-field path AND non-persisted session-scoped path) —
+ * `persisted: boolean` is the discriminator and `note` carries the
+ * human-readable disposition. Plan 19 T4.4 widened this TS interface
+ * from the pre-fix `{key, value}` shape — three keys (`status`,
+ * `persisted`, `note`) were always emitted but TS had no place for them.
+ * Cosmetic-severity widen (no live consumer read the fields; Plan 18 T2
+ * audit deferred to Plan 19 Track C bundle).
+ *
+ * The widened shape propagates to the 7 `configSet`-routed wrappers
+ * (`setDomainOverride`, `setPrivacyRailed`, `setDomainBudget`,
+ * `setDomainRateLimit`, `setDomainAutonomy`, `setActiveDomain`,
+ * `setCrossDomainWarningAcknowledged`) — each wrapper's return type
+ * now references `ConfigSetData` directly so callers see the same
+ * five-field shape on hover regardless of which wrapper they invoke.
+ * Plan 19 T4 deliberately uses the named interface (not a structural
+ * `{status, key, value, persisted, note}` inlined at every site) so a
+ * future backend shape change ripples through one type alias rather
+ * than 8 wrapper signatures.
+ */
+export interface ConfigSetData {
+  status: string;
+  key: string;
+  value: unknown;
+  persisted: boolean;
+  note: string;
+}
+
 export const configSet = (args: {
   key: string;
   value: unknown;
-}): Promise<ToolResponse<{ key: string; value: unknown }>> =>
-  callTool<{ key: string; value: unknown }>("brain_config_set", args);
+}): Promise<ToolResponse<ConfigSetData>> =>
+  callTool<ConfigSetData>("brain_config_set", args);
 
 // ---------- Plan 11 Task 7 — domain overrides + privacy-rail helpers ----------
 
@@ -597,7 +664,7 @@ export const setDomainOverride = (args: {
   slug: string;
   field: DomainOverrideField;
   value: string | number | boolean | null;
-}): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+}): Promise<ToolResponse<ConfigSetData>> =>
   configSet({
     key: `domain_overrides.${args.slug}.${args.field}`,
     value: args.value,
@@ -612,7 +679,7 @@ export const setDomainOverride = (args: {
  */
 export const setPrivacyRailed = (
   list: string[],
-): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+): Promise<ToolResponse<ConfigSetData>> =>
   configSet({ key: "privacy_railed", value: list });
 
 /**
@@ -647,7 +714,7 @@ export interface BudgetCap {
 export const setDomainBudget = (
   slug: string,
   cap: BudgetCap | null,
-): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+): Promise<ToolResponse<ConfigSetData>> =>
   configSet({
     key: `budget.per_domain.${slug}`,
     value: cap,
@@ -690,7 +757,7 @@ export const setDomainRateLimit = (
   slug: string,
   override: RateLimitOverride | null,
   provider: string = "anthropic",
-): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+): Promise<ToolResponse<ConfigSetData>> =>
   configSet({
     key: `providers.${provider}.rate_limit_per_domain.${slug}`,
     value: override,
@@ -746,7 +813,7 @@ export const setDomainAutonomy = (
   slug: string,
   category: AutonomyCategory,
   value: boolean,
-): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+): Promise<ToolResponse<ConfigSetData>> =>
   configSet({
     key: `autonomous.${slug}.${category}`,
     value,
@@ -764,7 +831,7 @@ export const setDomainAutonomy = (
  */
 export const setActiveDomain = (
   slug: string,
-): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+): Promise<ToolResponse<ConfigSetData>> =>
   configSet({ key: "active_domain", value: slug });
 
 /**
@@ -782,7 +849,7 @@ export const setActiveDomain = (
  */
 export const setCrossDomainWarningAcknowledged = (
   value: boolean,
-): Promise<ToolResponse<{ key: string; value: unknown }>> =>
+): Promise<ToolResponse<ConfigSetData>> =>
   configSet({ key: "cross_domain_warning_acknowledged", value });
 
 // ---------- Plan 07 Task 4 additions (4) ----------
