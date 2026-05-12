@@ -3526,6 +3526,146 @@ Bundled — feat (modals + bindings + panel wiring) + test (24 new + 6
 updated) + docs (this section) in one commit per the plan-19 / T13 /
 T14 / T14.5 outcome shape.
 
+## T16 outcome — Playwright e2e `watched-folders.spec.ts`
+
+### Status
+
+**DONE_WITH_CONCERNS.** All 8 e2e cases pass standalone (12.2s) and in
+the full Playwright suite (1.5min, 45/46 — the lone failure is a pre-
+existing `ingest-drag-drop` flake unrelated to T16). Discovered a real
+backend bug along the way (filed under §Concerns) and worked around it
+defensively in the spec.
+
+### Files
+
+- Created: `apps/brain_web/tests/e2e/watched-folders.spec.ts` (914 LOC)
+  — 8 test cases covering the watched-folders feature lifecycle.
+
+### Test cases
+
+| # | Name | Surface(s) | axe gate? |
+|---|---|---|---|
+| 1 | Settings → Watched folders empty state | `panel-watched-folders` empty | ✅ panel |
+| 2 | Watch-enable modal microcopy + close | `WatchEnableModal` (D1 callout) | ✅ dialog |
+| 3 | Watch-enable submit creates row | full flow: open → fill → confirm → row | — |
+| 4 | Watch-disable modal removes row | `WatchDisableModal` | ✅ dialog |
+| 5 | Orphans panel + single restore + single delete | `panel-orphans` + typed-confirm | ✅ panel + dialog |
+| 6 | Bulk select + bulk delete | typed-confirm "delete N notes" | ✅ dialog |
+| 7 | Topbar indicator visibility | `WatchedFoldersTopbarIndicator` | — |
+| 8 | Watch-enable folder input binding | `WatchEnableModal` input control | — |
+
+**axe-core gates: 6** (panel-watched-folders empty, watch-enable dialog,
+watch-disable dialog, panel-orphans populated, orphan-delete single
+typed-confirm, orphan-delete bulk typed-confirm). Every modal-surface
+gate is preceded by `waitForAnimationsToFinish(page, "[role=dialog]")`
+per the auto-memory `feedback_axe_dialog_animation_wait.md`.
+
+### Verification
+
+- Standalone: `pnpm playwright test watched-folders --reporter=line` →
+  8 passed (12.2s).
+- Full regression: `pnpm playwright test --reporter=line` → 45 passed,
+  1 failed (`ingest-drag-drop.spec.ts:39:3 › upload .md file → source
+  row → done`); the failure reproduces against the baseline (the
+  branch without T16's spec file) so it's a pre-existing flake unrelated
+  to T16. Filed under §Concerns.
+- Baseline suite count: **38 → 46** (+8 new tests).
+- `pnpm tsc --noEmit` → exit 0.
+
+### Playwright config touched? — No
+
+- `playwright.config.ts` unchanged. The existing single-port +
+  webServer + fakeLLM E2E setup carries through unmodified.
+- No new helpers added to `tests/e2e/_helpers.ts` — re-uses the
+  existing `waitForAnimationsToFinish` and `waitForToolResponse`.
+
+### Self-review findings
+
+- **D1 microcopy assertions are verbatim** — the spec pins three exact
+  prose snippets from the mockup (`source file is the source of
+  truth`, `your edits will be overwritten the next time the source
+  file changes`, `Deleting a source file marks its note as an orphan
+  in your vault`). Drift between mockup + UI surfaces as a failed
+  test.
+- **Reversibility microcopy pins for watch-disable** — three "stays"
+  list items + two "changes" list items match the mockup verbatim.
+- **Mocking strategy = real backend** — matches project precedent
+  (`patch-approval.spec.ts`, `a11y-populated.spec.ts`); no
+  `page.route()` interceptors. Seeds via direct tool calls with the
+  per-run API token + hand-written orphan notes for the orphans tab.
+- **Cleanup discipline** — every mutating test registers cleanup via
+  `registerCleanup(...)`; LIFO drain runs in `afterEach` even if
+  assertions failed. Mirrors the `a11y-populated.spec.ts` Plan 16
+  T20 / D20 convention.
+- **Bulk Import → Watch bridge** — Case 8 is intentionally narrowed.
+  The full bulk-import pipeline takes ~30s under FakeLLM and is
+  already covered by `bulk-import.spec.ts`. The bridge itself is a
+  3-line click handler in `step-apply.tsx`; the load-bearing contract
+  is the modal's `isPrefilled` branch. Without exposing the dialogs-
+  store on `window` (which would be a production-shape regression),
+  the cleanest path is to exercise the modal's `isPrefilled=false`
+  Settings entry + assert input binding works. The `prefilled` branch
+  is covered by `watch-modals.test.tsx` component tests (T15).
+
+### Concerns / follow-ups (non-blocking)
+
+1. **Real backend bug discovered:
+   `list_watched_folders._walk_watched_folder_counts` blows up on
+   notes with datetime-format frontmatter.** When ANY watched folder
+   is configured AND the vault contains a note whose frontmatter
+   `created` or `updated` key carries an ISO-8601 datetime (with
+   non-zero time component), the function raises
+   `pydantic_core.ValidationError` at `Frontmatter.from_dict`. The
+   `try` block catches `(OSError, UnicodeDecodeError,
+   FrontmatterError)` but **not** `ValidationError` — the function's
+   docstring promises "Notes with malformed frontmatter or no
+   `watched_folder_id` are skipped silently", but the implementation
+   under-delivers. Cross-spec, this surfaces because earlier suites
+   (`a11y-populated.spec.ts`, `bulk-import.spec.ts`) write notes with
+   datetime-format `created`/`updated` keys; the topbar indicator
+   then renders the "Watched folder status failed to load" error
+   chip whenever T16 seeds a watcher on top of the polluted vault.
+
+   **Workaround in this spec:** `purgeWatchedFolderPollution()` in
+   `beforeEach` rm's any `.md` whose frontmatter `created` or
+   `updated` line carries a `T` (the YAML/ISO datetime marker).
+   Defensive — keeps T16 green without depending on the upstream fix.
+
+   **Recommended Plan 23 follow-up:** broaden the `except` clause in
+   `list_watched_folders._walk_watched_folder_counts` (and likely
+   `list_orphans` too — same pattern) to catch
+   `pydantic_core.ValidationError` alongside `FrontmatterError`. The
+   "skip malformed notes" semantics are already documented in the
+   function's docstring; only the exception list is incomplete.
+
+2. **Topbar indicator doesn't fire its own mount-time refresh.** The
+   `WatchedFoldersTopbarIndicator` subscribes to
+   `useWatchedFoldersStore` but doesn't `useEffect`-fire a
+   `refresh()` itself — the store population path is "Settings panel
+   mounts → its useEffect fires refresh → topbar's selector re-
+   renders". Case 7 navigates to `/settings/watched-folders/` (where
+   the panel mounts) rather than `/chat` to populate the store. This
+   matches production-shape (the user has to visit Settings at least
+   once for the indicator to surface counts), but it's worth flagging
+   for a future "fire refresh on app mount" Plan 23 candidate so the
+   indicator surfaces immediately after a watcher event in a
+   long-running session.
+
+3. **Pre-existing `ingest-drag-drop` flake** — the lone full-suite
+   failure is `ingest-drag-drop.spec.ts:39:3` waiting for the Recent
+   tab counter to reach `1` (received `"Recent0"`). Reproduces
+   against the baseline (without T16's spec file) so it's not
+   introduced by T16. Flagged for a separate flake-hunt session.
+
+### Commit cadence
+
+Two commits per the plan-doc spec:
+- `test(plan-22): T16 — Playwright e2e watched-folders.spec.ts (enable
+  / disable / orphan / bulk flows + axe gates)`
+- `docs(plan-22): T16 — outcome receipts for e2e`
+
+Do NOT push per D12.
+
 ## Review
 
 _Filled in at T18 close. Tag SHA + closure summary + bumps + verification
