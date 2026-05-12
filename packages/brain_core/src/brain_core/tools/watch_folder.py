@@ -16,10 +16,22 @@ even after the raise; the canonical workaround
 is a pre-check that runs BEFORE the mutation. The same pattern applies
 here for ``watched_folders``: pre-check the slug, then append.
 
-**Backup trigger**: T5 lands BEFORE T9 (which is slated to extend
-``BackupTrigger`` to include ``"pre_watched_folder_sync"``). T5 stubs
-in ``trigger="manual"`` and TODO-comments the swap so T9 can land
-cleanly without an additional refactor.
+**Backup trigger**: pre-sync backup uses
+``trigger="pre_watched_folder_sync"`` so the Settings page can group
+these snapshots distinctly from manual / daily / bulk-import backups.
+Wrapped in a narrow ``try/except`` — backup is best-effort here; the
+watch was already registered before the backup attempt, so a backup
+failure must not block the user's opt-in sync.
+
+**Initial-sync cost estimate (Plan 22 D3)**: BEFORE invoking
+``BulkImporter`` for the initial sync, this tool computes
+``estimated_tokens = file_count × _CLASSIFY_TOKEN_COST`` (mirrors
+``bulk_import.py``'s pre-check budget) and surfaces an informational
+USD estimate in both ``ToolResult.text`` and ``ToolResult.data``.
+The estimate is informational only — there is NO refusal threshold
+per D3. The existing rate-limit + per-domain budget caps (Plan 16
+T26-T32) remain the hard ceilings: if a sync would blow them, those
+checks fire mid-sync and refuse.
 
 **Idempotent on already-watched**: if the folder already appears in
 ``Config.watched_folders``, return ``status="already_watched"`` without
@@ -44,6 +56,7 @@ from brain_core.backup import create_snapshot
 from brain_core.budget import PerDomainBudgetGuard
 from brain_core.config.schema import WatchedFolder
 from brain_core.config.writer import persist_config_or_revert
+from brain_core.cost.budget import BudgetEnforcer
 from brain_core.ingest.bulk import BulkImporter
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestStatus
@@ -93,6 +106,15 @@ _CLASSIFY_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
 _SUMMARIZE_MODEL_FALLBACK = "claude-sonnet-4-6"
 _INTEGRATE_MODEL_FALLBACK = "claude-sonnet-4-6"
 
+# Rough token cost per candidate file for the initial-sync cost estimate.
+# Mirrors ``bulk_import.py:_CLASSIFY_TOKEN_COST`` so both tools project
+# the same per-file classifier spend. Output tokens budgeted at the
+# classifier's 256-token max so the estimate is a conservative ceiling
+# for the classify-only stage. Summarize + integrate costs accrue per
+# successfully-classified file post-classify and are not included.
+_CLASSIFY_TOKEN_COST = 1000
+_CLASSIFY_MAX_OUTPUT_TOKENS = 256
+
 
 def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
     """Mirror :func:`brain_core.tools.bulk_import._build_pipeline`.
@@ -133,6 +155,38 @@ def _build_pipeline(ctx: ToolContext) -> IngestPipeline:
         guard=guard,
         config=cfg,
     )
+
+
+def _estimate_initial_sync_cost(
+    folder: Path, classify_model: str
+) -> tuple[int, int, float | None]:
+    """Compute an informational cost estimate for the initial sync.
+
+    Returns ``(file_count, estimated_tokens, estimated_usd)`` where
+    ``estimated_usd`` is ``None`` when the classify model has no pricing
+    entry in ``brain_core.cost.budget._PRICING`` (forward-compat for a
+    model swap that lands ahead of pricing). file_count is computed the
+    same way ``BulkImporter.plan`` walks the folder so the estimate
+    matches what the plan phase will actually classify.
+
+    Per Plan 22 D3, this estimate is informational only — there is no
+    refusal threshold. The rate-limit and per-domain budget guards
+    elsewhere in the pipeline remain the hard ceilings.
+    """
+    files = [p for p in folder.rglob("*") if p.is_file() and not p.is_symlink()]
+    file_count = len(files)
+    estimated_tokens = file_count * _CLASSIFY_TOKEN_COST
+    try:
+        estimated_usd: float | None = BudgetEnforcer.estimate_cost(
+            model=classify_model,
+            input_tokens=estimated_tokens,
+            output_tokens=file_count * _CLASSIFY_MAX_OUTPUT_TOKENS,
+        )
+    except KeyError:
+        # No pricing entry for the configured classify model.
+        # Surface the token count and let the caller display "n/a".
+        estimated_usd = None
+    return file_count, estimated_tokens, estimated_usd
 
 
 def _check_domain_membership(domain: str, configured_domains: list[str]) -> None:
@@ -185,6 +239,11 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
                     "folder": folder_str,
                     "domain": wf.domain,
                     "initial_sync_summary": None,
+                    # Cost estimate is None on the already_watched path —
+                    # no initial sync runs, so there is no spend to
+                    # project. Symmetric with the data shape on the
+                    # ``watched`` + ``initial_sync=False`` path.
+                    "cost_estimate": None,
                 },
             )
 
@@ -222,17 +281,45 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         cfg.watched_folders.append(new_wf)
 
     initial_sync_summary: dict[str, Any] | None = None
+    cost_estimate: dict[str, Any] | None = None
     if initial_sync:
-        # Pre-sync backup. TODO(Plan 22 T9): swap "manual" for
-        # "pre_watched_folder_sync" once T9 extends ``BackupTrigger``.
-        # Wrap in try/except so a backup failure doesn't block the sync —
-        # the user explicitly opted in to the watch + sync flow; backup
-        # is best-effort safety net here, not a hard rail.
+        # Cost estimate fires BEFORE the backup + plan/apply so the user
+        # sees the projected classify-only spend on the ToolResult. Per
+        # Plan 22 D3 this is informational only — NO refusal threshold.
+        # The classify model resolves the same way ``_build_pipeline``
+        # picks it, so the estimate matches what the bulk import will
+        # actually call.
+        cfg_llm = (
+            resolve_llm_config(cfg, None) if cfg is not None else None
+        )
+        classify_model = (
+            getattr(cfg_llm, "classify_model", None)
+            or _CLASSIFY_MODEL_FALLBACK
+        )
+        (
+            estimate_file_count,
+            estimated_tokens,
+            estimated_usd,
+        ) = _estimate_initial_sync_cost(folder, classify_model)
+        cost_estimate = {
+            "file_count": estimate_file_count,
+            "estimated_tokens": estimated_tokens,
+            "estimated_usd": estimated_usd,
+            "classify_model": classify_model,
+        }
+
+        # Pre-sync backup with the distinct trigger so the Settings page
+        # can group "pre-watched-folder-sync" snapshots separately from
+        # manual / daily / pre-bulk-import. Wrapped in try/except so a
+        # backup failure doesn't block the sync — the user explicitly
+        # opted in to the watch + sync flow; backup is a best-effort
+        # safety net here, not a hard rail.
         try:
-            create_snapshot(ctx.vault_root, trigger="manual")
+            create_snapshot(ctx.vault_root, trigger="pre_watched_folder_sync")
         except (FileNotFoundError, ValueError):
-            # vault_root missing OR future trigger drift — surface neither
-            # as a sync blocker. The watch was already registered above.
+            # vault_root missing OR pricing/trigger drift — surface
+            # neither as a sync blocker. The watch was already
+            # registered above.
             pass
 
         # Build pipeline + plan + apply. Pass domain_override only when
@@ -266,6 +353,19 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "failed": failed,
         }
 
+    if cost_estimate is not None:
+        if cost_estimate["estimated_usd"] is not None:
+            usd_str = f"${cost_estimate['estimated_usd']:.4f}"
+        else:
+            usd_str = "n/a (no pricing entry)"
+        cost_text = (
+            f" | initial sync estimate: ~{cost_estimate['file_count']} files, "
+            f"~{usd_str} (classify only; summarize+integrate cost is "
+            f"per-file post-classify)"
+        )
+    else:
+        cost_text = ""
+
     return ToolResult(
         text=(
             f"watched {folder_str} → {effective_domain}"
@@ -275,12 +375,14 @@ async def handle(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 if initial_sync_summary is not None
                 else ""
             )
+            + cost_text
         ),
         data={
             "status": "watched",
             "folder": folder_str,
             "domain": effective_domain,
             "initial_sync_summary": initial_sync_summary,
+            "cost_estimate": cost_estimate,
         },
     )
 

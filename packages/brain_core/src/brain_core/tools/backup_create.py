@@ -23,7 +23,12 @@ DESCRIPTION = (
     "secrets.env). Writes to <vault>/.brain/backups/. Returns the backup metadata."
 )
 
-_VALID_TRIGGERS: tuple[str, ...] = ("manual", "daily", "pre_bulk_import")
+_VALID_TRIGGERS: tuple[str, ...] = (
+    "manual",
+    "daily",
+    "pre_bulk_import",
+    "pre_watched_folder_sync",
+)
 
 INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",

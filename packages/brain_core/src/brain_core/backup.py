@@ -10,6 +10,8 @@ Triggers:
   * ``manual`` — user clicked the "Back up now" button.
   * ``daily`` — scheduled cron-style backup.
   * ``pre_bulk_import`` — automatic safety net before a bulk import.
+  * ``pre_watched_folder_sync`` — automatic safety net before the
+    initial sync of a newly-watched folder (Plan 22 T9).
 
 Restore strategy: the current vault contents (except the backups folder
 itself and ``.brain/secrets.env``) are moved to a timestamped trash
@@ -33,11 +35,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-BackupTrigger = Literal["manual", "daily", "pre_bulk_import"]
+BackupTrigger = Literal[
+    "manual", "daily", "pre_bulk_import", "pre_watched_folder_sync"
+]
 
-_VALID_TRIGGERS: frozenset[str] = frozenset({"manual", "daily", "pre_bulk_import"})
+_VALID_TRIGGERS: frozenset[str] = frozenset(
+    {"manual", "daily", "pre_bulk_import", "pre_watched_folder_sync"}
+)
 _FILENAME_RE = re.compile(
-    r"^(?P<ts>\d{8}T\d{6}\d{6})-(?P<trigger>manual|daily|pre_bulk_import)\.tar\.gz$"
+    r"^(?P<ts>\d{8}T\d{6}\d{6})-"
+    r"(?P<trigger>manual|daily|pre_bulk_import|pre_watched_folder_sync)"
+    r"\.tar\.gz$"
 )
 
 
