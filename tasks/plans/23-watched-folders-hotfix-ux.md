@@ -359,7 +359,71 @@ fix; vitest + tsc clean; per-test fail-RED-on-revert verified._
 
 ## T3 outcome
 
-_Filled in at T3 close. Demo gate count + commits + tag SHA._
+**Status:** DONE (2026-05-12, brain-core-engineer).
+
+**Files created:**
+- `scripts/demo-plan-23.py` (~365 LOC) — 7-gate closure demo. Cached
+  file reads, single-purpose gate functions, fail-fast main loop;
+  mirrors `demo-plan-21.py` shape (smallest demo since Plan 21).
+
+**Files modified:**
+- `tasks/lessons.md` — appended `## Plan 23` closure section (6
+  lessons + handoff paragraph) per the lesson template.
+- `tasks/todo.md` — row 23 marked `✅ Complete` with deliverable
+  summary; tail block refreshed from "Plan 23 candidate scope" to
+  "Plan 24 candidate scope" with 16 items (down from Plan 22's 19 by
+  the 3 Plan 23 closed: T1 + T2.a + T2.b). 4 sections (UX polish /
+  architectural / dev-loop friction / preserved NOT-DOING).
+- `tasks/plans/23-watched-folders-hotfix-ux.md` — this T3 outcome
+  block + `## Review` section appended at EOF.
+
+**Demo verification:**
+```
+$ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+    uv run python scripts/demo-plan-23.py
+  ok Gate 1 — T1.a ValidationError catch: ...
+  ok Gate 2 — T1.b regression pin: ...
+  ok Gate 3 — T2.a activeDomain default: ...
+  ok Gate 4 — T2.b activeDomain default test: ...
+  ok Gate 5 — T2.c topbar mount-fetch: ...
+  ok Gate 6 — T2.d topbar mount-fetch test: ...
+  ok Gate 7 — T3 closure: ...
+
+PLAN 23 DEMO OK
+```
+
+**Gate density:** 7 gates per plan-doc D8 (~6-8 target). 2 gates per
+substantive task (code-content + test-existence) + 1 closure gate.
+Matches the plan-doc §"Demo gate description" mapping exactly (T1.a,
+T1.b, T2.a, T2.b, T2.c, T2.d, T3).
+
+**Tag:** `plan-23-watched-folders-hotfix-ux` (lightweight, per project
+convention) cut after the green demo. NOT PUSHED per D3 — single
+`git push origin main` + explicit `git push origin <tag>` requires
+user authorization at Plan 23 close.
+
+## Review
+
+**Status:** ✅ Complete — tag `plan-23-watched-folders-hotfix-ux` cut at T3 HEAD on 2026-05-12. Push deferred per D3 (user authorization required at Plan 23 close).
+
+**Closure summary.** Smallest plan since Plan 21 (3 tasks). Plan 22 closed 2026-05-12 with 19 carry-forward candidates; Plan 23 brainstorm honestly re-assessed and narrowed scope to 1 truly critical (the `list_watched_folders` `ValidationError` catch gap surfaced at T16) + 2 cheap UX one-liner wins flagged at Plan 22 T15 implementer + controller-verification pauses. The remaining 16 items roll into Plan 24 candidate scope at Plan 22-end priority levels — nothing lost, everything just-in-time. **Theme A — Critical hot-fix (T1).** `_walk_watched_folder_counts` in `packages/brain_core/src/brain_core/tools/list_watched_folders.py` extended to catch `pydantic.ValidationError` alongside the existing `FrontmatterError`. Pre-T1 a single malformed-frontmatter watched-folder note in the vault crashed the Settings → Watched folders tab + Topbar indicator (Plan 22 T16 surfaced this via Playwright `purgeWatchedFolderPollution` cleanup helper — the defensive workaround was evidence the failure mode was real). T1 outcome split the existing single `except (OSError, UnicodeDecodeError, FrontmatterError):` block into two: silent skip for transient I/O + warn-and-skip for content corruption — adding observability for the previously-silent `FrontmatterError` branch as a v1.5 improvement bundled with the v1 crash fix. Regression-pin test `test_validation_error_note_skipped_without_crash` at `test_list_watched_folders.py:153` uses `structlog.testing.capture_logs` to assert warn-event + path + error fields populated; RED-on-revert verified. brain_core: 1156 → 1157 passed (+1). **Theme B — Bundled UX one-liners (T2).** T2.a — watch-enable modal domain dropdown initial value changed from `domains[0]?.slug` to `activeDomain || domains[0]?.slug ?? "research"`. Applied to BOTH the `useState` lazy initializer AND the post-resolve hydration `useEffect` so activeDomain wins regardless of data-loading order. T2.b — topbar indicator added `loaded` selector + `React.useEffect` block that fires `void refresh()` when `!loaded`. Chose `!loaded` gate over plan-doc's literal `folders.length === 0` phrasing — the literal would re-fetch forever for zero-watched-folder users; `!loaded` correctly stops firing once the store resolves. Matches `useDomains()` first-mount auto-refresh precedent at `use-domains.ts:117-121`. brain_web: 585 → 586 passed (+6 new tests across watch-modals.test.tsx + topbar-watched-status.test.tsx). **Closure (T3).** `scripts/demo-plan-23.py` 7-gate demo prints `PLAN 23 DEMO OK`.
+
+**Verification receipts.**
+
+- `scripts/demo-plan-23.py` — 7/7 gates pass; final stdout `PLAN 23 DEMO OK`.
+- `packages/brain_core/tests/tools/test_list_watched_folders.py` — 5 → 6 tests pass (+1 `test_validation_error_note_skipped_without_crash`).
+- `apps/brain_web/tests/unit/watch-modals.test.tsx` — 24 → 27 tests pass (+3 T2.a default-activeDomain pin tests).
+- `apps/brain_web/tests/unit/topbar-watched-status.test.tsx` — 16 → 19 tests pass (+3 T2.b mount-fetch pin tests; 2 pre-existing tests repaired in place).
+- `apps/brain_web/tests/unit/scope-picker-set-as-default.test.tsx` — 5 tests pass (mock extension only; no test count change).
+- `pnpm tsc --noEmit` clean on brain_web post-T2.
+
+**Bumps and deltas.** Zero spec rollback risk. Zero schema changes. Zero new external dependencies. Backend surface: +1 except-tuple member (`pydantic.ValidationError`) on `_walk_watched_folder_counts` + 1 structlog warning event (`watched_folder_note_frontmatter_invalid`). Frontend surface: +1 useDomains() destructure (`activeDomain`) in `watch-enable-modal.tsx` + 1 mount-time `useEffect` in `watched-folders-topbar-indicator.tsx`. Test surface: +1 brain_core test + +6 brain_web tests (3 watch-modals + 3 topbar mount-fetch). No tool surface change (45 tools unchanged from Plan 22).
+
+**Backlog forward (Plan 24 candidate scope).** See `tasks/todo.md` tail block. 16 items across 4 sections (priority order): 7 UX polish (native folder picker, AbortController on confirm, cross-store reconcile, orphans-only topbar coverage gap, Open-in-Finder backend, bulk action progress, OrphanEntry fields, topbar entrance transition), 4 architectural (`_build_pipeline` 4-site dup, `_watched_folders_changed` cross-package dup, brain_api + brain_mcp parallel watchers, Stage-4 archive deferral), 1 dev-loop friction (workspace editable flip), 4 preserved NOT-DOING items (unchanged since Plan 17). Plan 24 will be authored just-in-time once the user reviews + locks scope. Plan 24 trigger candidates: a real ValidationError-class crash in a different tool dispatcher would re-prioritize the catch-extension pattern across the tool registry; a 4th `_build_pipeline` call site would re-prioritize the factory lift.
+
+---
+
+**End of Plan 23.**
 
 ## Plan 24 candidate scope
 
