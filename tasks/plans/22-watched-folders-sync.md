@@ -1241,9 +1241,9 @@ re-sync can resolve it.
   test in T2.
 
 **Commits:**
-- `<feat SHA>` — `feat(plan-22): T2 — IngestPipeline.update_source
+- `92c439b` — `feat(plan-22): T2 — IngestPipeline.update_source
   (re-ingest preserving slug + domain; D1 overwrite contract)`
-- `<docs SHA>` — `docs(plan-22): T2 — outcome receipts for re-ingest path`
+- `617957f` — `docs(plan-22): T2 — outcome receipts for re-ingest path`
 
 
 
