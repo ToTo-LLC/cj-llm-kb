@@ -462,3 +462,141 @@ test passes GREEN. Confirms the test fails RED if the
 **Commit cadence:** Single `fix(plan-23)` commit per Plan 23 D3
 (no push). Plan-doc receipts appended in a separate
 `docs(plan-23)` commit.
+
+## T2 outcome
+
+**Status:** DONE (2026-05-12, brain-frontend-engineer).
+
+**Files modified:**
+- `apps/brain_web/src/components/dialogs/watch-enable-modal.tsx` —
+  T2.a: changed domain dropdown initial value from
+  `domains[0]?.slug ?? "research"` to
+  `activeDomain || domains[0]?.slug ?? "research"`. Pulled
+  `activeDomain` from existing `useDomains()` hook (Plan 12 T5 / Plan
+  11 T6 already exposed it). Updated post-resolve hydration useEffect
+  to mirror the same precedence (`activeDomain || domains[0]!.slug`).
+  Net source delta: +13 LOC, -2 LOC (mostly rationale comment).
+- `apps/brain_web/src/components/shell/watched-folders-topbar-indicator.tsx`
+  — T2.b: added `loaded` selector + `useEffect` block that fires
+  `void refresh()` when `!loaded`. Matches the `useDomains()`
+  first-mount auto-refresh pattern (Plan 12 T5). Net source delta:
+  +22 LOC, -0 LOC (mostly rationale comment).
+- `apps/brain_web/tests/unit/watch-modals.test.tsx` — added
+  `_setDomainsCacheForTesting` import + 3 new tests under WatchEnableModal
+  describe: (1) defaults to activeDomain when set, (2) defensive
+  fallback to `domains[0]` when activeDomain is empty, (3)
+  `prefilledDomain` overrides activeDomain default (the Bulk Import →
+  Watch bridge). 24 → 27 tests in file. +120 LOC.
+- `apps/brain_web/tests/unit/topbar-watched-status.test.tsx` — added
+  default `listWatchedFoldersMock.mockResolvedValue` in `beforeEach`
+  + fixed two pre-existing tests broken by the new mount-fetch
+  (empty-state was relying on `loaded: false` + no mock = crash;
+  error-state was asserting call-count-of-1 but mount now fires once
+  before click). Added new "Plan 23 T2.b mount-fetch" describe with
+  3 spy-on-refresh tests: (1) refresh fires when `loaded === false`,
+  (2) does NOT re-fire when `loaded === true`, (3) does NOT re-fire
+  when `loaded === true` with empty folders (regression-pin against
+  weakening the gate to `folders.length === 0`). 16 → 19 tests in file.
+  +83 LOC, -5 LOC.
+- `apps/brain_web/tests/unit/scope-picker-set-as-default.test.tsx` —
+  extended `@/lib/api/tools` mock to include `listWatchedFolders` so
+  the Topbar render in this test file doesn't crash on the new
+  mount-fetch. Resolves with empty folders; per-test overrides not
+  needed (scope-picker tests don't care about watched-folder shape).
+  +13 LOC.
+
+**T2.a activeDomain selector + defensive fallback:** Pulled via
+`useDomains()` hook destructure (existing API since Plan 11 T6,
+formalized in Plan 12 T5's selector). Hook returns
+`{ domains, activeDomain, loading, error, refresh }`. The
+`useDomains()` selector reads from `useDomainsStore.activeDomain`
+which is `string` (empty string until first hydration, or against a
+pre-Plan-11-T6 backend). Defensive fallback shape:
+`activeDomain || domains[0]?.slug ?? "research"`. Three-stage
+fallback handles: (1) hydrated active_domain (happy path), (2) empty
+activeDomain + populated domains list (defensive — tests + pre-T6
+backend), (3) empty domains list (last-resort literal matching the
+setup wizard's default).
+
+**T2.b in-flight flag + useEffect dependency array:** The store's
+in-flight serialization is a module-private `inFlightPromise`, NOT a
+state field. The store's own `refresh()` action handles dedup
+internally (`if (inFlightPromise) return inFlightPromise`), so the
+component just calls `refresh()` — concurrent fetches from peer
+mounts (e.g., Settings panel + topbar in the same render tree) only
+trigger one network call. Gate at the component level uses the
+`loaded` state field (matches `useDomains()` first-mount auto-refresh
+precedent at `apps/brain_web/src/lib/hooks/use-domains.ts:117-121`).
+Dep array: `[loaded, refresh]`. `refresh` is a zustand action with
+stable reference per store lifetime, so the effect re-runs only when
+`loaded` flips false → true (post-fetch) or via test seam
+`_resetForTesting`. Chose `!loaded` over the plan-doc's literal
+`folders.length === 0 && !in-flight` phrasing: the plan-doc gate
+would re-fetch forever for a user whose vault legitimately has zero
+watched folders (loaded=true, folders=[] → empty check trips on every
+mount). `!loaded` correctly stops firing once the store resolves —
+matched by the third regression-pin test.
+
+**Test count delta:**
+- `watch-modals.test.tsx`: 24 → 27 (+3 T2.a tests).
+- `topbar-watched-status.test.tsx`: 16 → 19 (+3 T2.b tests).
+- `scope-picker-set-as-default.test.tsx`: 5 → 5 (no new tests; mock
+  extension only).
+- brain_web full suite: 585 → 586 passed (+6 new) — net 586 in
+  full-suite count because the existing T14 file's empty-state test
+  and error-state test split / no-longer-pass-with-old-assertions
+  were repaired in place (not new tests).
+
+**RED-on-revert verification:** `git stash push` reverted both source
+files. Re-ran `pnpm vitest run tests/unit/watch-modals.test.tsx
+tests/unit/topbar-watched-status.test.tsx`:
+- T2.a "defaults to activeDomain (not domains[0])" — **FAILED RED**
+  with the trigger text reading `"research"` (the alphabetically-first
+  `domains[0]`) instead of the seeded activeDomain `"work"`. Confirms
+  the activeDomain default fix is load-bearing.
+- T2.b "fires refresh() on mount when loaded === false" — **FAILED
+  RED** with `expected "spy" to be called 1 times, but got 0 times`
+  because the pre-T2.b indicator had no mount-effect. Confirms the
+  useEffect is load-bearing.
+- The defensive-fallback test (T2.a "falls back to domains[0]") and
+  the "does NOT re-fire" tests (T2.b regression-pins) STILL PASS on
+  the reverted source — they pin behavior that existed before the fix
+  too (defensive paths + absence-of-fetch). This is correct: those are
+  regression-pins guarding the gate from weakening, not tests of new
+  behavior.
+
+`git stash pop` restored sources; full suite re-runs green.
+
+**Vitest + tsc clean:** Full brain_web vitest 586 passed (1 skipped),
+0 failures. `pnpm tsc --noEmit` clean (no output).
+
+**Pre-existing test repair note:** Two tests in
+`topbar-watched-status.test.tsx` needed updates because the new
+mount-fetch changes their preconditions:
+- Empty-state test (L192-199 pre-edit) previously rendered with
+  default state and never called `listWatchedFolders`. Post-T2.b it
+  fires the mount-fetch; needed a default `mockResolvedValue` in
+  `beforeEach`.
+- Error-state test (L303-334 pre-edit) asserted exactly one
+  `refresh` call after click. Post-T2.b the mount-effect fires
+  `refresh` once before the click, so the click adds a second call.
+  Updated assertion to delta-against-post-mount-count.
+Both repairs are mechanically forced by T2.b — they don't soften any
+pin.
+
+**Microtask race lesson (informational):** Initial T2.b test
+implementation used `listWatchedFoldersMock` call-count assertions
+and failed in sibling-test order even though it passed in isolation.
+Diagnosis: the previous test's mount-fetch leaves a pending Promise
+whose `.then` mutates `useWatchedFoldersStore.loaded` AFTER
+`beforeEach`'s `_resetForTesting()` runs but BEFORE the new test's
+render — a `useEffect` deps capture-time race. Refactored to spy on
+the store's `refresh` action directly (matching the existing T14
+error-state spy pattern at L304) which decouples the assertion from
+the store's internal in-flight Promise lifecycle entirely. Cleaner
+and more robust regardless of microtask ordering. Worth noting in
+`tasks/lessons.md` at plan close if not already covered.
+
+**Commit cadence:** Single bundled `fix(plan-23)` commit per Plan 23
+D3 (no push). Plan-doc receipts appended in a separate
+`docs(plan-23)` commit.
