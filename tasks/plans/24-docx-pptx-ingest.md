@@ -1043,6 +1043,193 @@ cd apps/brain_web && pnpm vitest run
 
 Per D8: NO push.
 
+## T5.5 outcome
+
+**Status:** ✅ DONE — both frontend integration gaps surfaced by T5
+implementer closed end-to-end. User adjudication 1.A — insert T5.5 to
+fix the 2 gaps before T6 closure (NOT defer to Plan 25).
+
+**Files modified (2 source + 2 test):**
+
+1. `apps/brain_web/src/lib/state/inbox-store.ts` (+15 LOC, -1 LOC)
+   — read site at `loadRecent` items.map() flipped from
+   `(it.type as IngestType)` (always undefined per typed shape on
+   line 202) to `(it.source_type as IngestType)`, matching the
+   backend's emitted field name from `brain_recent_ingests` (see
+   `recent_ingests.py:65-79`). 12-line comment block captures the
+   reason and points future readers at the T5 icon wiring this fix
+   un-blocks. The typed shape on line 202 was already correct;
+   only the runtime read needed alignment.
+
+2. `apps/brain_web/src/components/inbox/drop-zone.tsx`
+   (+45 LOC, -1 LOC) — added `inferIngestTypeFromFilename(filename)`
+   module-level helper that switches on the lowercased extension
+   (last dot-segment of the filename). Covered extensions:
+   `.docx` → `"docx"`, `.pptx` → `"pptx"`, `.pdf` → `"pdf"`, `.txt` /
+   `.md` / `.markdown` → `"text"`, `.eml` → `"email"`; fall-through
+   → `"file"` (matches the pre-T5.5 hardcoded default for unknown
+   extensions). The helper is wired into `handleFile`'s
+   `addOptimistic({type: ...})` call. Also added `type IngestType`
+   import from `inbox-store` (existing barrel export). Helper kept
+   module-local rather than promoted to `inbox-store.ts` because it's
+   filename-specific (the `inferType(source)` helper in inbox-store
+   handles the URL-vs-text distinction for paste/URL sources, not
+   filenames).
+
+3. `apps/brain_web/tests/unit/inbox-store.test.ts` (+62 LOC, -0 LOC)
+   — 2 new tests appended after `addOptimistic` block:
+   - `loadRecent() reads source_type field from backend response
+     (Plan 24 T5.5 regression)` — mocks 2-row response with
+     `source_type: "docx"` and `source_type: "pptx"`; asserts
+     `state.sources[0].type === "docx"` + `[1].type === "pptx"`.
+     Confirms backend's actual field name lands in store.
+   - `loadRecent() falls back to inferred type when source_type is
+     absent` — mocks 1-row response missing `source_type`; asserts
+     fallback to `inferType()` (URL → `"url"`). Confirms the
+     pre-existing fallback still works post-fix for legacy / partial
+     responses.
+
+4. `apps/brain_web/tests/unit/drop-zone.test.tsx` (+58 LOC, -0 LOC)
+   — 3 new tests appended before the existing T5 docx-forwarding test:
+   - `handleFile infers docx type from .docx extension` — drops
+     `strategy.docx`; asserts optimistic row's `type === "docx"`.
+   - `handleFile infers pptx type from .pptx extension` — drops
+     `deck.pptx`; asserts optimistic row's `type === "pptx"`.
+   - `handleFile falls back to file for unknown extension` — drops
+     `data.xyz`; asserts optimistic row's `type === "file"`
+     (regression-pin on the fall-through branch).
+
+**Field-read shape (before vs after):**
+
+```diff
+-       type: (it.type as IngestType) ?? inferType(it.source),
++       type: (it.source_type as IngestType) ?? inferType(it.source),
+```
+
+Pre-T5.5: `it.type` always `undefined` (backend emits `source_type`),
+so every row fell through to `inferType()` → `"url"` (for http
+sources) or `"text"` (everything else) regardless of the actual
+backend SourceType. Post-T5.5: backend's `source_type` lands
+verbatim in the store's `type` field; `<TypeIcon />` renders the
+correct icon (FileText for docx, Presentation for pptx, etc.).
+
+**Drop-zone extension-sniff (function + extensions covered):**
+
+```typescript
+function inferIngestTypeFromFilename(filename: string): IngestType {
+  const ext = filename.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "docx":     return "docx";
+    case "pptx":     return "pptx";
+    case "pdf":      return "pdf";
+    case "txt":
+    case "md":
+    case "markdown": return "text";
+    case "eml":      return "email";
+    default:         return "file";
+  }
+}
+```
+
+7 extensions covered across 5 `IngestType` literals: docx, pptx, pdf,
+txt, md, markdown, eml. Unknown extensions fall through to `"file"`,
+matching the pre-T5.5 hardcoded behavior. `.markdown` added alongside
+`.md` to mirror `INGEST_ACCEPT[text/markdown]` in inbox-store.ts.
+`.eml` added because the existing `INGEST_ACCEPT` advertises
+`message/rfc822` and the `IngestType` union already includes
+`"email"` — fix-as-you-pass coverage so the typed surface is
+internally consistent rather than carrying a partial extension list.
+
+**Test results:**
+
+```text
+pnpm vitest run tests/unit/inbox-store.test.ts \
+  tests/unit/drop-zone.test.tsx \
+  tests/unit/source-row.test.tsx
+# 25 passed (3 files) — was 20 pre-T5.5 (T5 baseline); +5 new = 25 total
+
+pnpm tsc --noEmit
+# 0 errors, 0 warnings
+
+pnpm vitest run
+# 86 files / 599 passed / 1 skipped — was 594 passed pre-T5.5 (T5 baseline); +5 new
+```
+
+**RED-on-revert receipts (per Plan 23 T2 / T1.5 precedent):**
+
+- **inbox-store revert.** Flipped `it.source_type` back to `it.type`
+  in `loadRecent`; ran `pnpm vitest run tests/unit/inbox-store.test.ts`.
+  Result: 1 FAILED (`loadRecent() reads source_type field from backend
+  response`: expected `"docx"`, received `"text"` — confirms the
+  fallback `inferType()` fires on the broken read path), 6 passed.
+  The "falls back to inferred type when source_type is absent" test
+  stays GREEN as expected (the fallback IS the pre-fix behavior for
+  this scenario). Confirms the source_type read is a real assertion,
+  not a no-op. Restored from `/tmp` backup.
+- **drop-zone revert.** Flipped `type: inferIngestTypeFromFilename(...)`
+  back to `type: "file"` in `handleFile`; ran
+  `pnpm vitest run tests/unit/drop-zone.test.tsx`. Result: 2 FAILED
+  (docx-infer test: expected `"docx"`, received `"file"`; pptx-infer
+  test: expected `"pptx"`, received `"file"`), 7 passed. The fall-back
+  test stays GREEN (the revert IS the fallback). Confirms extension-
+  sniff wiring is real. Restored from `/tmp` backup.
+- **Final state verified.** Post-restore, re-ran the 3-file targeted
+  vitest pass: 25/25 green. Re-ran `pnpm tsc --noEmit`: 0 errors.
+
+**End-to-end implications:**
+
+Pre-T5.5 the T5 work (icons + accept list) was effectively unreachable
+from production code paths: docx/pptx files dropped into the inbox
+flashed the generic FileIcon during upload (drop-zone bug), and after
+the `recentIngests` poll resolved the row STILL rendered the generic
+FileIcon because the store read the wrong field name (inbox-store
+bug). T5.5 closes both gaps so the dedicated FileText (docx) and
+Presentation (pptx) icons render end-to-end. The user adjudication
+chose 1.A specifically to avoid shipping T5 in a state where the icon
+wiring exists but doesn't fire.
+
+**Self-review findings:**
+
+- **Pre-existing concerns flagged by T5 implementer are NOT in
+  T5.5 scope.** Browse-page + chat-context-pill icon mapping audit
+  remains a Plan 25 candidate. `IngestType` union still missing
+  `"transcript"` + `"tweet"` (Plan 22 frontmatter additions) — pre-
+  existing gap, deferred to Plan 25 per spec out-of-scope clause.
+- **The `inferIngestTypeFromFilename` helper is module-local to
+  drop-zone.** Considered promoting to inbox-store as a sibling to
+  `inferType()`. Decided against: `inferType()` accepts a
+  `source` string (URL or pasted text) and discriminates URL vs
+  text; `inferIngestTypeFromFilename` accepts a filename and
+  discriminates by extension. Different inputs, different concerns;
+  co-locating with the only caller (drop-zone) keeps the call site
+  readable without crossing the store/component boundary. If a
+  second caller appears (e.g., paste-as-file flow), promote it then.
+- **`.markdown` added alongside `.md`.** `INGEST_ACCEPT` advertises
+  BOTH `.md` and `.markdown` for `text/markdown`. The helper covers
+  both to mirror — a missed-extension class of bug (user uploads
+  `notes.markdown` and gets a generic FILE icon) avoided pre-emptively.
+- **No new dependencies.** No package.json changes. Zero schema
+  changes. Zero spec text changes.
+- **No mockup gate.** The fix changes only the icon that renders
+  during/after ingest; the icon mapping itself was already approved
+  by `brain-ui-designer` at T5. T5.5 is the wiring that makes T5's
+  approved visual surface actually fire from production code paths.
+- **No visual QA against running brain_web instance.** Per CLAUDE.md
+  §4 the spec carries this as a known constraint for this task —
+  the validation path is unit-level RED-on-revert (proven both
+  fixes are load-bearing) + tsc + full vitest. Visual QA at T6
+  closure can include a manual drop of a `.docx` to confirm
+  end-to-end icon render.
+
+**Commits planned (bundled per spec offer):**
+
+1. `fix(plan-24): T5.5 — read source_type from recentIngests +
+   drop-zone extension-sniff for optimistic rows`
+2. `docs(plan-24): T5.5 — outcome receipts for frontend integration
+   fixes`
+
+Per D8: NO push.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
