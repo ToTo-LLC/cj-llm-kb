@@ -561,6 +561,170 @@ class IngestPipeline:
                 errors=[str(exc)],
             )
 
+    def mark_orphaned(
+        self,
+        existing_note_path: Path,
+        *,
+        allowed_domains: tuple[str, ...],
+    ) -> IngestResult:
+        """Mark a vault note as orphaned (Plan 22 T3, D2 non-destructive path).
+
+        Flips the note's frontmatter to ``orphaned: true`` +
+        ``orphaned_at: <today>``. The body is NOT modified — only two
+        frontmatter fields change. The mutation goes through
+        :class:`VaultWriter` (single Edit) so the change is atomic and
+        recorded in the undo log: ``brain_undo_last`` reverts the note to
+        its pre-mark frontmatter, including any prior ``orphaned: false``
+        or absent ``orphaned`` field.
+
+        Two branches:
+
+        * **mark** — note's current frontmatter has ``orphaned: false`` (or
+          the field is absent). Frontmatter flipped, vault written, undo
+          record persisted, log entry ``orphan | mark | <slug>``.
+        * **no_change** — note is ALREADY ``orphaned: true``. Idempotent:
+          no vault write, no LLM call, ``orphaned_at`` preserved (so the
+          original orphan-mark timestamp survives a re-call). Log entry
+          ``orphan | no_change | <slug>`` is still emitted for greppability.
+
+        Called by D7's symmetric watcher on ``FileDeletedEvent`` and by
+        T5's ``brain_resync_folder`` when a tracked file has disappeared
+        from disk. Never deletes the note itself — D2 keeps adjudication
+        manual (the user picks delete via ``brain_delete_orphan`` after
+        :meth:`mark_orphaned` has run).
+
+        Args:
+            existing_note_path: Absolute path to the vault note to mark.
+                Slug is derived from the stem for log greppability.
+            allowed_domains: Scope-guard tuple. The note's frontmatter
+                ``domain`` MUST be in this tuple — a watcher scoped to
+                ``("research",)`` cannot accidentally orphan a personal-
+                domain note. ``scope_guard`` enforces the path side; the
+                domain check below enforces the frontmatter side.
+
+        Returns:
+            :class:`IngestResult` with status ``OK`` on success / no-op.
+            ``QUARANTINED`` when the note's domain is outside
+            ``allowed_domains``. ``FAILED`` on any stage exception
+            (missing file, malformed frontmatter, etc.). Mirrors
+            :meth:`update_source`'s failure shape so callers can branch
+            on status uniformly.
+
+        Raises:
+            ScopeError: The note path is outside ``vault_root`` or
+                outside ``allowed_domains``. Propagates so callers (T6
+                watcher, T5 resync tool) see a clear ``PermissionError``-
+                shaped exception, matching :meth:`update_source` Stage A.
+        """
+        now = datetime.now(tz=UTC)
+        slug = existing_note_path.stem
+
+        try:
+            # Stage A: scope-guard the path. Mirrors update_source — also
+            # covers "must be inside vault_root".
+            scope_guard(
+                existing_note_path,
+                vault_root=self.vault_root,
+                allowed_domains=allowed_domains,
+            )
+
+            # Stage B: read existing note. ``read_text`` raises
+            # FileNotFoundError when the path doesn't exist — that flows
+            # to the FAILED branch below, matching update_source's
+            # error-handling shape.
+            existing_content = existing_note_path.read_text(encoding="utf-8")
+            existing_fm_dict, _existing_body = parse_frontmatter(existing_content)
+            existing_fm = Frontmatter.from_dict(existing_fm_dict)
+
+            existing_domain = existing_fm.domain
+            if existing_domain is None:
+                # Defensive: a note with no domain frontmatter cannot be
+                # safely orphaned. We don't know which domain's log.md to
+                # append to, and a scope check against a missing domain
+                # would be meaningless. Treat as FAILED rather than
+                # QUARANTINED (which is reserved for "domain known but
+                # outside scope").
+                raise ValueError(
+                    f"existing note {existing_note_path} has no `domain` "
+                    "frontmatter; cannot determine target domain for orphan-mark"
+                )
+
+            # Stage C: scope check the note's domain. Without this, a
+            # watcher scoped to ``("research",)`` could orphan a personal-
+            # domain note that lives at a path scope_guard happens to
+            # accept (e.g. a hypothetical cross-domain symlink). Belt-and-
+            # braces.
+            if existing_domain not in allowed_domains:
+                error = (
+                    f"existing note domain {existing_domain!r} "
+                    f"not in allowed {allowed_domains}"
+                )
+                return IngestResult(
+                    status=IngestStatus.QUARANTINED,
+                    note_path=None,
+                    errors=[error],
+                )
+
+            # Stage D: idempotency check. ``Frontmatter.orphaned`` defaults
+            # to ``False`` so a missing field reads as ``False`` and we
+            # proceed to the mark branch. Only an explicit ``orphaned:
+            # true`` short-circuits.
+            if existing_fm.orphaned:
+                # Idempotent no-op: preserve the original orphaned_at
+                # timestamp (audit) and emit a greppable log line.
+                self._log_orphan(
+                    domain=existing_domain,
+                    op_summary=f"no_change | {slug}",
+                )
+                return IngestResult(
+                    status=IngestStatus.OK,
+                    note_path=existing_note_path,
+                )
+
+            # Stage E: rewrite frontmatter (body unchanged) and apply
+            # atomically via VaultWriter. The single Edit lands an undo
+            # record that ``brain_undo_last`` can revert — flipping the
+            # note back to its pre-mark frontmatter (``orphaned: false``
+            # or absent, depending on what was there before).
+            new_content = self._rewrite_frontmatter_for_orphan(
+                existing_content=existing_content,
+                existing_fm_dict=existing_fm_dict,
+                now=now,
+            )
+            self._apply_replacement(
+                note_path=existing_note_path,
+                domain=existing_domain,
+                old_content=existing_content,
+                new_content=new_content,
+            )
+            self._log_orphan(
+                domain=existing_domain,
+                op_summary=f"mark | {slug}",
+            )
+            return IngestResult(
+                status=IngestStatus.OK,
+                note_path=existing_note_path,
+            )
+
+        except ScopeError:
+            # Scope violations bypass record_failure (programmer / caller
+            # error, not a pipeline failure) and propagate — same shape
+            # as update_source so T5 / T6 callers can match on it
+            # uniformly.
+            raise
+        except Exception as exc:
+            record_failure(
+                vault_root=self.vault_root,
+                slug=slug,
+                stage="mark_orphaned",
+                exception=exc,
+            )
+            return IngestResult(
+                status=IngestStatus.FAILED,
+                note_path=None,
+                errors=[str(exc)],
+            )
+
     def _rewrite_frontmatter_only(
         self,
         *,
@@ -580,6 +744,27 @@ class IngestPipeline:
         new_fm["source_path"] = str(new_source_path)
         # Re-parse body so we serialize cleanly with the same body bytes
         # that were on disk.
+        _fm, body = parse_frontmatter(existing_content)
+        return serialize_with_frontmatter(new_fm, body=body)
+
+    def _rewrite_frontmatter_for_orphan(
+        self,
+        *,
+        existing_content: str,
+        existing_fm_dict: dict[str, object],
+        now: datetime,
+    ) -> str:
+        """Rewrite the note flipping ``orphaned: true`` + ``orphaned_at: <today>``.
+
+        Preserves the body verbatim — only frontmatter fields change. Used
+        by :meth:`mark_orphaned` (Plan 22 T3). Returns the full serialized
+        note content (frontmatter + body). All other frontmatter keys
+        (including user-added extras like ``aliases`` / ``cssclass``)
+        round-trip unchanged.
+        """
+        new_fm = dict(existing_fm_dict)
+        new_fm["orphaned"] = True
+        new_fm["orphaned_at"] = now.date().isoformat()
         _fm, body = parse_frontmatter(existing_content)
         return serialize_with_frontmatter(new_fm, body=body)
 
@@ -674,6 +859,24 @@ class IngestPipeline:
             LogEntry(
                 timestamp=datetime.now(tz=UTC),
                 op="update",
+                summary=op_summary,
+            )
+        )
+
+    def _log_orphan(self, *, domain: str, op_summary: str) -> None:
+        """Append a single ``orphan``-verb entry to the domain's ``log.md``.
+
+        Mirrors :meth:`_log_update` but stamps ``op="orphan"``. Used by
+        :meth:`mark_orphaned` (Plan 22 T3) so the orphan-mark transition
+        and the idempotent no-op re-mark are both greppable distinctly
+        from the ``patch`` / ``update`` verbs.
+        """
+        log_path = self.vault_root / domain / "log.md"
+        log = LogFile(log_path)
+        log.append(
+            LogEntry(
+                timestamp=datetime.now(tz=UTC),
+                op="orphan",
                 summary=op_summary,
             )
         )
