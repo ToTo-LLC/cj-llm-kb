@@ -9,20 +9,25 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
-from brain_core.budget import PerDomainBudgetGuard
+import structlog
+
+from brain_core.budget import BudgetCapExceeded, PerDomainBudgetGuard
 from brain_core.config.schema import Config
 from brain_core.cost.budget import BudgetEnforcer
+from brain_core.cost.ledger import CostLedger
 from brain_core.ingest.archive import archive_dir_for
 from brain_core.ingest.classifier import ClassifyResult
 from brain_core.ingest.dispatcher import dispatch
 from brain_core.ingest.failures import record_failure
 from brain_core.ingest.handlers.base import SourceHandler
 from brain_core.ingest.hashing import content_hash
+from brain_core.ingest.ocr import ocr_image
 from brain_core.ingest.types import ExtractedSource, IngestResult, IngestStatus
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest, LLMResponse
@@ -38,6 +43,8 @@ from brain_core.vault.log import LogEntry, LogFile
 from brain_core.vault.paths import ScopeError, scope_guard
 from brain_core.vault.types import Edit, IndexEntryPatch, NewFile, PatchSet
 from brain_core.vault.writer import Receipt, VaultWriter
+
+_log = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -76,6 +83,15 @@ class IngestPipeline:
     # ``classify_model`` / ``summarize_model`` / ``integrate_model``
     # dataclass fields, populated by the caller.
     config: Config | None = None
+    # Plan 24 Task 4: optional CostLedger so the post-classify OCR pass
+    # (DocxHandler + PptxHandler images via :func:`brain_core.ingest.ocr.ocr_image`)
+    # can record ``operation="ocr"`` rows + the per-domain guard can count
+    # OCR spend against the per-domain cap. When ``None`` (or when
+    # ``guard`` / ``config`` are also ``None``), the OCR pass is skipped
+    # entirely — handler extraction still runs, but image text is NOT
+    # inlined into ``body_text``. Every pre-Plan-24 call site that
+    # constructed an ``IngestPipeline`` without a ledger keeps compiling.
+    cost_ledger: CostLedger | None = None
 
     async def ingest(
         self,
@@ -213,6 +229,17 @@ class IngestPipeline:
                     extracted=extracted,
                     errors=[f"domain {domain!r} not in allowed {allowed_domains}"],
                 )
+
+            # Stage 5.5: OCR images (Plan 24 T4)
+            # ----------------------------------------------------------
+            # Post-classify so the ledger row + budget gate run against
+            # the RESOLVED domain (quarantined ingests skip OCR entirely
+            # — the early-return above bypasses this block). Pre-summarize
+            # so the inlined ``[Image: ...]`` blocks feed the summarize +
+            # integrate prompts. Idempotency hash (Stage 4) is computed on
+            # the pre-OCR body, so re-ingesting the same source skips OCR
+            # too — duplicate detection happens before any vision spend.
+            extracted = await self._ocr_images(extracted, domain=domain)
 
             # Stage 6: Summarize
             summary, summarize_cost = await self._summarize(extracted, domain=domain)
@@ -989,6 +1016,114 @@ class IngestPipeline:
             needs_user_pick=out.confidence < 0.7,
         )
         return result, _estimate_call_cost(self.classify_model, response)
+
+    async def _ocr_images(
+        self,
+        extracted: ExtractedSource,
+        *,
+        domain: str,
+    ) -> ExtractedSource:
+        """Run Claude Vision OCR on every image in ``extracted.extras["images"]``
+        and inline the recovered text into ``body_text``.
+
+        Plan 24 Task 4. Behavior:
+
+        * No-op when ``extras["images"]`` is missing / empty.
+        * No-op when ``self.guard`` / ``self.config`` / ``self.cost_ledger``
+          is ``None`` — OCR requires the per-domain budget gate + the
+          cost ledger, and missing rails would silently bypass them.
+        * Per-image error handling:
+            - :class:`BudgetCapExceeded` — re-raised. Budget exhaustion
+              mid-OCR aborts the entire ingest; the outer ``try`` in
+              :meth:`ingest` records the failure (status=FAILED).
+            - Any other exception (LLM error, malformed image, etc.) —
+              logged + skipped. Remaining images still get OCR'd.
+            - Empty OCR text — no inline block is emitted (avoids
+              ``[Image: ]`` noise in the body).
+        * Inline format:
+            - ``[Image (slide N): <text>]`` when the image dict carries
+              ``slide_index`` (PptxHandler).
+            - ``[Image: <text>]`` otherwise (DocxHandler and any future
+              non-slide-positioned handler).
+        * OCR blocks are APPENDED to the end of ``body_text`` with a
+          double-newline separator. Per-slide interleaving (inserting
+          the block after the matching ``## Slide N`` section) is
+          deferred — the slide-index marker in the inline block gives
+          downstream LLM prompts enough context.
+
+        Returns a new :class:`ExtractedSource` (the dataclass is frozen)
+        with the augmented ``body_text``; ``extras`` is preserved
+        verbatim so downstream consumers can still see the original image
+        list.
+        """
+        images: list[dict[str, Any]] = (
+            extracted.extras.get("images", []) if extracted.extras else []
+        )
+        if not images:
+            return extracted
+        if self.guard is None or self.config is None or self.cost_ledger is None:
+            # Missing OCR rails. We don't want to call the LLM without a
+            # budget gate or the ability to record a ledger row, so skip.
+            # Log so the operator can spot the misconfiguration in stderr
+            # / log file (e.g. CLI ingest without ``--config``).
+            _log.info(
+                "ingest.ocr.skipped_no_rails",
+                image_count=len(images),
+                has_guard=self.guard is not None,
+                has_config=self.config is not None,
+                has_cost_ledger=self.cost_ledger is not None,
+            )
+            return extracted
+
+        ocr_blocks: list[str] = []
+        for img in images:
+            try:
+                result = await ocr_image(
+                    image_bytes=img["blob"],
+                    content_type=img.get("content_type", "image/png"),
+                    domain=domain,
+                    llm_provider=self.llm,
+                    cost_ledger=self.cost_ledger,
+                    budget_guard=self.guard,
+                    config=self.config,
+                )
+            except BudgetCapExceeded:
+                # Per plan-doc §T4 step 5: re-raise so the outer ingest
+                # ``try`` catches it and records a FAILED row. Partial
+                # OCR work already done in this pass is preserved on the
+                # ledger (each ``ocr_image`` call records its row before
+                # returning), but no inline blocks land in body_text —
+                # the FAILED ingest doesn't produce a vault note anyway.
+                raise
+            except Exception as exc:
+                _log.warning(
+                    "ingest.ocr.image_skipped",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    image_index=img.get("index"),
+                    slide_index=img.get("slide_index"),
+                )
+                continue
+
+            text = result.text.strip()
+            if not text:
+                # Empty OCR → don't emit an empty ``[Image: ]`` block.
+                continue
+
+            slide_index = img.get("slide_index")
+            if slide_index is not None:
+                ocr_blocks.append(f"[Image (slide {slide_index}): {text}]")
+            else:
+                ocr_blocks.append(f"[Image: {text}]")
+
+        if not ocr_blocks:
+            return extracted
+
+        suffix = "\n\n".join(ocr_blocks)
+        new_body = (
+            f"{extracted.body_text}\n\n{suffix}" if extracted.body_text else suffix
+        )
+        return replace(extracted, body_text=new_body)
 
     async def _summarize(
         self,
