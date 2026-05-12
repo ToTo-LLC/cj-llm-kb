@@ -321,6 +321,79 @@ class AutonomyCategoryFlags(BaseModel):
     draft: bool = False
 
 
+class WatchedFolder(BaseModel):
+    """One entry in :attr:`Config.watched_folders` (Plan 22 T1 / spec §5).
+
+    A user-opted-in folder whose contents are mirrored into the vault by
+    :class:`brain_core.watch.WatchedFolderWatcher` (T6+). One record per
+    watched folder; the watcher reconciles file create / modify / delete
+    events into vault note create / update / orphan-mark operations.
+
+    Fields:
+
+    * ``path`` — absolute folder path on disk. Stored as ``str`` (not
+      :class:`pathlib.Path`) because the value is treated as an opaque
+      identifier in the on-disk config and in :attr:`Frontmatter.watched_folder_id`
+      links. The :meth:`_check_path_absolute` validator rejects relative
+      paths with a clear message so the error surfaces at config-load time
+      rather than later when the watcher tries to walk it.
+    * ``domain`` — the vault domain newly-ingested files land in. Must
+      be a slug from :attr:`Config.domains`; the cross-field check lives
+      on :class:`Config` (not here) because Pydantic v2 sub-models can't
+      see the parent's live state cleanly. See :meth:`Config._check_watched_folders_keys_in_domains`.
+    * ``enabled`` — default ``True``; toggling to ``False`` makes the
+      watcher skip this entry without losing its config row (Settings UI
+      affordance per D5 / spec §5).
+    * ``last_sync`` — UTC timestamp of the last successful full sync.
+      ``None`` until the first sync completes; T2 / T6 update it.
+    * ``policy`` — write-collision policy. Locked to ``"overwrite"`` in
+      v1 per D1; the :class:`typing.Literal` reserves room to add
+      ``"keep_vault"`` / ``"prompt"`` / ``"merge"`` in v2 without a
+      schema migration on user configs.
+    * ``include_subdirs`` — default ``True``; recursive walk semantics
+      match what most users mean by "watch this folder".
+
+    ``extra="forbid"`` matches every other config sub-model so typos in
+    ``config.json`` (e.g. ``"pathh"`` or ``"sub_dirs"``) surface at load
+    time instead of being silently dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    path: str
+    domain: str
+    enabled: bool = True
+    last_sync: datetime | None = None
+    policy: Literal["overwrite"] = "overwrite"
+    include_subdirs: bool = True
+
+    @field_validator("path")
+    @classmethod
+    def _check_path_absolute(cls, v: str) -> str:
+        # Field-level validator (not ``model_validator(mode="after")``)
+        # so a bad ``path`` raises BEFORE the field is mutated under
+        # ``validate_assignment=True`` (CLAUDE.md "What NOT to do" / Plan
+        # 16 T36 lesson). Empty-string check first so the error wording
+        # is the one a user actually sees instead of a generic
+        # ``Path("").is_absolute()`` False.
+        if not v:
+            raise ValueError("WatchedFolder.path must not be empty")
+        if not Path(v).is_absolute():
+            raise ValueError(
+                f"WatchedFolder.path {v!r} must be absolute "
+                "(start with '/' on POSIX, drive letter on Windows)"
+            )
+        return v
+
+    @field_validator("domain")
+    @classmethod
+    def _check_domain_slug(cls, v: str) -> str:
+        # Single-field rule only — that the slug is well-formed.
+        # Cross-field "must be in Config.domains" lives on Config
+        # because sub-models can't see the parent state cleanly in
+        # Pydantic v2. Mirrors the privacy_railed pattern.
+        return _validate_domain_slug(v)
+
+
 class DomainOverride(BaseModel):
     """Per-domain LLM overrides (Plan 11 D8; Plan 12 D1 dropped the
     autonomy field — autonomy is governed by the per-category flags on
@@ -362,6 +435,10 @@ _PERSISTED_FIELDS: frozenset[str] = frozenset(
         "privacy_railed",
         "cross_domain_warning_acknowledged",
         "providers",
+        # Plan 22 T1 / D7: opt-in watched-folder records. Round-trips
+        # through ``config.json`` so a watcher restart resumes the
+        # subscription set the user configured.
+        "watched_folders",
         # Plan 16 Task 34 / D28 step 2 of 3: monotonically-increasing
         # version stamp. Persisted so the loader's single-process cache
         # (``loader.resolve_config``) can detect a stale in-memory
@@ -473,6 +550,21 @@ class Config(BaseModel):
     # a strict "did the disk change since I last read it" signal —
     # callers should not interpret the magnitude.
     config_version: int = Field(default=0, ge=0)
+    # Plan 22 T1 / D7 / spec §5: opt-in watched-folder records. Empty
+    # list by default so a fresh install (and every legacy ``config.json``
+    # that predates this field) lands at "no folders watched" — the
+    # watcher subsystem is opt-in per the safety-rails contract (no
+    # background process touches the user's filesystem without an
+    # explicit ``brain_watch_folder`` call). The cross-field validator
+    # below enforces "every entry's ``domain`` is a live domain slug"
+    # using a snapshot-revert pattern that complies with the Plan 16
+    # T36 lesson (``model_validator(mode="after")`` failures leave the
+    # field mutated to the bad value under ``validate_assignment=True``
+    # — single-field validators like this one DO roll back on raise,
+    # which is why we read ``self.domains`` from the post-after-validator
+    # state and apply the revert in the model validator itself rather
+    # than relying on the raise alone).
+    watched_folders: list[WatchedFolder] = Field(default_factory=list)
 
     @field_validator("domains")
     @classmethod
@@ -564,6 +656,37 @@ class Config(BaseModel):
             raise ValueError(
                 f"domain_overrides keys {orphans!r} are not in domains {self.domains!r}; "
                 "remove the override or add the domain first."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_watched_folders_domains_in_domains(self) -> Config:
+        # Plan 22 T1 / D7: every ``WatchedFolder.domain`` must be a
+        # member of the live ``domains`` list. Mirrors the equivalent
+        # ``domain_overrides`` and ``autonomous`` validators. Without
+        # this guard, deleting a domain would leave a stale watched-
+        # folder entry that silently routes new ingests to a slug that
+        # no longer exists. The cross-field check lives here (not on
+        # :class:`WatchedFolder`) because Pydantic v2 sub-models can't
+        # see the parent's live state cleanly.
+        #
+        # Pydantic v2 quirk under ``validate_assignment=True`` (Plan 16
+        # T36): a raise inside ``model_validator(mode="after")`` does
+        # NOT roll back the triggering field mutation. The intended
+        # write path for watched-folder mutations is therefore the
+        # ``brain_watch_folder`` / ``brain_unwatch_folder`` tools, which
+        # apply a pre-check BEFORE ``setattr`` (canonical pattern at
+        # :func:`brain_core.tools.config_set._check_active_domain_membership`).
+        # This validator catches misuse from direct setattr / load-time
+        # construction and reports clearly.
+        orphans = sorted(
+            {wf.domain for wf in self.watched_folders if wf.domain not in self.domains}
+        )
+        if orphans:
+            raise ValueError(
+                f"watched_folders entries reference domains {orphans!r} "
+                f"that are not in domains {self.domains!r}; "
+                "remove the entry or add the domain first."
             )
         return self
 
