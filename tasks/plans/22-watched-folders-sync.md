@@ -2487,6 +2487,128 @@ branches.
 
 - _(test + docs commit SHAs backfilled by the commits themselves)_
 
+## T10.5 outcome
+
+**Why this task exists.** T10's integration tests surfaced an
+architectural gap: T1 added `source_path` + `watched_folder_id` to
+`Frontmatter`, but the 9-stage ingest pipeline (`pipeline.py`
+`_build_source_note`) didn't populate them. As a result, T6's
+`WatchedFolderWatcher._find_note_by_source_path` always returned
+`None` — modify events fell through to a duplicate ingest, delete
+events silently no-opped. T10's tests pinned the gap with
+absence-assertions (`source_path` MUST NOT be present); T10.5 flips
+the data flow + the assertions.
+
+**What changed.**
+
+- `pipeline.ingest()` gains two optional kwargs `source_path: Path | None`
+  and `watched_folder_id: str | None`. Default `None` preserves backwards-
+  compat for drag-drop / MCP ingest / standalone bulk-import. When
+  set, the kwargs flow through to `_build_source_note` which writes
+  them onto the source note's frontmatter (`source_path` as
+  `str(path.resolve())` per T2 `update_source` convention,
+  `watched_folder_id` verbatim per D1).
+- `BulkImporter.apply()` gains optional `watched_folder_id`. When
+  set, every per-item `pipeline.ingest` call receives BOTH the
+  shared `watched_folder_id` AND a per-item `source_path=item.spec`.
+- `brain_watch_folder` tool passes `watched_folder_id=folder_str`
+  to `BulkImporter.apply`.
+- `WatchedFolderWatcher._handle_create` (and the
+  `_handle_modify` fall-through-to-ingest branch) pass both kwargs.
+
+**Files modified:**
+
+| File | LOC delta |
+|---|---|
+| `packages/brain_core/src/brain_core/ingest/pipeline.py` | +49 / -3 |
+| `packages/brain_core/src/brain_core/ingest/bulk.py` | +28 / -3 |
+| `packages/brain_core/src/brain_core/tools/watch_folder.py` | +8 / -1 |
+| `packages/brain_core/src/brain_core/watch/folder_watcher.py` | +24 / -4 |
+| `packages/brain_core/tests/watch/test_folder_watcher.py` | +28 / -2 (FakePipeline.ingest kwargs + presence assertions on create + modify-fallback tests) |
+| `packages/brain_core/tests/watch/test_folder_watcher_integration.py` | +103 / -10 (flipped absence → presence on `e2e_create`; added `e2e_create_then_modify` lifecycle test; pinned per-file `source_path` on `e2e_concurrent`) |
+| `packages/brain_api/tests/test_watched_folders_integration.py` | +35 / -0 (presence assertions on `api_initial_sync` test) |
+| `packages/brain_core/tests/ingest/test_pipeline_ingest_watched_context.py` | NEW (303 LOC, 6 pin tests) |
+
+**Tests added/modified.**
+
+- NEW `test_pipeline_ingest_watched_context.py` — 6 tests pinning
+  the kwargs contract:
+  1. default kwargs → no watched fields (backwards-compat);
+  2. `source_path` alone → that field, no `watched_folder_id`;
+  3. `watched_folder_id` alone → that field, no `source_path`;
+  4. both → both fields with correct values;
+  5. `BulkImporter.apply(watched_folder_id=...)` → per-item threading;
+  6. `BulkImporter.apply()` without kwarg → backwards-compat shape.
+- NEW `test_e2e_create_then_modify_routes_via_update_source` (in
+  `test_folder_watcher_integration.py`) — true lifecycle pin: drop
+  a file → wait for create-event note → modify the same file →
+  assert exactly 1 note in `sources/` with refreshed `content_hash`.
+  Pre-T10.5 this test would catch 2 notes (duplicate from fallback);
+  post-T10.5 the modify event routes to `update_source`. This is the
+  regression-test that proves T10.5 actually works end-to-end (not
+  just at the kwarg-threading layer).
+- Modified `test_e2e_create_writes_source_note_with_watch_frontmatter`
+  to FLIP absence-assertions to presence: `assert fm["source_path"]
+  == str(src.resolve())` and `assert fm["watched_folder_id"] ==
+  str(folder)`.
+- Modified `test_e2e_concurrent_files_each_produce_a_note` to also
+  assert per-file `source_path` mapping + shared `watched_folder_id`
+  on all 5 notes.
+- Modified `test_on_created_routes_to_ingest` + `test_on_modified_unmapped_falls_through_to_ingest`
+  (unit tests in `test_folder_watcher.py`) to assert the `_FakePipeline`
+  received the kwargs (proves the watcher threads them through).
+- Modified `test_api_watch_folder_initial_sync_imports_files` (in
+  `test_watched_folders_integration.py`) to pin per-item
+  `source_path` + shared `watched_folder_id` on every initial-sync
+  source note.
+
+**T10 absence-to-presence flips.**
+
+- `test_folder_watcher_integration.py:299-376` — `test_e2e_create_writes_source_note_with_watch_frontmatter`: was `assert "source_path" not in fm or fm["source_path"] is None`, now `assert fm["source_path"] == str(src.resolve())` (line ~367) and the matching `watched_folder_id` flip on line ~369.
+- `test_folder_watcher_integration.py:~660` — `test_e2e_concurrent_files_each_produce_a_note`: was a comment block saying "we don't assert source_path because the v1 watcher path doesn't populate it"; now asserts the set of recorded `source_path` values matches the set of source files dropped.
+- `test_watched_folders_integration.py:~358` — `test_api_watch_folder_initial_sync_imports_files`: added presence-block asserting every initial-sync note has the watched-context frontmatter.
+
+**Test counts.**
+
+- brain_core: 1142 → **1149** (+7 from T10.5: 6 new + 1 lifecycle).
+- brain_api: 222 → **222** (+0; 1 existing test strengthened with
+  presence assertions, no new tests).
+
+**Verification.**
+
+```bash
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# 1149 passed, 5 skipped
+
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_api pytest packages/brain_api/tests/ -q
+# 222 passed, 4 skipped, 1 failed (pre-existing tool-count drift —
+# not T10.5's responsibility, same shape as T10 closure)
+```
+
+**Lifecycle pin (the real correctness gate).**
+
+The 6 new pin tests prove the kwargs THREAD correctly. The
+`test_e2e_create_then_modify_routes_via_update_source` integration
+test proves the resulting frontmatter ACTUALLY enables the watcher's
+lookup. Together they close the v1 gap without relying on the
+pre-seeded-note shortcut the T10 modify/delete tests used.
+
+**Cross-platform note.** All new tests use `pathlib` + explicit
+UTF-8 + `PollingObserver` — same shape as T10's existing
+integration tests. No platform-specific branches.
+
+**Backwards-compat invariants pinned.**
+
+- `pipeline.ingest()` called without the new kwargs produces a note
+  with NO `source_path` and NO `watched_folder_id` (test 1 in the
+  new file).
+- `BulkImporter.apply()` called without `watched_folder_id` produces
+  notes with neither field (test 6 in the new file). The standalone
+  `brain_bulk_import` tool (drag-drop) therefore keeps its pre-T10.5
+  frontmatter shape.
+
 ## Plan 23 candidate scope
 
 Filled in at T17 closure. Preserved Plan 17/earlier carry-forwards
