@@ -34,7 +34,5 @@ def test_ingest_result_defaults() -> None:
     assert r.errors == []
 
 
-def test_source_type_values() -> None:
-    assert SourceType.URL.value == "url"
-    assert SourceType.PDF.value == "pdf"
-    assert SourceType.TEXT.value == "text"
+# SourceType enum field-set + string-value pins live in test_source_type_pin.py
+# (Plan 24 T0) — keep this file focused on ExtractedSource / IngestResult shapes.

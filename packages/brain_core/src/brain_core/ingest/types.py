@@ -22,6 +22,8 @@ class SourceType(StrEnum):
     PDF = "pdf"
     EMAIL = "email"
     TRANSCRIPT = "transcript"
+    DOCX = "docx"  # Plan 24 — generic Word document (TranscriptDOCXHandler still claims transcript-stem .docx first)
+    PPTX = "pptx"  # Plan 24 — PowerPoint slide deck
     TWEET = "tweet"
 
 
