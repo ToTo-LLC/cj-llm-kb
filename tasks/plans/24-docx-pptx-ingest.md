@@ -828,6 +828,66 @@ Pinned by `test_extract_headings_to_markdown` (case 1), `test_extract_uses_filen
 
 **Commits:** plan to bundle T2 handler+dep+tests and T2 outcome receipts into one commit per cadence (`feat(plan-24): T2 — PptxHandler + python-pptx>=0.6 dep (first new pip dep since Plan 16 watchdog)`), with plan-doc receipt as a second `docs(plan-24): T2 — outcome receipts for PptxHandler` commit. Per D8: NO push.
 
+## T3 outcome
+
+**Status:** DONE. `LLMProvider.vision_extract` added to the Protocol; `AnthropicProvider` implements it using the Anthropic SDK image content-block format; `op="ocr"` rows round-trip through `costs.sqlite` cleanly (free-form `operation TEXT` column — no schema change needed); per-domain budget rail gates OCR via `PerDomainBudgetGuard.check_for(...)`. Helper `brain_core.ingest.ocr.ocr_image` lands in T3 (not deferred to T4) so T4 just calls it.
+
+**Files modified:**
+- `packages/brain_core/src/brain_core/llm/provider.py` (+19 / −0 LOC) — added `vision_extract` async method to the `LLMProvider` Protocol. Per CLAUDE.md non-negotiable #4 the abstraction lives here, NOT on `AnthropicProvider`. Module-level docstring extended to call out the Plan 24 / D4 addition + the rationale for returning `(text, input_tokens, output_tokens)` instead of recording cost inline (keeps the provider stateless re: ledger).
+- `packages/brain_core/src/brain_core/llm/providers/anthropic.py` (+74 / −1 LOC) — implemented `vision_extract` on `AnthropicProvider`. Uses `base64.standard_b64encode` + the SDK's `messages.create` with `[{"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}, {"type": "text", "text": prompt}]` content block format. Module-level constants `_DEFAULT_VISION_MODEL = "claude-sonnet-4-6"` + `_VISION_MAX_OUTPUT_TOKENS = 1024`. Per-domain rate-limit gate NOT wired into `vision_extract` (intentional — domain isn't threaded at this layer; T4's caller owns budget + domain context).
+- `packages/brain_core/src/brain_core/llm/fake.py` (+82 / −1 LOC) — extended `FakeLLMProvider` with `queue_vision(text, *, input_tokens, output_tokens)` + `queue_vision_response(FakeVisionResponse)` priming methods + `vision_extract` consumer + `vision_calls: list[FakeVisionCall]` recording for arg-capture assertions. New dataclasses `FakeVisionResponse` (queued return shape) + `FakeVisionCall` (recorded args). Empty-queue raises `RuntimeError` (mirrors Plan 02 `complete`-queue contract — programmer error must fail loudly). E2E mode intentionally NOT extended — OCR isn't in the Playwright surface yet, and a canned default would mask "did the pipeline forget to call `vision_extract`?".
+
+**Files created:**
+- `packages/brain_core/src/brain_core/ingest/ocr.py` (+158 LOC) — `ocr_image(*, image_bytes, content_type, domain, llm_provider, cost_ledger, budget_guard, config, prompt=DEFAULT_OCR_PROMPT, model=None) -> OCRResult` helper. Order of operations: (1) `budget_guard.check_for(domain, config)` — raise `BudgetCapExceeded` if exhausted; (2) `llm_provider.vision_extract(...)` — run upstream call; (3) `BudgetEnforcer.estimate_cost(...)` with graceful-degrade-to-0.0 on unknown model (mirrors `pipeline._estimate_call_cost` pattern); (4) `cost_ledger.record(CostEntry(operation="ocr", ...))`; (5) return `OCRResult(text, input_tokens, output_tokens, cost_usd, model)`. Default prompt: `"Extract any text visible in this image. Return only the text, with no commentary."`. Module-level constant `OCR_OPERATION = "ocr"` (centralizes the ledger-row tag so the pipeline + tests + future cost-rollups reference one string).
+- `packages/brain_core/tests/llm/test_vision_extract.py` (+126 LOC) — 8 tests pinning the `FakeLLMProvider.vision_extract` contract: queued-response return, arg capture (image_bytes_len + prompt + content_type + model), default content_type, explicit content_type, empty-queue raises, `FakeLLMProvider` still satisfies `LLMProvider` protocol (regression), `vision_extract` reachable via protocol type, `FakeVisionResponse` object-form queue method.
+- `packages/brain_core/tests/llm/test_anthropic_vision.py` (+177 LOC) — 8 tests pinning the `AnthropicProvider.vision_extract` wire shape: image content block format, base64 encoding, default model = Sonnet 4.6, explicit model override, return tuple plumbing, max_tokens=1024 ceiling, content_type pass-through, multi-text-block concatenation.
+- `packages/brain_core/tests/cost/test_ocr_op_ledger.py` (+218 LOC) — 9 tests pinning the `op="ocr"` ledger contract + `ocr_image` helper end-to-end: row writes + reads back, contributes to `domain_spend_within_window`, groups into `total_by_domain`, helper records full ledger row with computed cost (Sonnet 4.6 pricing: 120 input × 3/Mtok + 15 output × 15/Mtok = $0.000585 — pinned numerically), default prompt, content_type pass-through, explicit model override, unknown model → cost 0.0 graceful degrade, **budget rail raises `BudgetCapExceeded` BEFORE the LLM call** (verified by leaving the FakeLLMProvider queue empty — a wrong-direction failure would surface "queue is empty" instead of `BudgetCapExceeded`).
+
+**LLMProvider base file location (verified at exec time):** `packages/brain_core/src/brain_core/llm/provider.py` — a `Protocol` (not an ABC), so `@abstractmethod` isn't applicable. Added the method as a Protocol `...` stub (the standard PEP 544 idiom). The Protocol is `@runtime_checkable`, so `isinstance(fake, LLMProvider)` still works after the addition (pinned by `test_fake_still_satisfies_protocol`).
+
+**Cost-ledger op="ocr" approach:** **A. No-op — the ledger already accepts arbitrary operation strings.** `CostEntry.operation: str` (no enum/whitelist) and `CREATE TABLE costs (... operation TEXT NOT NULL ...)`. Verified in `cost/ledger.py:31` + `cost/ledger.py:63`. Just added the tag constant `OCR_OPERATION = "ocr"` in `ingest/ocr.py` so future cost-rollups reference one canonical string.
+
+**Default vision model chosen:** `claude-sonnet-4-6` — per CLAUDE.md ("Sonnet 4.6") and the plan-doc Recommend. Strongest vision-vs-cost option in the Claude 4.x family. Configurable per-call via `vision_extract(..., model="...")` kwarg. A future `Config.llm.vision_model` field can replace the constant without touching the provider — indirected through `_DEFAULT_VISION_MODEL` constant + `_default_vision_model()` helper.
+
+**ingest.ocr helper — landed in T3 (NOT deferred to T4):** per plan-doc Recommend ("include the helper here so T4 just calls it"). The helper wraps budget-check + LLM call + cost-record into one async function with a clean argument list. T4 will call `await ocr_image(image_bytes=img["blob"], content_type=img["content_type"], domain=..., llm_provider=ctx.llm, cost_ledger=ctx.cost_ledger, budget_guard=..., config=ctx.config)` for each entry in `extras["images"]`.
+
+**Tests passing (25/25):**
+- `test_vision_extract.py`: 8 — all PASS.
+- `test_anthropic_vision.py`: 8 — all PASS.
+- `test_ocr_op_ledger.py`: 9 — all PASS.
+
+**Test counts:**
+- Brain_core baseline pre-T3 (from T2 outcome): 1200 collected (1195 passed + 5 skipped).
+- Brain_core post-T3: **1225 collected (1220 passed + 5 skipped)**. Net +25 = exactly the 25 new tests.
+
+**Cross-package regression check (LLMProvider Protocol change is load-bearing):**
+- `brain_api` suite: 223 passed + 4 skipped — clean.
+- `brain_mcp` suite: 146 passed + 3 skipped — clean.
+- `brain_cli` suite: 129 passed — clean.
+
+**Verification commands run (recipe from plan-doc):**
+- New tests: `pytest packages/brain_core/tests/llm/test_vision_extract.py packages/brain_core/tests/llm/test_anthropic_vision.py packages/brain_core/tests/cost/test_ocr_op_ledger.py -v` → 25 passed.
+- Full brain_core suite: `pytest packages/brain_core/tests/ -q` → 1220 passed, 5 skipped.
+- `mypy packages/brain_core/src/brain_core/llm/ packages/brain_core/src/brain_core/ingest/ocr.py` → clean (strict mode).
+
+**Self-review findings:**
+- **CLAUDE.md non-negotiable #4 honored.** `vision_extract` lives on the `LLMProvider` Protocol in `provider.py`. The only module that imports the `anthropic` SDK is still `providers/anthropic.py`. All call sites (`ingest/ocr.py`, tests) depend on `LLMProvider`, not `AnthropicProvider` directly.
+- **Protocol vs ABC.** The existing `LLMProvider` is a `Protocol` (PEP 544), not an `abc.ABC`. `@abstractmethod` doesn't apply to Protocols — the standard idiom is a `...`-body method declaration. Mypy + `runtime_checkable` enforce conformance at type-check + isinstance time.
+- **Per-domain rate-limit NOT gated on `vision_extract`.** The existing leaky-bucket gate on `complete` / `stream` reads `request.domain`, but `vision_extract` doesn't take a request — the domain is the caller's concern (T4). Adding rate-limit at this layer would require threading domain through the provider method or duplicating the gate logic; deferred until a real need surfaces (e.g., OCR-specific rate limit per domain).
+- **Cost computation graceful-degrade.** `BudgetEnforcer.estimate_cost` raises `KeyError` for unknown models. `ocr_image` catches and returns 0.0 — mirrors the pattern in `pipeline._estimate_call_cost`. Test stubs use fake model strings; the pipeline shouldn't crash. Real production paths use the canonical model strings in `_PRICING`.
+- **`OCRResult` is a frozen dataclass.** Immutable + typed; matches the `ExtractedSource` / `SummarizeOutput` shape conventions used elsewhere in `ingest/`.
+- **FakeLLMProvider E2E mode NOT extended.** OCR isn't in the Playwright surface yet; adding a canned default would silently swallow "pipeline forgot to call `vision_extract`" bugs. When T4 lands and OCR is exercised in the demo, we can revisit.
+- **Budget rail pin uses negative-evidence.** The "budget exhausted" test deliberately leaves the `FakeLLMProvider` vision queue EMPTY. If the budget rail fails to fire, the test would raise "queue is empty" (RuntimeError from `FakeLLMProvider`), NOT `BudgetCapExceeded`. So the test pins **two** invariants in one: (a) `BudgetCapExceeded` raised; (b) LLM never called. Asserts `llm.vision_calls == []` at the end for the second pin.
+- **Numeric cost pin.** `test_ocr_image_records_ledger_row_via_helper` asserts `round(result.cost_usd, 6) == 0.000585` — the exact Sonnet 4.6 pricing math (120 × 3/Mtok + 15 × 15/Mtok). Pinning the literal number catches a pricing-table drift or a token-arithmetic regression at the helper boundary.
+
+**Concerns flagged:**
+- **`_default_vision_model()` constant drift.** The default model string is declared in TWO places: `llm/providers/anthropic.py:_DEFAULT_VISION_MODEL` and `ingest/ocr.py:_default_vision_model()`. They MUST agree (the ledger-row `model` value comes from the helper; the actual upstream call uses the provider's constant). Today they both return `"claude-sonnet-4-6"`. A future config-driven default (`LLMConfig.vision_model`) collapses these into one source — flagged as a known small duplication. Inline comment in `ingest/ocr.py:_default_vision_model` calls this out.
+- **Per-domain rate-limit gate on `vision_extract`.** Deferred (above). When threading lands in T4 the right shape is probably: `ocr_image(..., domain=...)` already has the domain; we can wire it to `provider.vision_extract(..., domain=domain)` and extend the gate. v1 ships without it; OCR call volume per-domain is bounded by image count per document (small).
+- **Unknown-model 0.0 cost.** If a real provider returns a real model string that's not in `_PRICING` (e.g., new Anthropic model alias), we silently record 0.0 cost. Existing `pipeline._estimate_call_cost` has the same behavior. Trade-off: don't crash the pipeline on a pricing-table miss vs over-trust on the recorded cost. Same trade-off as elsewhere; no change of behavior.
+- **No live Anthropic API test.** All `test_anthropic_vision.py` tests use a stub client (`_FakeVisionClient`). No e2e gate (`ANTHROPIC_E2E=1`) added — Plan 17 T1 has the precedent for this if we want real Anthropic round-trip coverage later. For T3 the stub-client tests are sufficient: they pin the wire shape we send to the SDK, and the SDK is the contract authority.
+
+**Commits:** plan to bundle T3 abstraction+impl+ledger+fake+helper+tests into one feat commit (`feat(plan-24): T3 — LLMProvider.vision_extract abstract + AnthropicProvider impl + op="ocr" ledger + FakeLLMProvider extension + ingest.ocr helper`), with plan-doc receipt as a second `docs(plan-24): T3 — outcome receipts for vision_extract abstraction` commit. Per D8: NO push.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
