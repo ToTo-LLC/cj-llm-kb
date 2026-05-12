@@ -782,6 +782,52 @@ Pinned by `test_extract_headings_to_markdown` (case 1), `test_extract_uses_filen
 
 **Commits:** bundled as one commit per cadence (`fix(plan-24): T1.5 — ...`). Plan-doc receipt this section.
 
+## T2 outcome
+
+**Files created:**
+- `packages/brain_core/src/brain_core/ingest/handlers/pptx.py` (220 LOC) — `PptxHandler` class + four helper functions (`_slide_title`, `_slide_bullets`, `_slide_notes`, `_shape_to_image_dict`).
+- `packages/brain_core/tests/ingest/handlers/test_pptx.py` (300 LOC) — 15 tests.
+
+**Files modified:**
+- `packages/brain_core/pyproject.toml` — added `python-pptx>=0.6` to `[project] dependencies` (after the existing `python-docx>=1.1` entry; commented as the first new pip dep since Plan 16 added watchdog, per D12). `uv sync` pulled in `python-pptx==1.0.2` plus transitive `pillow==12.2.0` + `xlsxwriter==3.2.9`.
+- `packages/brain_core/src/brain_core/ingest/dispatcher.py` — imported `PptxHandler`; registered in `_default_handlers()` between PDFHandler and EmailHandler per plan §T2; docstring extended with a paragraph documenting the insertion-point rationale.
+
+**python-pptx dep location:** `packages/brain_core/pyproject.toml` (NOT root). This mirrors the existing `python-docx` placement — both pure-Python office-doc libs live in the brain_core package's dep list, not the root workspace pyproject. The root `pyproject.toml` only declares workspace member glob + tool config; per-package deps live with the consumer.
+
+**Dispatcher insertion point:** PptxHandler is registered between PDFHandler and EmailHandler in `_default_handlers()`. Order check (pinned by `test_dispatcher_registers_pptx_between_pdf_and_email`): `... PDFHandler → PptxHandler → EmailHandler → TextHandler`. Plan §T2 specified "after PDFHandler, before EmailHandler" — landed exactly there.
+
+**Tests passing (15/15):**
+- Routing: `test_can_handle_claims_pptx_suffix` (case-insensitive .pptx claim + .docx/.pdf/.txt rejection + non-Path rejection + missing-file rejection), `test_dispatcher_registers_pptx_between_pdf_and_email` (pin on dispatcher order), `test_dispatcher_routes_pptx_to_pptx_handler` (end-to-end dispatch on a real .pptx).
+- Extraction: `test_extract_slides_to_markdown_sections` (3-slide deck → 3 `## Slide N:` headings in order), `test_extract_slide_titles` (titles appear verbatim), `test_extract_bullet_points_to_markdown` (bulleted text + title-exclusion check), `test_extract_speaker_notes` (notes block emits `**Speaker notes:**`), `test_extract_skips_empty_speaker_notes` (no-notes slide omits the heading), `test_extract_collects_slide_images` (extras["images"] shape: blob + content_type + slide_index=1 + index=0 — exact T4 consumer shape), `test_extract_handles_image_only_slide` (Blank-layout slide with picture-only: heading present, no bullets, no notes section, image collected), `test_extract_handles_missing_title` (Blank-layout slide without title placeholder degrades to `## Slide 1` with no colon, no crash), `test_extract_uses_core_properties_title` (pres.core_properties.title wins over slide title for ExtractedSource.title).
+- Error paths: `test_extract_raises_handler_error_on_corrupt_pptx` (garbage bytes → `HandlerError` not raw `zipfile.BadZipFile`), `test_extract_raises_when_file_missing`, `test_archive_path_copies_file` (byte-identical copy in archive_root).
+
+**Test counts:**
+- Brain_core baseline pre-T2: 1185 collected (1180 passed + 5 skipped).
+- Brain_core post-T2: **1200 collected (1195 passed + 5 skipped)**. Net +15 = exactly the 15 new tests.
+
+**Verification commands run (recipe from plan-doc):**
+- New tests: `pytest packages/brain_core/tests/ingest/handlers/test_pptx.py -v` → 15 passed.
+- Full suite: `pytest packages/brain_core/tests/ -q` → 1195 passed, 5 skipped.
+- `mypy packages/brain_core/src/brain_core/ingest/handlers/pptx.py packages/brain_core/src/brain_core/ingest/dispatcher.py` → clean (strict mode).
+- `ruff check` on new + modified files → clean.
+
+**Bug surfaced + fixed mid-task (in test_extract_bullet_points_to_markdown):** my first draft of `_slide_bullets` used `shape is title_shape` to skip the title placeholder. python-pptx returns a *fresh proxy object* each time `slide.shapes.title` is read (verified: `t1 is t2 == False` despite `t1 == t2 == True` and `shape_id` match), so the identity check failed and the title text leaked into the bullet list. Fix: compare by `shape_id` (stable per-shape integer assigned by PowerPoint) — `title_shape_id = title_shape.shape_id` cached once, then `shape.shape_id == title_shape_id` per-iteration. Caught by the test that asserts `"- Bullet List" not in body_text` (the slide's title `"Bullet List"` would otherwise also be the first bullet). Documented inline in `_slide_bullets` docstring.
+
+**Self-review findings:**
+- **Image collection from group shapes:** `_shape_to_image_dict` filters on `shape.shape_type == MSO_SHAPE_TYPE.PICTURE`. Group shapes (`MSO_SHAPE_TYPE.GROUP`) that *contain* pictures are NOT recursively unwrapped — flagged as a known limitation. Real-world impact: low (PowerPoint authors rarely nest images inside groups intentionally), and T4's OCR pass still hits standalone PICTURE shapes, which is the dominant case. If T4 surfaces image-OCR misses on real decks, recurse via `shape.shape_type == GROUP → for sub in shape.shapes: ...` then.
+- **`shape.image` for non-PICTURE PICTURE shapes:** the `try/except (AttributeError, KeyError, ValueError)` guard defends against linked-picture shapes that report shape_type=PICTURE but don't expose `.image`. Silent skip is safe — alternative (raise) would kill the whole extract for one bad shape.
+- **Notes slide materialization:** `_slide_notes` checks `slide.has_notes_slide` BEFORE reading `slide.notes_slide`. Reading `.notes_slide` directly materializes the notes part on disk in some versions of python-pptx; this guard avoids the side effect.
+- **Title-shape `shape_id`:** Python-pptx assigns stable shape IDs at slide-creation time; `shape_id` survives proxy round-tripping. Verified by direct probe before patching `_slide_bullets`.
+- **`core_properties.author` coerced to None when empty:** matches DocxHandler behavior (`"" → None`). python-pptx defaults `author` to the empty string on a fresh `Presentation()`, so the strip+coerce pattern keeps `ExtractedSource.author` semantically meaningful.
+- **`pres.core_properties.created` may be None or a datetime:** python-pptx defaults to a real datetime even on fresh presentations (`datetime(2013, 1, 27, ...)` — author's hardcoded `app.xml` default), so `.date()` is safe under the None-check guard.
+
+**Concerns flagged:**
+- **D11 budget (one new dep this plan):** added `python-pptx>=0.6` as the SINGLE new pip dep per D11+D12. `uv sync` resolved 3 packages: `python-pptx==1.0.2` (target), `pillow==12.2.0` (python-pptx transitive — required for image inspection), `xlsxwriter==3.2.9` (python-pptx transitive — used internally for chart parts). Pillow is widely-used + well-maintained; xlsxwriter is the same author as python-pptx. Both transitive — not declared in our pyproject, which keeps the D11 surface at exactly +1 explicit dep.
+- **Cross-platform check:** python-pptx is pure-Python (verified). Pillow is wheels-on-all-platforms. The handler uses `pathlib.Path` and `shutil.copy2` throughout — no `shell=True`, no POSIX-only APIs. Should work on Mac + Windows CI without changes; full matrix run will confirm.
+- **mypy `from pptx import Presentation` resolves cleanly:** no `ignore_missing_imports` override needed (python-pptx ships type stubs in recent versions). Verified by `mypy --strict` on `pptx.py`.
+
+**Commits:** plan to bundle T2 handler+dep+tests and T2 outcome receipts into one commit per cadence (`feat(plan-24): T2 — PptxHandler + python-pptx>=0.6 dep (first new pip dep since Plan 16 watchdog)`), with plan-doc receipt as a second `docs(plan-24): T2 — outcome receipts for PptxHandler` commit. Per D8: NO push.
+
 ## Plan 25 candidate scope
 
 Filled in at T6 closure. Plan 22's 16 unaddressed carry-forwards
