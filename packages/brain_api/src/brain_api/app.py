@@ -17,7 +17,9 @@ from typing import Any
 import structlog
 from brain_core.config.hot_reload import ConfigWatcher
 from brain_core.config.loader import invalidate_cache_for, resolve_config
+from brain_core.config.schema import Config, WatchedFolder
 from brain_core.llm.provider import LLMProvider
+from brain_core.watch import WatchedFolderWatcher
 from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
@@ -55,6 +57,12 @@ def _on_config_change(config_path: Path, app_state: Any, vault_root: Path) -> No
        setattr bypass is the canonical pattern for in-place mutation without
        replacing the container object (preserving identity guarantees for callers
        that hold a reference to ``ctx`` or ``ctx.tool_ctx``).
+    3. Plan 22 T7 bridge: if ``Config.watched_folders`` differs from the
+       previously-applied set, restart :attr:`app_state.folder_watcher` so
+       the new folder list (added / removed / disabled entries) takes
+       effect mid-run. ``_restart_watched_folder_watcher`` is no-op when
+       the list is unchanged so a config touch that does NOT mutate
+       ``watched_folders`` doesn't churn the observer thread.
 
     Failures in resolve/update are swallowed with a ``structlog.warning`` — a
     transient bad write to ``config.json`` must NOT crash the running server.
@@ -77,14 +85,133 @@ def _on_config_change(config_path: Path, app_state: Any, vault_root: Path) -> No
             cli_overrides={"vault_path": vault_root},
         )
         tool_ctx = app_state.ctx.tool_ctx
+        old_folders: list[WatchedFolder] = list(
+            getattr(tool_ctx.config, "watched_folders", []) or []
+        )
         object.__setattr__(tool_ctx, "config", new_config)
         _lifespan_logger.info("config_hot_reloaded", config_path=str(config_path))
+        # Plan 22 T7: bridge watched_folders changes into a watcher
+        # restart. Run AFTER the config swap so a fresh watcher reads
+        # the post-update folder list when it rebuilds its pipeline.
+        new_folders: list[WatchedFolder] = list(
+            getattr(new_config, "watched_folders", []) or []
+        )
+        if _watched_folders_changed(old_folders, new_folders):
+            _restart_watched_folder_watcher(app_state, new_config)
     except Exception as exc:
         _lifespan_logger.warning(
             "config_hot_reload_failed",
             error=str(exc),
             config_path=str(config_path),
         )
+
+
+def _watched_folders_changed(
+    old: list[WatchedFolder], new: list[WatchedFolder]
+) -> bool:
+    """Return True when the watched_folders sets differ on any user-visible field.
+
+    Plan 22 T7 v1 policy: any change to the watched-folder list (add,
+    remove, enable/disable, path edit, domain edit, recursion toggle)
+    triggers a full watcher restart. Comparing pydantic models by
+    ``model_dump`` keeps the diff simple and pin-friendly without
+    requiring callers to thread an "equality" overload through. The
+    ``last_sync`` field is included in the dump but is updated only by
+    the resync tool (T5); a resync that bumps ``last_sync`` therefore
+    DOES trigger a restart — coarse but safe, and not on the hot path
+    of typical user activity.
+    """
+    if len(old) != len(new):
+        return True
+    return [wf.model_dump() for wf in old] != [wf.model_dump() for wf in new]
+
+
+def _build_watched_folder_watcher(
+    config: Config, app_state: Any
+) -> WatchedFolderWatcher:
+    """Construct a :class:`WatchedFolderWatcher` from the live config.
+
+    Plan 22 T7 — symmetric watcher per D7. Builds the
+    :class:`~brain_core.ingest.pipeline.IngestPipeline` via the
+    canonical recipe already used by the three watched-folder tools
+    (:func:`brain_core.tools.watch_folder._build_pipeline` is the
+    source of truth; reused here rather than re-derived so a future
+    pipeline-recipe change is a one-edit refactor).
+
+    The ``allowed_domains`` tuple is forwarded from
+    ``app_state.allowed_domains`` so the watcher cannot ingest into a
+    domain the app instance isn't scoped to — even if a stale
+    ``WatchedFolder`` row points outside the scope.
+
+    Args:
+        config: Live :class:`Config` (post hot-reload if applicable).
+            ``config.watched_folders`` drives the schedule set; the
+            full ``Config`` is also threaded into the pipeline so
+            per-domain budget gates fire end-to-end.
+        app_state: ``app.state`` — used for ``ctx`` (pipeline
+            primitives) and ``allowed_domains`` (scope tuple).
+    """
+    # Late import: ``brain_core.tools.watch_folder`` pulls a chunky
+    # dependency graph (dispatcher, handlers, budget guard). We don't
+    # want to pay that import cost on every brain_api boot if the user
+    # has no watched folders — but Python only loads modules once per
+    # process, so amortized cost is zero. Keeping the import top-level
+    # is fine; the late form keeps the seam visible.
+    from brain_core.tools.watch_folder import _build_pipeline
+
+    pipeline = _build_pipeline(app_state.ctx.tool_ctx)
+    folders: list[WatchedFolder] = list(
+        getattr(config, "watched_folders", []) or []
+    )
+    return WatchedFolderWatcher(
+        observers=folders,
+        pipeline=pipeline,
+        allowed_domains=tuple(app_state.allowed_domains),
+    )
+
+
+def _restart_watched_folder_watcher(app_state: Any, new_config: Config) -> None:
+    """Stop the existing watcher and start a fresh one with ``new_config``.
+
+    Plan 22 T7 hot-reload bridge. Coarse v1 policy: every
+    ``watched_folders`` change does a full stop + start (rather than
+    diffing into per-path ``schedule`` / ``unschedule`` calls). The
+    coarse path is correct in all cases and avoids a class of "ghost
+    schedule" bugs where an incremental update leaves a stale handler
+    bound to a removed folder. Optimization is a v2 candidate per
+    Plan 22 §T7 forward notes.
+
+    Errors during stop OR start are logged + swallowed: the brain_api
+    process MUST keep serving HTTP even if the watcher cannot rebuild
+    (e.g. one of the watched folders was unmounted between events).
+    The user-visible degradation is "watched-folder sync stops working
+    until next config save / restart" — acceptable for a v1 watcher.
+    """
+    existing: WatchedFolderWatcher | None = getattr(
+        app_state, "folder_watcher", None
+    )
+    if existing is not None:
+        try:
+            existing.stop()
+        except Exception as exc:  # pragma: no cover — defensive
+            _lifespan_logger.warning(
+                "watched_folder_watcher_stop_failed",
+                error=str(exc),
+            )
+    try:
+        new_watcher = _build_watched_folder_watcher(new_config, app_state)
+        new_watcher.start()
+        app_state.folder_watcher = new_watcher
+        _lifespan_logger.info(
+            "watched_folder_watcher_restarted",
+            folder_count=len(new_config.watched_folders),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        _lifespan_logger.warning(
+            "watched_folder_watcher_restart_failed",
+            error=str(exc),
+        )
+        app_state.folder_watcher = None
 
 
 @asynccontextmanager
@@ -109,10 +236,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
            raise at boot, not on first request.
         6. Start a :class:`ConfigWatcher` on the config file so disk edits
            propagate to in-process holders of ``ctx.config``.
+        7. Plan 22 T7 — start a :class:`WatchedFolderWatcher` for every
+           :class:`WatchedFolder` in ``config.watched_folders``. The
+           hot-reload bridge in :func:`_on_config_change` restarts the
+           watcher when the folder list mutates mid-run. Stored on
+           ``app.state.folder_watcher`` for shutdown access (and for
+           tests to assert against).
 
     Shutdown sequence:
-        - Stop the ``ConfigWatcher`` first so its observer thread joins
-          cleanly (``stop()`` is idempotent and swallows its own errors).
+        - Stop the :class:`WatchedFolderWatcher` first (T7) so a
+          trailing config-change callback can't try to restart a
+          watcher in the middle of teardown.
+        - Stop the :class:`ConfigWatcher` next so its observer thread
+          joins cleanly (``stop()`` is idempotent and swallows its
+          own errors).
 
     Hot-reload contract:
         See :func:`_on_config_change` for the in-place mutation pattern
@@ -185,10 +322,40 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         config_watcher = None
 
+    # Plan 22 T7: Watched-folder filesystem watcher. Built AFTER the
+    # AppContext (the pipeline reads ctx primitives) and AFTER the
+    # ConfigWatcher (so the hot-reload bridge in ``_on_config_change``
+    # has a watcher to restart). Failure to start is logged + swallowed
+    # — the HTTP surface must boot even if the watcher cannot.
+    app.state.folder_watcher = None
+    try:
+        folder_watcher = _build_watched_folder_watcher(config, app.state)
+        folder_watcher.start()
+        app.state.folder_watcher = folder_watcher
+        _lifespan_logger.info(
+            "watched_folder_watcher_started",
+            folder_count=len(config.watched_folders),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        _lifespan_logger.warning(
+            "watched_folder_watcher_unavailable",
+            error=str(exc),
+        )
+
     try:
         yield
     finally:
-        # Stop watcher BEFORE other teardown so its observer thread joins cleanly.
+        # Stop the folder watcher BEFORE the ConfigWatcher so a final
+        # config-change callback can't try to restart a watcher we're
+        # in the middle of tearing down. Both ``stop()`` calls are
+        # idempotent and swallow their own errors.
+        folder_watcher_final: WatchedFolderWatcher | None = getattr(
+            app.state, "folder_watcher", None
+        )
+        if folder_watcher_final is not None:
+            folder_watcher_final.stop()
+            app.state.folder_watcher = None
+        # Stop config watcher so its observer thread joins cleanly.
         if config_watcher is not None:
             config_watcher.stop()
 
