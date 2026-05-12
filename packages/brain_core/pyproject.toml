@@ -15,6 +15,10 @@ dependencies = [
     "pymupdf>=1.24",
     "webvtt-py>=0.5",
     "python-docx>=1.1",
+    # Plan 24 T2 (D12) — PowerPoint (.pptx) ingest via PptxHandler.
+    # First new pip dep since Plan 16 added watchdog. Pure-Python,
+    # MIT-licensed; same maintainer (scanny) as python-docx.
+    "python-pptx>=0.6",
     "rank-bm25>=0.2.2",
     # Plan 16 Task 35 — cross-process config hot-reload via filesystem watcher.
     # Used by ``brain_core.config.hot_reload.ConfigWatcher``; both brain_api

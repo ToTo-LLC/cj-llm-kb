@@ -14,6 +14,7 @@ from brain_core.ingest.handlers.base import SourceHandler
 from brain_core.ingest.handlers.docx import DocxHandler
 from brain_core.ingest.handlers.email import EmailHandler
 from brain_core.ingest.handlers.pdf import PDFHandler
+from brain_core.ingest.handlers.pptx import PptxHandler
 from brain_core.ingest.handlers.text import TextHandler
 from brain_core.ingest.handlers.transcript_docx import TranscriptDOCXHandler
 from brain_core.ingest.handlers.transcript_text import TranscriptTextHandler
@@ -40,6 +41,10 @@ def _default_handlers(cfg: HandlersConfig | None = None) -> list[SourceHandler]:
       TranscriptDOCXHandler so transcript-flavored .docx still routes to the
       transcript handler. Placed before TranscriptTextHandler/PDFHandler to
       keep the .docx claim contiguous with TranscriptDOCXHandler.
+    - PptxHandler (Plan 24 T2): format-specific .pptx claim. Placed AFTER
+      PDFHandler (per plan §T2 insertion-point) and BEFORE EmailHandler so
+      it wins over the email/text catch-alls. No transcript-pptx convention
+      exists; all .pptx route here.
     - TextHandler is last: it's the broadest file-level catch.
 
     ``cfg`` (issue #23) feeds per-handler tunables (URL/Tweet timeouts, PDF
@@ -55,6 +60,7 @@ def _default_handlers(cfg: HandlersConfig | None = None) -> list[SourceHandler]:
         DocxHandler(),
         TranscriptTextHandler(),
         PDFHandler(min_chars=cfg.pdf.min_chars) if cfg else PDFHandler(),
+        PptxHandler(),
         EmailHandler(),
         TextHandler(),
     ]
