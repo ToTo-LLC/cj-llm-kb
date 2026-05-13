@@ -271,8 +271,12 @@ def test_brain_ingest(api: ApiClient, app: FastAPI, seeded_vault: Path, tmp_path
     """
     _augment_vault_for_ingest(seeded_vault)
     src = tmp_path / "demo.txt"
+    # Plan 25 T2: Stage 3.5 content sniff requires >=200 chars of meaningful
+    # body text. Filler prose appended so the body comfortably clears the
+    # floor without burning extra LLM responses (queue is still 3 calls).
     src.write_text(
-        "Karpathy wrote about LLM wikis.\n",
+        "Karpathy wrote about LLM wikis. "
+        + "The quick brown fox jumps over the lazy dog. " * 6,
         encoding="utf-8",
         newline="\n",
     )

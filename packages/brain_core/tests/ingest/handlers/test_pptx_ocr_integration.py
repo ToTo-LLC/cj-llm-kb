@@ -63,6 +63,18 @@ def _make_tiny_png() -> bytes:
     return sig + ihdr + idat + iend
 
 
+# Plan 25 T2: pipeline Stage 3.5 requires >=200 chars of meaningful body
+# text. The pre-T2 placeholders ("body", "intro bullet", etc.) totalled
+# <200 chars across all slides and quarantine on the sniff floor before
+# stages 4-9 reach the post-classify OCR pass under test. Bumped each
+# slide's placeholder text with this filler prose so the pipeline still
+# reaches OCR.
+_PPTX_FILLER = (
+    "The quick brown fox jumps over the lazy dog with style and grace. "
+    "Real prose filler so the slide body clears the content-sniff floor."
+)
+
+
 def _build_three_slide_pptx_with_image_on_slide_2(tmp_path: Path) -> Path:
     """3 slides; image on slide 2 only."""
     pres = Presentation()
@@ -70,16 +82,16 @@ def _build_three_slide_pptx_with_image_on_slide_2(tmp_path: Path) -> Path:
 
     s1 = pres.slides.add_slide(layout)
     s1.shapes.title.text = "Cover"
-    s1.placeholders[1].text = "intro bullet"
+    s1.placeholders[1].text = "intro bullet. " + _PPTX_FILLER
 
     s2 = pres.slides.add_slide(layout)
     s2.shapes.title.text = "Chart slide"
-    s2.placeholders[1].text = "context"
+    s2.placeholders[1].text = "context. " + _PPTX_FILLER
     s2.shapes.add_picture(io.BytesIO(_make_tiny_png()), Inches(2), Inches(2))
 
     s3 = pres.slides.add_slide(layout)
     s3.shapes.title.text = "Roadmap"
-    s3.placeholders[1].text = "milestones"
+    s3.placeholders[1].text = "milestones. " + _PPTX_FILLER
 
     path = tmp_path / "deck.pptx"
     pres.save(str(path))
@@ -95,7 +107,7 @@ def _build_five_slide_pptx_with_images_on_2_and_5(tmp_path: Path) -> Path:
     for idx, title in enumerate(titles, start=1):
         s = pres.slides.add_slide(layout)
         s.shapes.title.text = title
-        s.placeholders[1].text = f"content for slide {idx}"
+        s.placeholders[1].text = f"content for slide {idx}. " + _PPTX_FILLER
         if idx in (2, 5):
             s.shapes.add_picture(io.BytesIO(_make_tiny_png()), Inches(2), Inches(2))
 
@@ -111,7 +123,7 @@ def _build_plain_pptx(tmp_path: Path) -> Path:
     for title in ("Cover", "Middle", "End"):
         s = pres.slides.add_slide(layout)
         s.shapes.title.text = title
-        s.placeholders[1].text = "body"
+        s.placeholders[1].text = "body. " + _PPTX_FILLER
     path = tmp_path / "plain.pptx"
     pres.save(str(path))
     return path
@@ -124,7 +136,7 @@ def _build_two_image_pptx(tmp_path: Path) -> Path:
     for idx, title in enumerate(("First image slide", "Second image slide"), start=1):
         s = pres.slides.add_slide(layout)
         s.shapes.title.text = title
-        s.placeholders[1].text = f"slide {idx} body"
+        s.placeholders[1].text = f"slide {idx} body. " + _PPTX_FILLER
         s.shapes.add_picture(io.BytesIO(_make_tiny_png()), Inches(2), Inches(2))
     path = tmp_path / "two-image-deck.pptx"
     pres.save(str(path))

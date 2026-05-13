@@ -295,13 +295,15 @@ def test_api_watch_folder_initial_sync_imports_files(
     """
     folder = tmp_path / "sync_me"
     folder.mkdir()
+    # Plan 25 T2: Stage 3.5 content sniff requires >=200 chars per file.
+    _SNIFF_FILLER = "The quick brown fox jumps over the lazy dog. " * 6
     (folder / "alpha.txt").write_text(
-        "Alpha content for the initial sync.\n",
+        "Alpha content for the initial sync. " + _SNIFF_FILLER,
         encoding="utf-8",
         newline="\n",
     )
     (folder / "beta.txt").write_text(
-        "Beta content for the initial sync.\n",
+        "Beta content for the initial sync. " + _SNIFF_FILLER,
         encoding="utf-8",
         newline="\n",
     )

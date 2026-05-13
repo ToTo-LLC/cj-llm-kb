@@ -28,6 +28,14 @@ from brain_core.vault.writer import VaultWriter
 
 CLASSIFY_RESEARCH = '{"source_type":"text","domain":"research","confidence":0.9}'
 
+# Plan 25 T2: Stage 3.5 content sniff requires >=200 chars + 80% printable +
+# 40% letter ratio. The pre-T2 inline ``"good content"`` / ``"bad content"``
+# strings were ~12 chars and now quarantine before reaching apply(). Tests
+# that exercise the apply phase use this body to clear the sniff floor.
+_MEANINGFUL_BODY = (
+    "The quick brown fox jumps over the lazy dog. " * 6
+)  # 270 chars of all-letters-and-spaces prose.
+
 
 def _make_pipeline(vault_root: Path, fake: FakeLLMProvider) -> IngestPipeline:
     return IngestPipeline(
@@ -211,8 +219,8 @@ async def test_plan_does_not_write_to_vault(ephemeral_vault: Path, tmp_path: Pat
 async def test_apply_runs_pipeline_per_item_in_order(ephemeral_vault: Path, tmp_path: Path) -> None:
     folder = tmp_path / "two_files"
     folder.mkdir()
-    (folder / "first.txt").write_text("first content", encoding="utf-8")
-    (folder / "second.txt").write_text("second content", encoding="utf-8")
+    (folder / "first.txt").write_text("First. " + _MEANINGFUL_BODY, encoding="utf-8")
+    (folder / "second.txt").write_text("Second. " + _MEANINGFUL_BODY, encoding="utf-8")
 
     fake = FakeLLMProvider()
     # Plan phase: 2 classify calls
@@ -254,8 +262,8 @@ async def test_apply_runs_pipeline_per_item_in_order(ephemeral_vault: Path, tmp_
 async def test_apply_does_not_stop_on_failure(ephemeral_vault: Path, tmp_path: Path) -> None:
     folder = tmp_path / "fail_folder"
     folder.mkdir()
-    (folder / "good.txt").write_text("good content", encoding="utf-8")
-    (folder / "bad.txt").write_text("bad content", encoding="utf-8")
+    (folder / "good.txt").write_text("Good. " + _MEANINGFUL_BODY, encoding="utf-8")
+    (folder / "bad.txt").write_text("Bad. " + _MEANINGFUL_BODY, encoding="utf-8")
 
     fake = FakeLLMProvider()
     # Plan phase: 2 classify calls
@@ -387,8 +395,8 @@ async def test_apply_honors_per_item_classified_domain(
     """
     folder = tmp_path / "inbox"
     folder.mkdir()
-    (folder / "a.txt").write_text("alpha content", encoding="utf-8")
-    (folder / "b.txt").write_text("beta content", encoding="utf-8")
+    (folder / "a.txt").write_text("Alpha. " + _MEANINGFUL_BODY, encoding="utf-8")
+    (folder / "b.txt").write_text("Beta. " + _MEANINGFUL_BODY, encoding="utf-8")
 
     fake = FakeLLMProvider()
     # Plan phase: 2 classify calls (one per file), each to a DIFFERENT domain.

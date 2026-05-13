@@ -283,8 +283,10 @@ async def test_bulk_importer_apply_threads_watched_folder_id(
     """
     folder = tmp_path / "bulk_watch"
     folder.mkdir()
-    (folder / "alpha.txt").write_text("Alpha body.\n", encoding="utf-8")
-    (folder / "beta.txt").write_text("Beta body.\n", encoding="utf-8")
+    # Plan 25 T2: Stage 3.5 content sniff needs >=200 chars per file.
+    filler = "The quick brown fox jumps over the lazy dog. " * 6
+    (folder / "alpha.txt").write_text("Alpha. " + filler, encoding="utf-8")
+    (folder / "beta.txt").write_text("Beta. " + filler, encoding="utf-8")
     watched_folder_path = str(folder)
 
     fake = FakeLLMProvider()
@@ -351,7 +353,9 @@ async def test_bulk_importer_apply_without_watched_kwarg_is_backwards_compat(
     """
     folder = tmp_path / "bulk_plain"
     folder.mkdir()
-    (folder / "alpha.txt").write_text("Alpha body.\n", encoding="utf-8")
+    # Plan 25 T2: Stage 3.5 content sniff needs >=200 chars.
+    filler = "The quick brown fox jumps over the lazy dog. " * 6
+    (folder / "alpha.txt").write_text("Alpha. " + filler, encoding="utf-8")
 
     fake = FakeLLMProvider()
     _queue_override_summarize_integrate(fake, title="alpha")

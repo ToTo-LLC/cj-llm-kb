@@ -90,10 +90,14 @@ def test_upload_markdown_happy_path_returns_patch_id(upload_app: FastAPI) -> Non
                 "Origin": _LOOPBACK_ORIGIN,
                 "X-Brain-Token": token,
             },
+            # Plan 25 T2: Stage 3.5 content sniff requires >=200 chars.
             files={
                 "file": (
                     "note.md",
-                    b"# hello\n\nsome body content",
+                    (
+                        b"# hello\n\nsome body content. "
+                        + b"The quick brown fox jumps over the lazy dog. " * 6
+                    ),
                     "text/markdown",
                 ),
             },

@@ -68,11 +68,22 @@ def _make_tiny_png() -> bytes:
     return sig + ihdr + idat + iend
 
 
+# Plan 25 T2: pipeline Stage 3.5 requires >=200 chars of meaningful body
+# text. Bumped these paragraphs so the OCR-integration tests still reach the
+# post-classify OCR pass (Stage 5.5) — without the bump, every docx here
+# quarantines on the sniff floor before stages 4-9 run.
+_DOCX_FILLER_PROSE = (
+    "The quick brown fox jumps over the lazy dog repeatedly while the "
+    "lazy dog watches with mild interest from the corner of the room. "
+    "This is filler prose long enough to clear the content-sniff floor."
+)
+
+
 def _build_image_docx(tmp_path: Path, name: str = "with-image.docx") -> Path:
     """One paragraph + one inline image. Image bytes don't matter for OCR — only
     the dict shape feeding ``ocr_image``."""
     doc = Document()
-    doc.add_paragraph("Some text above the image.")
+    doc.add_paragraph("Some text above the image. " + _DOCX_FILLER_PROSE)
     img_path = tmp_path / "_pix.png"
     img_path.write_bytes(_make_tiny_png())
     doc.add_picture(str(img_path))
@@ -84,8 +95,8 @@ def _build_image_docx(tmp_path: Path, name: str = "with-image.docx") -> Path:
 def _build_plain_docx(tmp_path: Path, name: str = "plain.docx") -> Path:
     """Plain prose — zero images. Used to pin the no-OCR-call path."""
     doc = Document()
-    doc.add_paragraph("First paragraph here.")
-    doc.add_paragraph("Second paragraph.")
+    doc.add_paragraph("First paragraph here. " + _DOCX_FILLER_PROSE)
+    doc.add_paragraph("Second paragraph. " + _DOCX_FILLER_PROSE)
     doc.add_paragraph("Third and final paragraph.")
     path = tmp_path / name
     doc.save(str(path))

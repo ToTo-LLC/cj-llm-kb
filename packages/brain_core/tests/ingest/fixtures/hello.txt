@@ -1,2 +1,2 @@
 Hello, brain.
-This is a plain-text fixture for the text handler.
+This is a plain-text fixture for the text handler. It carries enough English prose to clear the Plan 25 T2 Stage 3.5 content-sniff floor: well over two hundred printable characters with a high letter ratio so the heuristics treat it as meaningful.

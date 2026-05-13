@@ -78,10 +78,16 @@ def _research_vault(tmp_path: Path) -> Path:
 
 
 def _write_source_file(tmp_path: Path, *, stem: str = "sample-source") -> Path:
-    """Write a small UTF-8 .txt source file TextHandler will claim."""
+    """Write a small UTF-8 .txt source file TextHandler will claim.
+
+    Plan 25 T2: body padded with filler prose so it clears the Stage 3.5
+    content-sniff floor (>=200 chars + 80% printable + 40% letter ratio).
+    """
     src = tmp_path / f"{stem}.txt"
     src.write_text(
-        "Karpathy wrote about LLM wikis.\n\nThe pattern turns source material into a wiki.\n",
+        "Karpathy wrote about LLM wikis.\n\nThe pattern turns source material "
+        "into a wiki. "
+        + "The quick brown fox jumps over the lazy dog. " * 6,
         encoding="utf-8",
     )
     return src

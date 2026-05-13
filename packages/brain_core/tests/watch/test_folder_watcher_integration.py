@@ -332,7 +332,11 @@ async def test_e2e_create_writes_source_note_with_watch_frontmatter(
     watcher.start()
     try:
         src = folder / "my-source.txt"
-        src.write_text("Hello from the watched folder.\n", encoding="utf-8")
+        # Plan 25 T2: Stage 3.5 content sniff needs >=200 chars.
+        src.write_text(
+            "Hello from the watched folder. " + "The quick brown fox jumps over the lazy dog. " * 6,
+            encoding="utf-8",
+        )
 
         # Wait for the watcher to dispatch + the pipeline to write the
         # note. We poll for the note's existence rather than the
@@ -623,7 +627,11 @@ async def test_e2e_create_then_modify_routes_via_update_source(
     try:
         # Step 1: create
         src = folder / "lifecycle.txt"
-        src.write_text("Version one.\n", encoding="utf-8")
+        # Plan 25 T2: Stage 3.5 content sniff needs >=200 chars.
+        src.write_text(
+            "Version one. " + "The quick brown fox jumps over the lazy dog. " * 6,
+            encoding="utf-8",
+        )
         sources_dir = vault / "research" / "sources"
 
         def _initial_note_landed() -> bool:
@@ -647,7 +655,10 @@ async def test_e2e_create_then_modify_routes_via_update_source(
         # handler must find the existing note via
         # :meth:`_find_note_by_source_path` and route to
         # :meth:`update_source` — NOT a duplicate ingest.
-        new_body = "Version two — completely different content for hashing.\n"
+        new_body = (
+            "Version two — completely different content for hashing. "
+            + "The quick brown fox jumps over the lazy dog. " * 6
+        )
         src.write_text(new_body, encoding="utf-8")
 
         new_hash = content_hash(new_body)
@@ -728,10 +739,15 @@ async def test_e2e_concurrent_files_each_produce_a_note(tmp_path: Path) -> None:
     watcher.start()
     try:
         # Drop 5 files inside ~50ms — well under the polling-observer
-        # tick (100ms), so all 5 surface in the same poll batch.
+        # tick (100ms), so all 5 surface in the same poll batch. Each
+        # body is >=200 chars + DISTINCT so Stage 3.5 passes (Plan 25
+        # T2) and Stage 4 idempotency does NOT skip later files as
+        # duplicates.
+        burst_filler = "The quick brown fox jumps over the lazy dog. " * 6
         for i in range(5):
             (folder / f"burst-{i}.txt").write_text(
-                f"burst body {i}\n", encoding="utf-8"
+                f"Burst body {i} — uniquely distinct. " + burst_filler,
+                encoding="utf-8",
             )
 
         # Wait until all 5 notes land. We're checking the sources

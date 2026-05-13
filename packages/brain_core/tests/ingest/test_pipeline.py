@@ -223,9 +223,17 @@ async def test_ingest_records_failure_on_exception(ephemeral_vault: Path, tmp_pa
         classify_model="c",
     )
     # Use a dummy text file in tmp_path so the failure is triggered by the empty queue,
-    # not a missing file.
+    # not a missing file. Body must clear Plan 25 T2 Stage 3.5 content sniff
+    # (>=200 chars, high letter ratio) so the failure is the queue-empty
+    # RuntimeError at summarize stage, not a content-sniff quarantine.
     src = tmp_path / "hello.txt"
-    src.write_text("hello body", encoding="utf-8")
+    src.write_text(
+        "Hello body — long enough to clear the Plan 25 Stage 3.5 content "
+        "sniff floor. The quick brown fox jumps over the lazy dog several "
+        "times so the body comfortably exceeds two hundred characters with "
+        "a high letter ratio.",
+        encoding="utf-8",
+    )
     res = await p.ingest(src, allowed_domains=("research",))
     assert res.status is IngestStatus.FAILED
     assert res.errors
