@@ -1,0 +1,1007 @@
+# Plan 25 — Bulk import quality (filtering + content sniff + interstitial animations)
+
+**Authored:** 2026-05-13 (post Plan 24 close on 2026-05-12, tag
+`plan-24-docx-pptx-ingest` at `a2cab32`).
+**Scope:** Five bulk-import quality fixes surfaced by user during
+hands-on use of Plan 22's bulk-import feature: (1) cross-platform
+system file denylist (`.DS_Store`, `Thumbs.db`, `__MACOSX/`, etc.);
+(2) pre-filter at walk stage so only handler-claimable file types
+enter the plan (no more `.mov`/`.zip` cluttering the list); (3)
+per-phase interstitial animations in the bulk-import wizard so users
+see progress during long-running walks/classify/apply phases; (4)
+pre-classify content sniff so binary-nonsense `.txt` files (random
+bytes, encrypted blobs, base64 dumps) skip the LLM calls and quarantine
+to `raw/inbox/failed/` instead of burning tokens; (5) PDF + PPTX
+image-mode handling so primarily-image files actually consume properly
+via Claude Vision OCR (PDFs currently flag `needs_ocr` and skip
+entirely; image-heavy PPTX could be quarantined by content sniff
+before OCR runs). Per user scope locks: **A = all items as one
+focused plan**; **2.A = backend pre-filter at walk stage** (unsupported
+files never enter the plan); **4.A = standard sniff thresholds** (200
+char min, 80% printable ASCII, 40% letter ratio); **PDF trigger =
+heuristic-based** (render+OCR pages when text extraction <200 chars);
+**sniff OCR-aware = skip min_chars check when body has OCR markers**
+(keep printable + letter ratios).
+**Shape:** 5 substantive tasks + 1 closure = 6 total. Per D8 T1
+bundles the system-file denylist + unsupported-type pre-filter into
+one task. Per D14 T3 NEW handles PDF image-mode (extends Plan 24
+vision_extract to PDF pages).
+
+## At a glance
+
+- **Theme A — Foundation** (T0): spec update §5 (Stages list gains
+  3.5 content sniff; Bulk import subsection gains filtering note).
+- **Theme B — Walk-stage filtering** (T1): cross-platform `_SYSTEM_FILES`
+  denylist (Mac + Windows + Linux + dev junk) + `_VALID_EXTENSIONS`
+  whitelist (only handler-claimable suffixes enter the plan). Both
+  applied at `BulkImporter.plan()` walk stage so the user sees only
+  actionable files. Existing `_is_hidden` check stays (handles
+  dotfile-based system files like `.git/`); the new denylist
+  ADDITIVELY catches non-dot system files like `Thumbs.db`,
+  `Desktop.ini`, `__MACOSX/`.
+- **Theme C — Content sniff with OCR-awareness** (T2): new pipeline
+  stage 3.5 between Extract and Archive — for text-shaped sources,
+  check char count + printable ratio + letter ratio. Per D15 the
+  min_chars (200) check is SKIPPED when body contains OCR block
+  markers (`[Image:`, `[Image (slide`, `[Page N:`) since OCR-heavy
+  sources are NOT near-empty; printable + letter ratios still apply.
+  Below threshold → quarantine to `raw/inbox/failed/<slug>.needs_review.json`
+  with reason `non_meaningful_text` + skip classify/summarize/integrate.
+  Zero LLM tokens spent on quarantine path.
+- **Theme C2 — PDF image-mode** (T3 NEW): extends PDFHandler with a
+  page-render + vision_extract path for image-only / scanned PDFs.
+  Per D14 the trigger is heuristic: if text extraction returns
+  <200 chars, render each page via `pymupdf.page.get_pixmap()` →
+  PNG → `LLMProvider.vision_extract` (Plan 24 T3 helper) → inline
+  as `[Page N: <ocr-text>]` blocks. Replaces current `needs_ocr`
+  skip-and-flag behavior. Cost: ~$0.003/page (Sonnet vision); a
+  50-page scanned PDF ≈ ~$0.15. Bounded by existing per-domain
+  budget rail.
+- **Theme D — Frontend interstitial animations** (T4): per-phase
+  progress UI in the bulk-import wizard (Walk / Classify / Apply).
+  File-count + percentage indicator + skeleton/spinner. No mockup
+  gate per D10 (polish on existing wizard surface).
+- **Closure** (T5): demo + lessons + todo + tag
+  `plan-25-bulk-import-quality`.
+
+## Why this plan exists (1 paragraph)
+
+Bulk import via the web wizard is the primary path for users to
+seed their vault with existing research / work / personal files.
+Plan 22 made it a first-class wizard; Plan 24 extended it to handle
+`.docx` / `.pptx` files. But hands-on use surfaced 4 quality issues:
+the wizard lists hundreds of irrelevant files (Mac `.DS_Store`,
+Windows `Thumbs.db`, video files like `.mov`, etc.) cluttering the
+plan view; long walks/classify/apply phases run with no visible
+progress indication (users wonder if the app is hung); and `.txt`
+files containing computer-generated nonsense (binary masquerading
+as text, base64 dumps, encrypted blobs) burn LLM tokens before the
+classifier produces a low-confidence answer that lands the file in
+`raw/inbox/unrouted/` anyway. Plan 25 closes all four gaps in one
+focused plan: walk-stage filtering eliminates system + unsupported
+files from the user's view (T1); a cheap pre-classify content sniff
+(T2) routes nonsense to quarantine without LLM spend; and per-phase
+progress UI (T3) gives the user feedback during long-running phases.
+The cost rail and existing quarantine path are reused — no schema
+changes, no new dependencies.
+
+## Locked decisions
+
+| # | Decision | Status | Why |
+|---|---|---|---|
+| D1 | **Scope = A all 4 items.** System file denylist + unsupported-type pre-filter + content sniff + frontend animations. | locked (user A) | All 4 items are bulk-import quality fixes; bundle cleanly. Plan 22 carry-forwards (16 items) stay deferred to Plan 26 — they're a different concern class (architectural / dev-loop). |
+| D2 | **Item 2 filter strategy = 2.A backend pre-filter at walk stage.** Unsupported file types (`.mov`, `.zip`, `.iso`, etc.) never enter the plan. The user sees only handler-claimable files. | locked (user 2.A) | Cleanest UX; matches user's explicit ask "this list should only contain valid file types". Trade-off: loses visibility into what was skipped, but the file extension itself is the signal — user can audit by browsing the folder. |
+| D3 | **Item 4 sniff thresholds = 4.A standard.** 200 char minimum total content, 80% printable-ASCII ratio, 40% letter ratio. | locked (user 4.A) | Catches binary nonsense, base64 dumps, encrypted blobs while passing legitimate technical docs / code samples / multi-language content. PDF handler already uses similar threshold logic (`needs_ocr` flag at <200 chars from a 5MB PDF). |
+| D4 | **Quarantine path for content sniff = `raw/inbox/failed/<slug>.needs_review.json`** with reason `non_meaningful_text`. Mirrors existing quarantine pattern from `pipeline.py` failure handling per spec §5. | locked at authoring | Reuses established failure-handling pattern. User can review quarantined files in Inbox UI (already wires `raw/inbox/failed/` per Plan 07). |
+| D5 | **No mockup gate for T3 frontend.** Per Plan 21/23 small-frontend precedent — interstitial animations are polish on the existing bulk-import wizard surface; no new screens; minimal microcopy. | locked at authoring | Mockup gate applies to new UI surfaces (Plan 22 T11 for watched-folders panels). Animation polish on existing flow doesn't trigger it. |
+| D6 | **Spec update at T0 per CLAUDE.md non-negotiable.** Adding pipeline stage 3.5 changes the documented Stages list in §5; bulk-import behavior changes (walk-stage filtering) warrant a §5 footnote. | locked per CLAUDE.md | Pipeline stage changes are notable; spec stays the source of truth. |
+| D7 | **No new dependencies.** Content sniff uses stdlib (`str.isprintable`, `str.isalpha`); walk filtering is pure pathlib + string ops. | locked per Plan 19-24 D-precedent | Held across nine prior plans. |
+| D8 | **T1 bundles system-file denylist + unsupported-type pre-filter.** Both modify the same `BulkImporter.plan()` walk method; same review surface; single PR cleaner. | locked at authoring | Splitting into 2 tasks would mean 2 PRs touching the same method with overlapping diff context. One task = one focused review. |
+| D9 | **Push at Plan 25 close after user authorization.** Single `git push origin main` + explicit `git push origin <tag>` for lightweight tag. | locked per Plan 20-24 D-precedent | Standard cadence held across six prior plans. |
+| D10 | **Sequential subagent dispatch via subagent-driven-development.** | locked per Plan 19-24 D-precedent | T0 (brain-core) → T1 (brain-core) → T2 (brain-core) → T3 (brain-frontend) → T4 (brain-core closure). |
+| D11 | **Combined spec + code-quality review per task.** | locked per Plan 19-24 D-precedent | Held across nine prior plans. |
+| D12 | **Pause cadence: none mid-plan.** 5-task budget = plan-close after T4. | locked at authoring | Pause cadence is for larger plans (~5 tasks = no mid-plan pause). |
+| D13 | **Plan 26 candidate scope = 22 unchanged carry-forwards from Plan 24 close** (6 Plan 24-surfaced + 16 Plan 22 carry-forwards). Plus any Plan 25-surfaced. | locked at authoring | Plan 25 is orthogonal to those queues — different concern class. |
+| D14 | **PDF image-mode trigger = heuristic-based.** Text extraction runs first via existing pymupdf path. If extracted text <200 chars total, switch to page-rendering mode: each PDF page → `page.get_pixmap()` → PNG bytes → `LLMProvider.vision_extract` (Plan 24 T3 helper). Inline as `[Page N: <ocr-text>]` blocks. Replaces current `needs_ocr` skip-and-flag (spec §5 day-one handler row will be updated). | locked (user A) | Cost-efficient: vision LLM only fires when text extraction came up empty. Matches user framing "differently when primarily image content". 50-page scanned PDF ≈ $0.15 vs $0 today (the skip-and-flag) but TODAY the content is unrecoverable; Plan 25 makes it consumable. |
+| D15 | **Content-sniff OCR-aware exception.** When body_text contains OCR block markers (`[Image:`, `[Image (slide`, `[Page N:`), the source had visual content that was OCR'd by Plan 24 T4 (or Plan 25 T3 for PDF). Skip the 200-char min_chars check; keep the 80% printable + 40% letter ratio checks. Net: image-heavy PPTX/PDF/DOCX with proper OCR'd content passes sniff; binary nonsense still gets quarantined. | locked (user A) | The 200-char min was meant to catch 'near-empty' files. OCR-heavy sources are NOT near-empty — they had image content the LLM extracted. Printable + letter ratios still catch the binary-nonsense class. |
+
+## Tech stack
+
+Same as Plans 16-24: Python 3.12, pydantic v2, mypy --strict, ruff,
+structlog, vitest, Playwright. **No new dependencies.** CI runs on
+macos-14 + windows-2022 per Plan 14's matrix.
+
+## Demo gate description
+
+`scripts/demo-plan-25.py` asserts, in sequence (~10 gates):
+
+**T0:**
+1. Spec §5 Stages list mentions content sniff (3.5) between Extract
+   and Archive (or wherever it lands).
+2. Spec §5 Bulk import subsection has a "walk-stage filtering" note
+   (system files + unsupported types).
+2b. Spec §5 day-one handlers table `pdf` row mentions image-mode
+   rendering + Claude Vision OCR (replaces `needs_ocr` skip).
+
+**T1:**
+3. `BulkImporter` (or `bulk.py` module) exports a `_SYSTEM_FILES`
+   constant (set / frozenset / tuple of file names).
+4. `BulkImporter` exports a `_VALID_EXTENSIONS` constant covering
+   the handler-claimable suffixes (`.txt`, `.md`, `.markdown`,
+   `.pdf`, `.eml`, `.vtt`, `.srt`, `.docx`, `.pptx`).
+5. `BulkImporter.plan()` walk excludes both: a fixture vault with
+   `.DS_Store` + `Thumbs.db` + `__MACOSX/` + `.mov` + `.zip` + a
+   valid `.txt` returns a plan with ONLY the `.txt` in either
+   `items` or `skipped`.
+
+**T2:**
+6. `pipeline.py` (or sibling) has a `_looks_like_meaningful_text` helper
+   (or equivalent name) with the 3 thresholds (200 chars / 80%
+   printable / 40% letter).
+7. Pipeline ingest flow has a stage 3.5 sniff call between Extract
+   and Archive (regex/AST check).
+8. A `.txt` fixture with 500 chars of random non-printable bytes
+   quarantines to `raw/inbox/failed/` with reason
+   `non_meaningful_text` AND no classify/summarize/integrate LLM
+   calls fire (assert FakeLLMProvider queue UNCONSUMED).
+
+**T3 (PDF image-mode):**
+9. `PDFHandler.extract()` has a low-text branch that renders pages
+   to images (regex match for `get_pixmap` or `_render_pages_to_images`
+   helper).
+10. `extras["images"]` dicts from PDFHandler include `page_index`
+    (1-based) AND NOT `slide_index`.
+11. Pipeline OCR pass (Plan 24 T4 helper) extended to emit `[Page N:
+    <text>]` block when image dict has `page_index`.
+12. Integration test: scanned-PDF fixture ingests → body contains
+    `[Page 1: <text>]` blocks AND content sniff passes via D15.
+
+**T4 (frontend):**
+13. Bulk import wizard frontend has per-phase progress UI elements
+    (regex match for Walk/Classify/Apply phase labels or progress
+    bars in the wizard component files).
+
+**Closure:**
+14. `tasks/todo.md` row 25 marked ✅; `tasks/lessons.md` has Plan 25
+    closure section; final stdout `PLAN 25 DEMO OK`.
+
+## Tasks
+
+### Theme A — Foundation
+
+#### T0 — Spec update §5 (stages + bulk filtering note)
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` —
+  §5 Stages list gains a "3.5 Content sniff" entry; §5 Bulk import
+  subsection gains a "Walk-stage filtering" footnote.
+
+**Goal:** Lock the spec contract before T1+ implementation per
+CLAUDE.md non-negotiable.
+
+**What to do:**
+
+**Edit 1 — §5 Stages list** (around line 207-225 in the spec; verify
+at exec time):
+
+Insert between current stage 3 (Extract) and stage 4 (Archive):
+
+```markdown
+3.5 **Content sniff** (Plan 25) — for text-shaped sources (TextHandler / TranscriptTextHandler / DocxHandler / PptxHandler outputs that produced text bodies), check the extracted `body_text` against cheap heuristics: ≥200 chars, ≥80% printable ASCII ratio, ≥40% letter ratio. Files failing the heuristic quarantine to `raw/inbox/failed/<slug>.needs_review.json` with reason `non_meaningful_text` and skip stages 4-8 entirely (zero LLM token spend). Catches binary garbage masquerading as `.txt`, base64 dumps without context, encrypted blobs, and similar non-meaningful content. Pre-existing PDF `needs_ocr` flag at <200 chars from a 5MB doc is the precedent for this pattern.
+```
+
+Re-number subsequent stages: 4 (Archive), 5 (Route), 6 (Summarize),
+7 (Integrate), 8 (Apply), 9 (Log & cost). Or keep the original
+numbering and call the new step "3.5" to avoid renumbering — if the
+spec already references stage 4 elsewhere, the latter is safer. Verify
+at exec time.
+
+**Edit 1.5 — §5 day-one handlers table** (around line ~228-237;
+verify at exec time). Update the existing `pdf` row to reflect
+Plan 25 T3 image-mode behavior:
+
+Replace:
+```
+| pdf | `pymupdf` | text only; scanned PDFs flagged `needs_ocr`, skipped |
+```
+
+With:
+```
+| pdf | `pymupdf` | text-rich PDFs use text extraction; image-only / scanned PDFs render pages → Claude Vision OCR via `LLMProvider.vision_extract` (Plan 25 T3); replaces pre-Plan-25 `needs_ocr` skip-and-flag behavior. Trigger: text extraction <200 chars (Plan 25 D14). |
+```
+
+**Edit 2 — §5 Bulk import subsection** (after the existing 2-sentence
+description; verify line number):
+
+Add a "Walk-stage filtering" footnote:
+
+```markdown
+**Walk-stage filtering** (Plan 25). `BulkImporter.plan()` applies two
+filters during the folder walk so the user sees only actionable
+files in the plan view:
+- **System file denylist** — cross-platform list of OS-generated
+  files that are never user content: `.DS_Store`, `._*` AppleDouble,
+  `__MACOSX/`, `.Spotlight-V100/`, `.fseventsd/`, `.Trashes/`,
+  `.DocumentRevisions-V100/`, `.TemporaryItems/`, `.AppleDouble/`,
+  `.AppleDB/`, `.AppleDesktop/`, `.LSOverride`, `.VolumeIcon.icns`,
+  `.com.apple.timemachine.donotpresent` (Mac); `Thumbs.db`,
+  `ehthumbs.db`, `ehthumbs_vista.db`, `Desktop.ini`, `desktop.ini`,
+  `$RECYCLE.BIN/`, `System Volume Information/`, `pagefile.sys`,
+  `hiberfil.sys`, `swapfile.sys` (Windows); `.directory`,
+  `.Trash-*/` (Linux); `__pycache__/`, `node_modules/`, `.venv/` (dev
+  artifacts). Adds to the existing `_is_hidden` dotfile check.
+- **Unsupported-type pre-filter** — only files with extensions
+  claimable by a registered handler enter the plan (`.txt`, `.md`,
+  `.markdown`, `.pdf`, `.eml`, `.vtt`, `.srt`, `.docx`, `.pptx`).
+  Video, archive, executable, image, and other non-text formats are
+  silently walked over. URL/Tweet handlers aren't applicable to
+  folder walks (those handlers accept URLs as input, not file
+  paths).
+```
+
+**Per-task review:** combined. Reviewer confirms (a) spec stages
+list mentions the new 3.5 step (or renumbered equivalent);
+(b) bulk-import section has walk-filtering footnote; (c) no internal
+contradictions with existing §5 content; (d) no code changes outside
+spec.
+
+### Theme B — Walk-stage filtering
+
+#### T1 — System-file denylist + unsupported-type pre-filter (bundled per D8)
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/ingest/bulk.py` — add
+  `_SYSTEM_FILES` denylist + `_VALID_EXTENSIONS` whitelist constants;
+  add `_is_system_file(path)` predicate; modify `BulkImporter.plan()`
+  walk to apply both filters BEFORE the existing dispatch check.
+- Create or extend: `packages/brain_core/tests/ingest/test_bulk_walk_filtering.py`
+  — unit tests for the filter behavior.
+
+**Goal:** Bulk import plan view shows only handler-claimable files
+that aren't OS junk.
+
+**What to do:**
+
+1. **`_SYSTEM_FILES` constant.** Define as a frozenset of file/folder
+   names. Cross-platform per D8:
+
+```python
+_SYSTEM_FILES: frozenset[str] = frozenset({
+    # Mac
+    ".DS_Store",
+    "__MACOSX",  # directory; walk skips at dir level
+    ".Spotlight-V100",
+    ".fseventsd",
+    ".Trashes",
+    ".DocumentRevisions-V100",
+    ".TemporaryItems",
+    ".AppleDouble",
+    ".AppleDB",
+    ".AppleDesktop",
+    ".LSOverride",
+    ".VolumeIcon.icns",
+    ".com.apple.timemachine.donotpresent",
+    "Icon\r",  # Mac folder custom icon (literal Icon? with CR)
+    # Windows
+    "Thumbs.db",
+    "ehthumbs.db",
+    "ehthumbs_vista.db",
+    "Desktop.ini",
+    "desktop.ini",
+    "$RECYCLE.BIN",
+    "System Volume Information",
+    "pagefile.sys",
+    "hiberfil.sys",
+    "swapfile.sys",
+    # Linux
+    ".directory",
+    # Dev artifacts (often misplaced in a bulk-import folder)
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+})
+```
+
+Also handle pattern-based matches:
+- `._*` (AppleDouble files like `._myfile.txt`) — starts with `._`
+- `.Trash-*` (Linux trash) — starts with `.Trash-`
+- `~$*` (Office temp files like `~$document.docx`) — starts with `~$`
+- `*.pyc`, `*.pyo`, `*.class` — compiled artifacts (less common at folder roots; lower priority)
+
+Recommend implementing `_is_system_file(name)` as:
+```python
+def _is_system_file(name: str) -> bool:
+    if name in _SYSTEM_FILES:
+        return True
+    if name.startswith("._"):  # AppleDouble
+        return True
+    if name.startswith(".Trash-"):  # Linux trash
+        return True
+    if name.startswith("~$"):  # Office temp
+        return True
+    return False
+```
+
+2. **`_VALID_EXTENSIONS` whitelist.** Define from the day-one handler
+   claims (verify at exec time by reading dispatcher.py):
+
+```python
+_VALID_EXTENSIONS: frozenset[str] = frozenset({
+    ".txt", ".md", ".markdown",  # text + markdown
+    ".pdf",
+    ".eml",
+    ".vtt", ".srt",  # transcripts
+    ".docx",  # Word (transcript handler + DocxHandler post-Plan-24)
+    ".pptx",  # PowerPoint post-Plan-24
+})
+```
+
+If any handler accepts different/additional extensions, extend the
+set. Verify at exec time.
+
+3. **Walk filter integration in `BulkImporter.plan()`.** Find the
+   existing walk loop (the `for path in folder.rglob("*"):` or
+   similar; verify at exec time). Add filter checks BEFORE the
+   dispatcher check:
+
+```python
+for path in folder.rglob("*"):
+    # Existing checks (hidden dotfiles, dirs/symlinks)
+    if self._is_hidden(path, root=folder):
+        continue
+    if path.is_dir() or path.is_symlink():
+        continue
+    # NEW: system-file filter (Plan 25 T1)
+    if _is_system_file(path.name):
+        continue
+    # Also walk over any ancestor path component that's a system dir
+    # (e.g., a file deep inside __MACOSX/ shouldn't appear even if
+    # its filename isn't itself a system file).
+    if any(_is_system_file(part) for part in path.relative_to(folder).parts):
+        continue
+    # NEW: unsupported-type pre-filter (Plan 25 T1)
+    if path.suffix.lower() not in _VALID_EXTENSIONS:
+        continue
+    # Existing dispatch + plan-building logic
+    ...
+```
+
+4. **Unit tests** at `packages/brain_core/tests/ingest/test_bulk_walk_filtering.py`:
+
+- **test_dsstore_filtered:** vault with `.DS_Store` + valid `.txt`;
+  plan has only the `.txt`.
+- **test_thumbs_db_filtered:** vault with `Thumbs.db` + valid `.txt`;
+  plan has only the `.txt`.
+- **test_macosx_dir_filtered:** vault with `__MACOSX/file.txt` +
+  `real-doc.txt`; plan has only `real-doc.txt`.
+- **test_mov_filtered:** vault with `video.mov` + valid `.txt`;
+  plan has only the `.txt`.
+- **test_zip_filtered:** vault with `archive.zip` + valid `.txt`;
+  plan has only the `.txt`.
+- **test_apple_double_filtered:** vault with `._image.png` + valid
+  `.txt`; plan has only the `.txt`.
+- **test_office_temp_filtered:** vault with `~$document.docx` + a
+  real `.docx`; plan has only the real `.docx`.
+- **test_valid_extensions_pass:** vault with `.txt` + `.pdf` +
+  `.docx` + `.pptx`; plan has all 4 in `items` (each dispatched
+  successfully — use FakeLLMProvider with canned classify
+  responses for the items; check item count, not full ingest).
+- **test_filter_combined_with_hidden_check:** vault with `.git/foo.txt`
+  (hidden by existing _is_hidden) + `.DS_Store` (hidden by new
+  denylist) + `.mov` (filtered by suffix) + `real.txt`; plan has
+  only `real.txt`.
+
+**Per-task review:** combined. Reviewer confirms (a) `_SYSTEM_FILES`
+covers both Mac + Windows lists from the plan-doc; (b) pattern-based
+checks (`._*`, `.Trash-*`, `~$*`) handled; (c) `_VALID_EXTENSIONS`
+matches actual handler-claimable suffixes; (d) walk filters apply
+BEFORE the dispatcher (cost-efficient: never call dispatch on
+filtered files); (e) deep-path system-dir filtering works
+(`__MACOSX/file.txt` excluded even though `file.txt` itself isn't
+system); (f) full brain_core suite stays green.
+
+### Theme C — Content sniff
+
+#### T2 — Pipeline stage 3.5 content sniff + quarantine
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/ingest/pipeline.py` —
+  add `_looks_like_meaningful_text(body_text: str)` helper; insert
+  stage 3.5 sniff check between Extract and Archive in the
+  `ingest()` method.
+- Create or extend: `packages/brain_core/tests/ingest/test_pipeline_content_sniff.py`.
+
+**Goal:** Text files containing computer-generated nonsense (binary,
+base64, encrypted) quarantine to `raw/inbox/failed/` without burning
+LLM tokens.
+
+**What to do:**
+
+1. **`_looks_like_meaningful_text` helper.** Standard thresholds per
+   D3 with **OCR-aware exception** per D15:
+
+```python
+import re
+
+_OCR_MARKER_PATTERN = re.compile(r"\[(?:Image(?:\s+\(slide\s+\d+\))?|Page\s+\d+):\s")
+
+
+def _looks_like_meaningful_text(body_text: str, *, min_chars: int = 200) -> bool:
+    """Cheap heuristic: does body_text look like human-readable content?
+
+    Catches binary nonsense masquerading as text, base64 dumps without
+    context, encrypted blobs, etc. Passes legitimate technical docs,
+    code samples, multi-language content.
+
+    Thresholds per Plan 25 D3:
+    - body_text length >= min_chars (default 200) — SKIPPED if body
+      contains OCR block markers per D15 (OCR-heavy sources are not
+      near-empty regardless of post-OCR length)
+    - non-whitespace content >= 50% of body_text length (when min_chars applies)
+    - printable ratio >= 80% (printable ASCII or valid Unicode letters/
+      digits/whitespace/punctuation; excludes control chars + binary)
+    - letter ratio >= 40% (sequences resembling words)
+    """
+    has_ocr_markers = bool(_OCR_MARKER_PATTERN.search(body_text))
+    if not has_ocr_markers and len(body_text) < min_chars:
+        return False
+    if not has_ocr_markers:
+        non_ws = "".join(c for c in body_text if not c.isspace())
+        if len(non_ws) < min_chars / 2:
+            return False  # too much whitespace = effectively empty
+    printable = sum(1 for c in body_text if c.isprintable())
+    if len(body_text) > 0 and printable / len(body_text) < 0.8:
+        return False
+    letters = sum(1 for c in body_text if c.isalpha())
+    if len(body_text) > 0 and letters / len(body_text) < 0.4:
+        return False
+    return True
+```
+
+The OCR-marker regex catches three forms:
+- `[Image: <text>]` — docx inline images (Plan 24 T4)
+- `[Image (slide N): <text>]` — pptx slide images (Plan 24 T4)
+- `[Page N: <text>]` — pdf page renders (Plan 25 T3)
+
+2. **Stage 3.5 insertion in `pipeline.py:ingest()`.** Find the
+   existing flow at exec time. Insert AFTER Extract (stage 3) returns
+   the `ExtractedSource` and BEFORE Archive (stage 4):
+
+```python
+# Stage 3.5: Content sniff (Plan 25 T2)
+# For text-shaped sources, screen the body for meaningful content.
+# Skip classify/summarize/integrate for clearly-non-meaningful files.
+if extracted.source_type in {SourceType.TEXT, SourceType.TRANSCRIPT, SourceType.DOCX, SourceType.PPTX}:
+    if not _looks_like_meaningful_text(extracted.body_text):
+        # Quarantine to raw/inbox/failed/ with structured reason
+        await self._quarantine(
+            spec=spec,
+            extracted=extracted,
+            stage="content_sniff",
+            reason="non_meaningful_text",
+            details={
+                "char_count": len(extracted.body_text),
+                "printable_ratio": ...,  # compute for diagnostics
+                "letter_ratio": ...,
+            },
+        )
+        return IngestResult(
+            status=IngestStatus.FAILED,
+            errors=["Content sniff: text does not appear to be meaningful (non_meaningful_text)"],
+            note_path=None,
+        )
+```
+
+(Verify the actual quarantine helper at exec time — `_quarantine` may
+or may not exist. If not, mirror the existing failure-path pattern in
+pipeline.py from Plan 02 / Plan 14 work.)
+
+3. **Quarantine file shape.** Per spec §5 failure handling:
+   `raw/inbox/failed/<slug>.error.json` (or `.needs_review.json` —
+   verify the established suffix convention). JSON contents:
+
+```json
+{
+    "stage": "content_sniff",
+    "reason": "non_meaningful_text",
+    "source_path": "/absolute/path/to/source.txt",
+    "details": {
+        "char_count": 500,
+        "printable_ratio": 0.62,
+        "letter_ratio": 0.15
+    },
+    "retry_command": "brain ingest <path> --force-content-sniff-skip"
+}
+```
+
+The `retry_command` field is helpful per spec §5 ("Failures land in
+`raw/inbox/failed/<slug>.error.json` with stage, exception, and a
+retry command"). The flag `--force-content-sniff-skip` doesn't exist
+yet; for now just include a placeholder OR write the user-instruction
+text in `details.retry_hint` like "If you believe this file is
+meaningful, classify it manually via the Inbox UI."
+
+4. **Unit tests** at `packages/brain_core/tests/ingest/test_pipeline_content_sniff.py`:
+
+- **test_meaningful_text_passes:** body = "The quick brown fox..."
+  (200+ chars, all letters/spaces); sniff returns True.
+- **test_short_body_quarantines:** body = "Hi." (3 chars); sniff
+  returns False; pipeline quarantines.
+- **test_binary_garbage_quarantines:** body = random non-printable
+  bytes decoded with errors="replace" (500 chars of `�`);
+  printable_ratio low; quarantines.
+- **test_base64_dump_quarantines:** body = 500 chars of base64
+  characters with no whitespace ("aGVsbG93b3JsZA..."); letter_ratio
+  high but no word-like patterns... actually base64 has letters so
+  this test is tricky. Use a fixture with 60% letters + 40% special
+  chars; verify quarantines based on word-pattern threshold OR
+  adjust expectations.
+- **test_quarantine_skips_llm_calls:** FakeLLMProvider with empty
+  classify queue; ingest a binary-garbage `.txt`; verify no
+  ValueError from empty-queue (because no classify was attempted).
+- **test_quarantine_file_written:** ingest a binary-garbage file;
+  verify `raw/inbox/failed/<slug>.error.json` (or `.needs_review.json`)
+  exists with correct shape.
+- **test_pptx_with_image_only_slide_passes:** PptxHandler output has
+  `[Image (slide 1): chart of Q4 revenue]` text from OCR; verify
+  this passes the sniff EVEN IF total body is short (OCR marker
+  triggers D15 min_chars-skip).
+- **test_short_ocr_heavy_pptx_passes_via_d15:** single-slide pptx with
+  one image; body = `## Slide 1: \n\n[Image (slide 1): hello world]`
+  (~50 chars total — below 200); sniff returns True because OCR
+  marker present + printable/letter ratios pass.
+- **test_pdf_with_page_ocr_markers_passes_via_d15:** PDFHandler image-mode
+  output has `[Page 1: <text>]` blocks (Plan 25 T3); body <200 chars;
+  passes sniff via D15.
+- **test_binary_garbage_with_fake_ocr_marker_still_quarantines:** body =
+  `[Image: ` + 500 chars of random non-printable bytes; the marker
+  is present but printable ratio fails 80% threshold; quarantines.
+  (Pin that OCR-marker exception is NOT a bypass for binary content.)
+
+**Per-task review:** combined. Reviewer confirms (a) sniff helper
+matches the 3 documented thresholds + D15 OCR-aware exception;
+(b) quarantine path mirrors existing failure-handling pattern;
+(c) no LLM tokens spent on quarantined files (FakeLLMProvider queue
+stays unconsumed); (d) sniff applies to ALL text-shaped SourceTypes
+(text, transcript, docx, pptx, pdf — including Plan 24 + Plan 25 T3
+additions); (e) sniff handles UTF-8 content correctly (letters
+include non-ASCII Unicode letters); (f) OCR-marker exception
+preserves printable + letter ratio checks (binary nonsense with a
+fake OCR marker still quarantines); (g) full brain_core suite stays
+green.
+
+### Theme C2 — PDF image-mode
+
+#### T3 — PDFHandler image-mode (render + vision_extract)
+
+**Files:**
+- Modify: `packages/brain_core/src/brain_core/ingest/handlers/pdf.py`
+  — extend PDFHandler with a page-rendering fallback path when text
+  extraction returns <200 chars. Reuse Plan 24 T3's `ocr_image`
+  helper (or call `LLMProvider.vision_extract` directly via the
+  pipeline pattern from Plan 24 T4 — verify integration point at
+  exec time).
+- Modify: `packages/brain_core/src/brain_core/ingest/pipeline.py` —
+  PDF page-rendered images flow through the same OCR pass as DOCX/PPTX
+  embedded images (Plan 24 T4 stage 5.5). Verify if any pipeline-level
+  changes needed, OR if PDFHandler can self-contain the rendering +
+  emit `extras["images"]` for the Plan 24 T4 pipeline pass to pick up.
+- Create: `packages/brain_core/tests/ingest/handlers/test_pdf_image_mode.py`.
+
+**Goal:** Image-only / scanned PDFs become consumable via Vision OCR
+instead of being skipped with `needs_ocr`. Text-rich PDFs are
+unchanged (fast text-extraction path).
+
+**What to do:**
+
+1. **Read existing PDFHandler** at exec time. Find the current
+   `needs_ocr` branch — it likely flags + skips when extraction is
+   <200 chars (per spec §5 "scanned PDFs flagged `needs_ocr`,
+   skipped"). T3 replaces the skip behavior with rendering + OCR.
+
+2. **Decide integration pattern.** Two options:
+   - **A. Handler-collects-images, pipeline-OCRs.** PDFHandler's
+     extract() detects the low-text case, renders each page via
+     `pymupdf.page.get_pixmap()` → PNG bytes, and populates
+     `extras["images"]` with `{blob, content_type="image/png",
+     page_index, index}` dicts (same shape as PPTX uses for
+     `slide_index`). Plan 24 T4's pipeline OCR pass (stage 5.5)
+     processes them automatically. Net: zero changes to pipeline.py;
+     all logic lives in PDFHandler.
+   - **B. Handler calls vision_extract directly.** PDFHandler runs
+     OCR inline during extract(). Violates Plan 24 T4's "OCR at
+     pipeline level, handlers stay pure" architecture.
+
+   **Choose A** — preserves the Plan 24 T4 architecture. PDFHandler
+   collects images; pipeline OCRs.
+
+3. **Page rendering.** Use `pymupdf`:
+   ```python
+   import pymupdf
+   doc = pymupdf.open(path)
+   for page_num, page in enumerate(doc, start=1):
+       pix = page.get_pixmap(dpi=150)  # 150 DPI = good OCR balance
+       png_bytes = pix.tobytes("png")
+       images.append({
+           "blob": png_bytes,
+           "content_type": "image/png",
+           "page_index": page_num,  # 1-based for human-readable
+           "index": page_num - 1,
+       })
+   ```
+   DPI choice: 150 is a good balance (Tesseract/OCR research suggests
+   200-300 for max accuracy, but Claude Vision performs well at 150).
+   Verify at exec time; lower if file size becomes a concern.
+
+4. **Trigger condition.** After text extraction, check `len(body_text)`:
+   ```python
+   if len(extracted_text.strip()) < 200:
+       # Image-mode: render pages, collect into extras["images"]
+       images = self._render_pages_to_images(doc)
+       return ExtractedSource(
+           title=...,
+           source_type=SourceType.PDF,
+           body_text=extracted_text,  # may be empty or near-empty
+           extras={"images": images, "pdf_image_mode": True},
+           ...
+       )
+   else:
+       # Standard text-extraction path
+       return ExtractedSource(body_text=extracted_text, extras={}, ...)
+   ```
+   The `pdf_image_mode: True` flag in extras is informational
+   diagnostic for the pipeline / log.
+
+5. **Pipeline OCR pass integration.** Plan 24 T4's stage 5.5 OCR
+   pass iterates `extras["images"]` and inlines `[Image: ...]` /
+   `[Image (slide N): ...]` blocks. For PDF, the inline format
+   should use `[Page N: ...]`:
+   - If image dict has `slide_index` → `[Image (slide N): <text>]`
+   - **NEW:** If image dict has `page_index` → `[Page N: <text>]`
+   - Else → `[Image: <text>]`
+
+   Verify Plan 24 T4's `_ocr_images` (or similar helper) at exec
+   time; extend the dict-shape branching.
+
+6. **Cost estimate.** ~$0.003/page × N pages. A 50-page scanned PDF
+   ≈ $0.15 in vision spend. Bounded by existing per-domain budget
+   rail (Plan 16 T26-T32). If budget exhausts mid-PDF, the existing
+   stage 5.5 budget-exhaustion handler (`BudgetCapExceeded` re-raise
+   per Plan 24 T4) pauses cleanly.
+
+7. **Unit tests** at `packages/brain_core/tests/ingest/handlers/test_pdf_image_mode.py`:
+   - **test_text_rich_pdf_uses_text_path:** fixture PDF with 1000+
+     chars of extractable text; assert `extras["images"]` is empty
+     (no rendering); `pdf_image_mode` flag is False or absent.
+   - **test_image_only_pdf_renders_pages:** fixture scanned PDF
+     (build via pymupdf — render text → image → embed as image-only
+     page); assert `extras["images"]` has N entries (1 per page);
+     `pdf_image_mode: True`.
+   - **test_near_empty_pdf_triggers_image_mode:** PDF with 50 chars
+     of text + 3 image-heavy pages; assert image-mode triggered
+     (50 < 200 threshold).
+   - **test_image_mode_uses_page_index:** verify each image dict
+     has `page_index` (1-based), NOT `slide_index`.
+   - **test_image_mode_pdf_e2e_integration:** with FakeLLMProvider
+     vision queue; ingest scanned PDF; verify body contains
+     `[Page 1: <text>]` blocks; content sniff passes via D15
+     OCR-marker exception.
+   - **test_image_mode_budget_exhausted_raises:** set per-domain
+     budget to 0; ingest scanned PDF; assert BudgetCapExceeded
+     raised + IngestResult.status = FAILED.
+
+8. **Pipeline _ocr_images extension.** Read Plan 24 T4's helper at
+   exec time. Add the page_index branch:
+   ```python
+   page_idx = img.get("page_index")
+   slide_idx = img.get("slide_index")
+   if page_idx is not None:
+       ocr_blocks.append(f"[Page {page_idx}: {ocr_text.strip()}]")
+   elif slide_idx is not None:
+       ocr_blocks.append(f"[Image (slide {slide_idx}): {ocr_text.strip()}]")
+   else:
+       ocr_blocks.append(f"[Image: {ocr_text.strip()}]")
+   ```
+
+9. **Spec §5 day-one handlers table.** The pdf row currently says
+   "text only; scanned PDFs flagged `needs_ocr`, skipped". T3
+   changes this to "text-rich PDFs use text extraction; image-only
+   PDFs render pages → Claude Vision OCR (Plan 25 T3); replaces
+   pre-Plan-25 `needs_ocr` skip-and-flag behavior". Add this row
+   update as part of T0 spec edits (Edit 1 in T0 already touches
+   the handlers table; extend to update the pdf row).
+
+**Per-task review:** combined. Reviewer confirms (a) PDFHandler
+collects images at handler level (Plan 24 T4 "handlers stay pure"
+architecture preserved); (b) pipeline OCR pass extended for
+`page_index` dict shape; (c) text-rich PDFs (≥200 chars extracted)
+take the fast path with NO vision spend; (d) image-only PDFs
+trigger rendering correctly; (e) `[Page N: ...]` inline format
+distinct from `[Image (slide N): ...]` and `[Image: ...]`;
+(f) content sniff D15 OCR-aware exception applies to PDF page
+markers; (g) budget exhaustion mid-PDF raises cleanly; (h) full
+brain_core suite stays green; (i) FakeLLMProvider vision queue
+consumed correctly per page count.
+
+### Theme D — Frontend interstitial animations
+
+#### T4 — Per-phase progress UI in bulk-import wizard
+
+**Files:**
+- Modify: `apps/brain_web/src/components/bulk/*` (verify file
+  structure at exec time — likely `bulk-import-wizard.tsx` or per-step
+  `step-pick-folder.tsx`, `step-scanning.tsx`, `step-classifying.tsx`,
+  `step-applying.tsx`, etc.).
+- Modify: `apps/brain_web/src/lib/state/bulk-store.ts` (or
+  equivalent) to expose per-phase progress fields (file count,
+  current index, percentage).
+- Modify: `apps/brain_web/tests/unit/bulk-wizard.test.tsx` (or
+  equivalent — verify location).
+
+**Goal:** Users see clear progress indication during long-running
+walk / classify / apply phases.
+
+**What to do:**
+
+1. **Identify the 3 phases** in the existing wizard. Per current
+   bulk_import flow:
+   - **Walk phase** — `BulkImporter.plan()` walks folder; can take
+     5-30s for thousands of files.
+   - **Classify phase** — per-file classify LLM call; takes ~1-2s
+     per file. (If `domain_override` is set, this phase is skipped.)
+   - **Apply phase** — per-file summarize+integrate+vault-write;
+     takes ~5-10s per file. Only runs if user clicks Apply after
+     reviewing the plan.
+
+2. **Per-phase progress UI design:**
+
+   **Walk phase:**
+   ```
+   ┌─────────────────────────────────────────────┐
+   │ Scanning folder...                          │
+   │                                             │
+   │   ⟳  /Users/.../research/        342 files  │
+   │                                             │
+   │   This may take a moment for large folders. │
+   └─────────────────────────────────────────────┘
+   ```
+   Static-spinner + live file count (count updates as files are
+   walked). If backend supports streaming, use it; otherwise show
+   indeterminate spinner with periodic file-count update.
+
+   **Classify phase:**
+   ```
+   ┌─────────────────────────────────────────────┐
+   │ Classifying 27 of 342 files                 │
+   │ ████████░░░░░░░░░░░░░░░░░░░░░░░░░  8%       │
+   │                                             │
+   │ Current: q4-strategy-deck.pptx              │
+   │                                             │
+   │ Estimated time remaining: ~10m              │
+   └─────────────────────────────────────────────┘
+   ```
+   Progress bar + N of M file count + current filename + (optional)
+   ETA.
+
+   **Apply phase:** same shape as Classify but for the ingest stage.
+
+3. **Backend support.** The frontend needs per-phase progress data.
+   Two options:
+   - **A.** Backend streams progress via WebSocket (Plan 05 set up
+     WebSocket chat infrastructure; can extend for bulk progress).
+   - **B.** Backend exposes a polling endpoint (`/api/bulk/progress?
+     job_id=...`) that frontend polls every ~500ms.
+   - **C.** Frontend simulates progress with timer-based animation
+     between API calls (no real progress; just keeps the user from
+     wondering if it's hung).
+
+   **Recommendation: B (polling)** for v1. Simpler than WebSocket;
+   1Hz polling overhead is negligible; works without extending the
+   chat-WebSocket protocol. Backend `brain_bulk_import` tool would
+   need to expose progress state — likely an in-memory dict keyed
+   by job_id. **OR C if the backend can't be modified in this plan's
+   scope** — flag as a Plan 26 candidate to add real progress
+   streaming.
+
+   For T3 v1, use **C with timer-based pseudo-progress** — the file
+   count updates aren't perfectly accurate but the user sees the app
+   isn't hung. Real streaming-based progress = Plan 26 candidate.
+
+4. **Animation polish:** subtle transitions between phases (fade
+   in/out the phase label + spinner). Don't use Radix dialog
+   animation (`waitForAnimationsToFinish` requirement per
+   `feedback_axe_dialog_animation_wait.md`) — keep transitions
+   simple CSS opacity (no axe-color-contrast issues during transition).
+
+5. **Microcopy** (verbatim — these strings will be vitest-pinned):
+   - "Scanning folder..."
+   - "Classifying N of M files"
+   - "Applying N of M files"
+   - "Current: <filename>"
+   - "Estimated time remaining: ~Xm" (optional; only if ETA available)
+   - "This may take a moment for large folders." (helper text)
+
+6. **Unit tests** at `apps/brain_web/tests/unit/bulk-wizard.test.tsx`:
+   - **test_walk_phase_renders_spinner_and_count:** render with
+     `{phase: "walking", fileCount: 27}`; assert "Scanning folder..."
+     visible + file count displayed.
+   - **test_classify_phase_renders_progress_bar:** `{phase:
+     "classifying", current: 27, total: 342}`; assert progress bar
+     at 8% + "Classifying 27 of 342 files".
+   - **test_apply_phase_renders_current_filename:** assert current
+     filename visible in the apply phase.
+   - **test_phase_transition_animates:** verify CSS class change
+     between phases (e.g., a `fade-in` class applied on phase change).
+   - **test_zero_state_no_progress:** initial state before walk
+     starts; verify no progress UI rendered.
+
+**Per-task review:** combined. Reviewer confirms (a) all 3 phases
+have distinct progress UI; (b) microcopy verbatim per the spec
+above; (c) animations don't introduce axe-color-contrast issues;
+(d) backend support strategy chosen (B polling vs C timer-pseudo)
+is documented in T3 outcome; (e) vitest + tsc clean.
+
+### Closure
+
+#### T5 — Closure: demo + lessons + todo + tag
+
+**Files:**
+- Create: `scripts/demo-plan-25.py` — assert each gate (~10 gates).
+- Modify: `tasks/lessons.md` — Plan 25 closure section.
+- Modify: `tasks/todo.md` — row 25 ✅ + Plan 26 candidate scope tail.
+- Tag: `plan-25-bulk-import-quality` cut on green demo.
+
+**Lessons to capture:**
+
+1. **Hands-on use surfaces UX gaps faster than spec review.** Plan 22
+   shipped bulk-import as a first-class wizard; Plan 24 extended it
+   for DOCX/PPTX. Both plans passed review. But the first real
+   "point at a folder of mixed files" use case surfaced 4 quality
+   issues immediately (system files, unsupported types, no progress
+   indication, nonsense-text token-burn). **Rule:** for user-facing
+   workflows, the dev's smoke-test ≠ the user's real-world test.
+   Build in user-feedback loops between feature plans.
+
+2. **Walk-stage filtering > post-walk skipped-list display.** The
+   user explicitly preferred "don't show me unsupported files at
+   all" over "show me a collapsible skipped list". Trade-off:
+   loses discoverability of "this format isn't supported yet" but
+   wins on focus. **Rule:** for high-volume operations (bulk
+   import of 1000s of files), the user's mental model is "show me
+   only what I can act on" — pre-filter at the walk stage, don't
+   surface a separate skip list.
+
+3. **Content sniff as a cheap pre-classify guard.** PDF's pre-existing
+   `needs_ocr` flag (skip if <200 chars from a 5MB doc) is the
+   precedent. Plan 25 generalizes the pattern: any text-shaped
+   source whose body fails cheap heuristics (printable ratio,
+   letter ratio, length) skips classify/summarize/integrate.
+   Estimated savings: $0.001-0.01 per filtered file × N nonsense
+   files in a real-world vault. **Rule:** pre-screen for "is this
+   actually content?" BEFORE spending LLM tokens. Cheap heuristics
+   often catch what would otherwise become a low-confidence
+   classification.
+
+4. **Cross-platform system-file lists are surprisingly long.** Mac
+   alone has ~15 distinct system file types; Windows adds ~10;
+   Linux ~3. The `_is_hidden` dotfile check handles ~50% of them;
+   the rest need explicit denylist entries. Pattern-based matches
+   (`._*` AppleDouble, `~$*` Office temp, `.Trash-*` Linux) close
+   the long tail. **Rule:** "trust the dotfile convention" is wrong
+   for Windows. Explicit denylist is required for cross-platform
+   bulk imports.
+
+5. **Frontend polish vs feature work.** Interstitial animations
+   are pure UX polish (no functional change). But for long-running
+   workflows where users wonder if the app is hung, polish has
+   real value — it's the difference between "this works" and
+   "this works AND I trust it". **Rule:** for workflows >5s,
+   visible progress > "trust the spinner". Especially for new
+   users who haven't built up trust with the app yet.
+
+6. **PDF image-mode as Plan 24 OCR extension (T3 NEW lesson).** Pre-
+   Plan-25, scanned/image-only PDFs were flagged `needs_ocr` and
+   skipped entirely — the content was unrecoverable without external
+   OCR. Plan 25 T3 extends Plan 24's `LLMProvider.vision_extract`
+   abstraction to PDF pages: `pymupdf.page.get_pixmap()` renders each
+   page to PNG; the same pipeline OCR pass (stage 5.5) that handles
+   docx/pptx embedded images now also processes PDF pages, inlining
+   `[Page N: <text>]` blocks. Per Plan 24 T4 "handlers stay pure",
+   PDFHandler collects images into `extras["images"]` with
+   `page_index`; pipeline orchestrates OCR. **Rule:** new ingestable
+   formats (PDF image-mode, future Excel screenshots, etc.) extend
+   the existing OCR architecture rather than adding parallel OCR
+   pipelines. Handlers collect; pipeline OCRs; cost rail meters.
+
+7. **OCR-aware content-sniff exception (D15 lesson).** The 200-char
+   min_chars threshold was meant to catch near-empty files (PDFs
+   that didn't extract text). But OCR-heavy sources (image-only PDFs,
+   single-slide PPTX with one image, DOCX with a chart screenshot)
+   are NOT near-empty — they had visual content that got OCR'd.
+   Plan 25 T2 detects OCR block markers (`[Image:`, `[Image (slide`,
+   `[Page N:`) and skips the min_chars check while keeping printable
+   + letter ratios. **Rule:** content-sniff guards should be aware
+   of upstream pipeline transforms. The "200 chars" threshold encodes
+   "this file appears empty"; if OCR ran and produced markers, that
+   assumption no longer holds.
+
+**Handoff to Plan 26 paragraph:** 22 unchanged carry-forwards (6
+Plan 24-surfaced + 16 Plan 22 carry-forwards) plus any Plan
+25-surfaced. Likely Plan 25 surfaces: real progress streaming
+(WebSocket-based) for bulk import — Plan 25 T3 ships timer-pseudo
+or polling, but real streaming is a future improvement.
+
+## Owning subagents
+
+- **brain-core-engineer** — T0 (spec), T1 (BulkImporter walk filter),
+  T2 (pipeline content sniff + OCR-aware exception), T3 (PDF
+  image-mode), T5 (closure).
+- **brain-frontend-engineer** — T4 (bulk-import wizard animations).
+
+## Workflow rules
+
+Same as Plans 16-24:
+- Sequential per-task dispatch via subagent-driven-development.
+- Combined spec + code-quality review per task.
+- No mid-plan pause (D12).
+- No push without explicit user authorization at Plan 25 close (D9).
+- pytest recipe per `feedback_uv_uf_hidden.md` (chflags OR PYTHONPATH bypass).
+- Frontend per-task verification: vitest + tsc --noEmit per
+  `feedback_tsc_vs_vitest.md`.
+- Plan-author drift watch (Plan 16/19/20/22/24 lesson): implementers
+  MUST grep before assuming file/symbol locations.
+
+## File inventory (summary)
+
+```
+tasks/plans/
+└── 25-bulk-import-quality.md                       # SELF
+
+docs/superpowers/specs/
+└── 2026-04-13-cj-llm-kb-design.md                  # MODIFY: §5 stages + bulk filtering (T0)
+
+packages/brain_core/
+├── src/brain_core/ingest/
+│   ├── bulk.py                                     # MODIFY: _SYSTEM_FILES + _VALID_EXTENSIONS + walk filter (T1)
+│   ├── pipeline.py                                 # MODIFY: stage 3.5 sniff + quarantine (T2); _ocr_images branches on page_index (T3)
+│   └── handlers/pdf.py                             # MODIFY: image-mode rendering when text < 200 chars (T3)
+└── tests/ingest/
+    ├── test_bulk_walk_filtering.py                 # CREATE (T1)
+    ├── test_pipeline_content_sniff.py              # CREATE (T2)
+    └── handlers/test_pdf_image_mode.py             # CREATE (T3)
+
+apps/brain_web/
+├── src/
+│   ├── components/bulk/                            # MODIFY: per-phase progress UI (T3)
+│   └── lib/state/bulk-store.ts                     # MODIFY: progress fields (T3)
+└── tests/unit/
+    └── bulk-wizard.test.tsx                        # MODIFY/CREATE: animation tests (T3)
+
+scripts/
+└── demo-plan-25.py                                 # CREATE (T4)
+
+tasks/
+├── lessons.md                                      # MODIFY: Plan 25 closure (T4)
+└── todo.md                                         # MODIFY: row 25 ✅ + Plan 26 (T4)
+```
+
+## T0-T5 outcomes
+
+_Filled in at each task close. Standard receipt format mirrors Plan
+19-24._
+
+## Plan 26 candidate scope
+
+Filled in at T4 closure. Plan 24's 22 unaddressed carry-forwards (6
+Plan 24-surfaced + 16 Plan 22 carry-forwards) unchanged through Plan
+25, plus any Plan 25-surfaced.
+
+## Review
+
+_Filled in at T4 close. Tag SHA + closure summary + bumps +
+verification receipts + backlog forward._
+
+---
+
+**End of Plan 25.**
