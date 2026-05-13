@@ -212,6 +212,7 @@ Universal pipeline: any source arriving through any entry point (file drop, web 
 1. **Classify** — detect type (text / url / pdf / email / transcript / tweet)
 2. **Fetch** — per-type handler produces normalized `{raw_bytes, content_type, source_url}`
 3. **Extract** — `ExtractedSource` dataclass: `title, author, published, source_url, source_type, body_text, archive_path, extras`
+3.5 **Content sniff** (Plan 25) — for text-shaped sources (TextHandler / TranscriptTextHandler / DocxHandler / PptxHandler outputs that produced text bodies, plus PDFHandler outputs in either text-extracted or image-mode forms), check the extracted `body_text` against cheap heuristics: ≥200 chars, ≥80% printable ASCII ratio, ≥40% letter ratio. **OCR-aware exception (Plan 25 D15):** when body contains OCR block markers (`[Image:`, `[Image (slide`, `[Page N:`), the 200-char minimum is SKIPPED (OCR-heavy sources are not near-empty regardless of post-OCR length); the printable + letter ratios still apply. Files failing the heuristic quarantine to `raw/inbox/failed/<slug>.needs_review.json` with reason `non_meaningful_text` and skip stages 4-9 entirely (zero LLM token spend). Catches binary garbage masquerading as `.txt`, base64 dumps without context, encrypted blobs, and similar non-meaningful content. PDF's pre-existing `needs_ocr` flag at <200 chars from a 5MB doc is the precedent for this pattern (and is replaced by the more capable Plan 25 T3 image-mode rendering).
 4. **Archive** — originals stashed under `raw/archive/<domain>/<yyyy>/<mm>/<slug>.<ext>`
 5. **Route** — LLM classifier (or user-specified) picks domain; low-confidence items land in `raw/inbox/unrouted/` for user pick
 6. **Summarize** — LLM produces source-note frontmatter + body
@@ -233,7 +234,7 @@ Universal pipeline: any source arriving through any entry point (file drop, web 
 |---|---|---|
 | text / .md | stdlib | drop as-is |
 | url | `httpx` + `trafilatura` (fallback `readability-lxml`) | stores final resolved URL |
-| pdf | `pymupdf` | text only; scanned PDFs flagged `needs_ocr`, skipped |
+| pdf | `pymupdf` + `LLMProvider.vision_extract` (Plan 24 T3) for image-mode | text-rich PDFs use text extraction (existing path); image-only / scanned PDFs trigger Plan 25 T3 page-rendering mode (`page.get_pixmap()` → PNG → Vision OCR per page); inlined as `[Page N: <text>]` blocks. Trigger: text extraction <200 chars (Plan 25 D14). Replaces pre-Plan-25 `needs_ocr` skip-and-flag behavior. |
 | email (pasted) | stdlib `email.parser` heuristic | treat as text with metadata extraction |
 | transcript .txt / .vtt / .srt / .docx | stdlib / `webvtt-py` / `python-docx` | strips timestamps, preserves speakers |
 | docx | `python-docx` (existing — also used by TranscriptDOCXHandler) | generic Word document (TranscriptDOCXHandler claims transcript-stem .docx first; DocxHandler is the fall-through); paragraphs + headings + tables → markdown; embedded images OCR'd via Claude Vision (Plan 24 T4 pipeline pass) |
@@ -255,6 +256,11 @@ OCR is **always-on** for embedded images (no threshold gating) per Plan 24 D5 �
 `brain migrate <folder>` walks a folder recursively (Obsidian vault, Notion export, plain Markdown day one; other adapters roadmap), classifies each file, batches the Integrate step per-domain, and saves a **dry-run patch tree** to `.brain/migrations/<timestamp>/`. User reviews the plan as a diff tree in the web UI; `brain migrate --apply` (or the Apply button) commits.
 
 Idempotency: each note stores a `content_hash` in frontmatter; re-ingesting an already-seen file is a no-op unless `--force`.
+
+**Walk-stage filtering** (Plan 25). `BulkImporter.plan()` applies two filters during the folder walk so the user sees only actionable files in the plan view:
+
+- **System file denylist** — cross-platform list of OS-generated files that are never user content: `.DS_Store`, `._*` AppleDouble, `__MACOSX/`, `.Spotlight-V100/`, `.fseventsd/`, `.Trashes/`, `.DocumentRevisions-V100/`, `.TemporaryItems/`, `.AppleDouble/`, `.AppleDB/`, `.AppleDesktop/`, `.LSOverride`, `.VolumeIcon.icns`, `.com.apple.timemachine.donotpresent` (Mac); `Thumbs.db`, `ehthumbs.db`, `ehthumbs_vista.db`, `Desktop.ini`, `desktop.ini`, `$RECYCLE.BIN/`, `System Volume Information/`, `pagefile.sys`, `hiberfil.sys`, `swapfile.sys` (Windows); `.directory`, `.Trash-*/` (Linux); `__pycache__/`, `node_modules/`, `.venv/`, `venv/` (dev artifacts). Pattern-based matches: `._*` AppleDouble, `~$*` Office temp files, `.Trash-*` Linux trash. Adds to the existing `_is_hidden` dotfile check (which catches `.git/`, `.idea/`, `.vscode/`, etc.).
+- **Unsupported-type pre-filter** — only files with extensions claimable by a registered handler enter the plan (`.txt`, `.md`, `.markdown`, `.pdf`, `.eml`, `.vtt`, `.srt`, `.docx`, `.pptx`). Video, archive, executable, image, and other non-text formats are silently walked over. URL/Tweet handlers aren't applicable to folder walks (those accept URLs, not file paths).
 
 ### Watched folders
 
@@ -305,7 +311,7 @@ WatchedFolder:
 
 - Any stage can fail per-source without blocking the batch.
 - Failures land in `raw/inbox/failed/<slug>.error.json` with stage, exception, and a retry command.
-- Extract stage validates minimum content length (e.g., <200 chars from a 5 MB PDF → `needs_ocr`, skip, no token spend).
+- Extract stage validates minimum content length. PDFs at <200 chars trigger Plan 25 T3 image-mode (page-render + Vision OCR per page) rather than skipping; text-shaped sources at <200 chars fall through to stage 3.5 Content sniff which quarantines to `raw/inbox/failed/<slug>.needs_review.json` with reason `non_meaningful_text` and skips remaining stages (zero LLM tokens). OCR-aware sniff exception applies (Plan 25 D15) — bodies with `[Image:` / `[Image (slide` / `[Page N:` markers skip the min-chars check.
 - Cost ceiling: projected ingest cost > configurable limit (default $1) pauses before Summarize/Integrate.
 
 ## 6. Chat and brainstorm loop
