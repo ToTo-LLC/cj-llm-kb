@@ -991,6 +991,44 @@ tasks/
 _Filled in at each task close. Standard receipt format mirrors Plan
 19-24._
 
+## T0 outcome
+
+**Status:** DONE.
+
+**Edits landed** in `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md`:
+
+1. **§5 Stages list — new "3.5 Content sniff" bullet** (line 215, between stages 3 Extract and 4 Archive). Used `3.5` numbering to avoid renumbering downstream references to stages 4-9. Includes the OCR-aware exception (D15) and lists OCR block markers (`[Image:`, `[Image (slide`, `[Page N:`). Cites PDF's pre-Plan-25 `needs_ocr` flag as precedent and notes it is replaced by T3 image-mode rendering.
+2. **§5 Day-one handlers — pdf row** (line 237). Now reads `pymupdf` + `LLMProvider.vision_extract` (Plan 24 T3) for image-mode; Notes describe the dual-path: text-rich PDFs use text extraction, image-only / scanned PDFs trigger page-rendering mode (`get_pixmap()` → PNG → Vision OCR), inlined as `[Page N: <text>]`, trigger <200 chars (D14). Explicitly states it replaces pre-Plan-25 `needs_ocr` skip-and-flag.
+3. **§5 Bulk import — Walk-stage filtering footnote** (lines 260-263, after idempotency line, before `### Watched folders`). Two bullets: (a) System file denylist with the full Mac + Windows + Linux + dev-junk list plus pattern matches (`._*`, `~$*`, `.Trash-*`); (b) Unsupported-type pre-filter listing the 9 handler-claimable extensions and noting URL/Tweet handlers don't apply to folder walks.
+
+**Bonus edit (consistency fix):** §5 Failure handling line 314 previously said `<200 chars from a 5MB PDF → needs_ocr, skip, no token spend`. This contradicted the new pdf handler row and the new content sniff stage. Updated to describe the bifurcated behavior: PDFs at <200 chars trigger T3 image-mode (no skip); text-shaped sources at <200 chars fall through to 3.5 Content sniff quarantine. Also restates the D15 OCR-aware sniff exception. This was not in the original T0 edit list but is required for internal consistency — the failure handling description was the only other spec location referencing the old `needs_ocr` skip-and-flag pattern, and leaving it would have contradicted both new edits.
+
+**Wording adjustments vs templates:** None. All three template edits applied verbatim modulo joining template text into existing markdown structure. The bonus failure-handling edit was authored to match Plan 25 D14 + D15 scope locks.
+
+**Internal-consistency check (per CLAUDE.md non-negotiable: spec update first; no contradictions with §3 Domain separation or §10 safety rails):**
+
+- §3 Domain separation (line 188): unaffected — Plan 25 changes are pipeline-internal (Extract → 3.5 Sniff → Archive ordering), not domain-routing.
+- §10 Safety rails (line 566): `scope_guard` reference is about path-allowlist enforcement, not ingest gating. Plan 25 quarantine writes go to `raw/inbox/failed/` (already-allowed location for stage failures per line 313). No new safety-rail surface.
+- §5 Watched folders: untouched. `BulkImporter.plan()` reference at line 283 is now compatible with the walk-stage filters (filtering applies symmetrically to bulk import and watched-folder initial sync).
+- §4 Vault schema: untouched. No new frontmatter fields introduced (quarantine sidecar `.needs_review.json` is sibling of `.error.json`, mirroring existing `Failures land in raw/inbox/failed/<slug>.error.json` pattern at line 313).
+- `needs_ocr` references: 3 total post-edit, all in Plan 25 context explicitly calling it the "pre-Plan-25 behavior" (lines 215, 237, 314). No orphan references remain.
+
+**Other spec sections touched:** §5 Failure handling (bonus consistency edit at line 314, as documented above). No other sections needed update.
+
+**Locked decisions covered:** D6 (spec update at T0) ✅; D14 (PDF image-mode trigger <200 chars) documented in handlers table + failure handling; D15 (OCR-aware sniff exception) documented in stages list + failure handling; D7 (no new deps) — confirmed, T0 is docs-only.
+
+**Files changed:**
+
+- `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` (+5 net lines: 1 stages bullet + 1 modified table row + 3 bulk-import lines + 1 modified failure-handling bullet)
+- `tasks/plans/25-bulk-import-quality.md` (this outcome receipt)
+
+**Commits (per D9, NOT pushed):**
+
+- _SHA TBD after commit_ — `docs(plan-25): T0 — spec §5 stages 3.5 + handlers pdf row + bulk filtering footnote`
+- _SHA TBD after commit_ — `docs(plan-25): T0 — outcome receipts for spec update`
+
+**Self-review concerns:** None blocking. The §5 stage 3.5 prose at line 215 is a single dense paragraph; if the spec convention is shorter bullets, future editors may want to split it into sub-bullets. Kept as-is for T0 to match the template verbatim and to keep numbering simple (sub-bullets would risk renumbering or visual confusion next to stages 4-9).
+
 ## Plan 26 candidate scope
 
 Filled in at T4 closure. Plan 24's 22 unaddressed carry-forwards (6
