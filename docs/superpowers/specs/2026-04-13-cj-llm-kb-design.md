@@ -366,6 +366,8 @@ Chat-pane button that opens a dialog: pick domain (prefilled with scope), type (
 
 `brain_api` WebSocket emits: `delta`, `tool_call`, `tool_result`, `cost_update`, `patch_proposed`, `error`. The web UI renders tokens as they arrive, tool calls as collapsible inline cards, patches as cards in the right-side Pending changes panel.
 
+`brain_api` also exposes `GET /api/bulk/walk-progress?path=<folder>` returning `text/event-stream` (Server-Sent Events) for real-time walk-phase progress in the bulk-import wizard's interstitial UI (replaces Plan 25's timer-driven pseudo-progress). Event types, in stream order: `walk_started`, `walk_progress` (emitted every 50 files), `walk_complete`, `walk_error`. Auth uses the existing Plan 5 token query-param pattern; Origin check is inherited from the existing middleware.
+
 ## 7. MCP server surface
 
 `brain_mcp` runs over stdio, uses the official `mcp` Python SDK, and wraps `brain_core`. Every tool has a JSON schema, typed outputs, and enforces scope via `Path.resolve()` checks.
