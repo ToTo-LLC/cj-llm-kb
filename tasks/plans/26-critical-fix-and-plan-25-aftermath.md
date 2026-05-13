@@ -468,11 +468,11 @@ failure and print `PLAN 26 DEMO OK` on success:
 
 ## T0 outcome
 
-(Filled at T0 close.)
+**Commit:** `61d4f33`. **Anchor deviation caught by implementer:** plan-doc said "§4 API endpoints" but the spec has no such subsection (§4 is "Vault schema"). Implementer routed the annotation to §6 "Streaming events" (line 369) — the spec's actual catalog for `brain_api` streaming surface — alongside the existing WebSocket event list. **2-line diff:** one paragraph + one blank line. **No other spec edits.** Plan-doc reality-gap pattern from Plan 25 T4 fired again — implementer judgment on the right anchor was correct.
 
 ## T1 outcome
 
-(Filled at T1 close.)
+**Commit:** `f15a243`. **Lines changed:** +103/−6 across 7 files. **Production call sites updated:** `classifier.py:66`, `pipeline.py:1138` (both `render_system()` callers gained `source_types=_SOURCE_TYPES_RENDERED` kwarg). **Test sites updated:** `test_classifier.py:118`, `test_classify_template.py:38` (both pass-through fixtures gained `source_types`). **Schema change pattern:** `_SOURCE_TYPE_VALUES = tuple(s.value for s in SourceType)` module-level constant + `Literal[*_SOURCE_TYPE_VALUES]` with `type: ignore[valid-type]` (mypy doesn't yet understand PEP 646 Literal unpacking; Python 3.12 runtime + Pydantic class-creation both resolve it correctly). **Rendered-list pattern:** `_SOURCE_TYPES_RENDERED = ", ".join(f"`{s.value}`" for s in SourceType)` (backtick-wrapped enum values joined by commas). **Test growth:** brain_core 1274 → 1278 (+4 new in `test_classify.py`); brain_mcp classify-related 5 pass / 1 skip unchanged. **RED-on-revert receipts verified:** stashing `schemas.py` → 3 schema tests fail with `literal_error … input_value='docx'`; stashing `classify.md` → `test_classify_prompt_advertises_all_source_types` fails with `'`docx`' missing from rendered`. **No new deps, no SourceType enum changes, no other Pydantic schema touched.**
 
 ## T2 outcome
 
