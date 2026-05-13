@@ -476,7 +476,7 @@ failure and print `PLAN 26 DEMO OK` on success:
 
 ## T2 outcome
 
-(Filled at T2 close.)
+**Commit:** `7f20b4d`. **Lines changed:** `pdf.py` module docstring (lines 1-31 collapsed to 1-20), stale comment at threshold constant block (former lines 45-49 trimmed), `class ScannedPDFError(HandlerError):` deleted (former lines 60-67). `test_handler_pdf.py` import line 6 narrowed; `test_pdf_handler_low_text_triggers_image_mode` docstring (lines 26-30) cleaned of Pre-Plan-25 narrative; `test_scanned_pdf_error_remains_handler_error_subclass` deleted (1 test, NOT 2 — implementer caught brief's off-by-one); new `test_scanned_pdf_error_no_longer_exported` ImportError pin added. **Grep verification:** zero matches in `src/`; 2 in `tests/` both inside the new regression pin (docstring + import-under-test). **Test count:** −1 net (1 deletion + 1 new pin). All pdf-handler tests green; full brain_core sweep green. **No PDFHandler logic touched; no deprecation cycle (D2 hard-remove).**
 
 ## T3 outcome
 
