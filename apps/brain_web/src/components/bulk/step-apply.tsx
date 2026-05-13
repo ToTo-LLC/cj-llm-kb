@@ -30,6 +30,28 @@ const TYPE_BADGE: Record<string, string> = {
   sys: "SYS",
 };
 
+/**
+ * Plan 25 T4 — ETA estimate.
+ *
+ * Napkin math: each file averages ~10s for the full extract → classify →
+ * summarize → integrate pipeline (real measurements during Plan 22 land
+ * 8–12s for text-shaped sources; PDFs/DOCX run longer when the OCR
+ * branch fires per Plan 25 T3). We compute ``remaining × 10s`` and
+ * format minutes for any value ≥ 60s; below that we elide the ETA line
+ * entirely (a sub-minute ETA is noise — the bar speaks for itself).
+ *
+ * If the apply loop has been running long enough that ``applyIdx > 0``,
+ * we could swap to a measured rolling rate, but per D11 (timer-based
+ * pseudo-progress) we keep the napkin assumption stable for v1.
+ */
+function formatEta(remaining: number): string | null {
+  if (remaining <= 0) return null;
+  const seconds = remaining * 10;
+  if (seconds < 60) return null;
+  const minutes = Math.ceil(seconds / 60);
+  return `~${minutes}m`;
+}
+
 export function StepApply(): React.ReactElement {
   const files = useBulkStore((s) => s.files);
   const folder = useBulkStore((s) => s.folder);
@@ -45,6 +67,10 @@ export function StepApply(): React.ReactElement {
 
   const included = files.filter((f) => f.include && !f.skip);
   const progress = included.length === 0 ? 0 : applyIdx / included.length;
+  // Plan 25 T4 — ETA from remaining files. Only shown while applying.
+  const eta = applying && !done && !cancelled
+    ? formatEta(included.length - applyIdx)
+    : null;
   const headline = done
     ? "Import complete."
     : cancelled
@@ -68,6 +94,19 @@ export function StepApply(): React.ReactElement {
       <p className="mt-1 text-sm text-[var(--text-muted)]">{secondary}</p>
 
       <div className="mt-4">
+        {/* Plan 25 T4 — apply-phase headline microcopy. While applying we
+            show "Importing N of M files" (per plan-doc verbatim). Once
+            complete we fall back to the "applied" count copy. */}
+        <div
+          className="mb-2 text-sm font-medium text-[var(--text)]"
+          data-testid="apply-headline"
+        >
+          {done
+            ? "Done!"
+            : applying && !cancelled
+              ? `Importing ${applyIdx} of ${included.length} files`
+              : `${applyIdx} of ${included.length} applied`}
+        </div>
         <div
           className="h-2 w-full overflow-hidden rounded-full bg-[var(--surface-subtle)]"
           role="progressbar"
@@ -78,13 +117,18 @@ export function StepApply(): React.ReactElement {
           data-testid="apply-progress"
         >
           <span
-            className="block h-full bg-[var(--accent)] transition-[width]"
+            className="block h-full bg-[var(--accent)] transition-all duration-500"
             style={{ width: `${Math.round(progress * 100)}%` }}
           />
         </div>
-        <div className="mt-1 text-xs text-[var(--text-muted)]">
-          {applyIdx} of {included.length} applied
-        </div>
+        {eta && (
+          <div
+            className="mt-2 text-xs text-[var(--text-muted)]"
+            data-testid="apply-eta"
+          >
+            Estimated time remaining: {eta}
+          </div>
+        )}
       </div>
 
       <div

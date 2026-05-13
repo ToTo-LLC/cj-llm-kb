@@ -30,6 +30,8 @@ import {
 } from "@/lib/state/bulk-store";
 import { useSystemStore } from "@/lib/state/system-store";
 
+import { WalkInterstitial } from "./walk-interstitial";
+
 function detectType(name: string): BulkFile["type"] {
   const lower = name.toLowerCase();
   if (lower.endsWith(".pdf")) return "pdf";
@@ -105,6 +107,9 @@ function inputToFiles(files: FileList): BulkFile[] {
 
 export function StepPickFolder(): React.ReactElement {
   const pickFolder = useBulkStore((s) => s.pickFolder);
+  const beginWalk = useBulkStore((s) => s.beginWalk);
+  const endWalk = useBulkStore((s) => s.endWalk);
+  const phase = useBulkStore((s) => s.phase);
   const pushToast = useSystemStore((s) => s.pushToast);
   const [path, setPath] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -113,6 +118,11 @@ export function StepPickFolder(): React.ReactElement {
   const runDryRun = React.useCallback(
     async (folderPath: string) => {
       setLoading(true);
+      // Plan 25 T4 — mark the walk phase start so <WalkInterstitial>
+      // renders the spinner + path + elapsed counter while the backend
+      // dry-run runs. ``pickFolder()`` clears walk state on success;
+      // ``endWalk(false)`` clears it on error.
+      beginWalk(folderPath);
       try {
         const res = await bulkImport({ folder: folderPath, dry_run: true });
         const data = res.data;
@@ -123,6 +133,7 @@ export function StepPickFolder(): React.ReactElement {
         // ``dry_run=true``. So ``status === "planned"`` is the expected
         // outcome — anything else surfaces a toast and bails.
         if (data?.status !== "planned") {
+          endWalk(false);
           pushToast({
             lead: "Dry-run unexpected.",
             msg: `Got status "${data?.status ?? "unknown"}"; expected "planned".`,
@@ -136,6 +147,7 @@ export function StepPickFolder(): React.ReactElement {
         // no cast needed.
         pickFolder(folderPath, planToFiles(data.items));
       } catch (err) {
+        endWalk(false);
         pushToast({
           lead: "Dry-run failed.",
           msg: err instanceof Error ? err.message : "Unknown error.",
@@ -145,7 +157,7 @@ export function StepPickFolder(): React.ReactElement {
         setLoading(false);
       }
     },
-    [pickFolder, pushToast],
+    [pickFolder, beginWalk, endWalk, pushToast],
   );
 
   const onFolderPick = async (ev: React.ChangeEvent<HTMLInputElement>) => {
@@ -168,6 +180,16 @@ export function StepPickFolder(): React.ReactElement {
     if (!path.trim()) return;
     await runDryRun(path.trim());
   };
+
+  // Plan 25 T4 — while the walk is in flight render only the
+  // interstitial. The picker UI hides so the user has one focus point
+  // (spinner + folder path + elapsed) instead of an enabled-but-loading
+  // form. On success ``pickFolder()`` advances to step 2 (this component
+  // unmounts); on error ``endWalk(false)`` resets phase to ``error`` and
+  // the picker UI re-renders so the user can retry.
+  if (phase === "walking") {
+    return <WalkInterstitial />;
+  }
 
   return (
     <div className="mx-auto flex max-w-xl flex-col items-center text-center">

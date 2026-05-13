@@ -52,6 +52,28 @@ export interface BulkResults {
   quarantined: string[];
 }
 
+/**
+ * Plan 25 T4 — per-phase progress UI.
+ *
+ * The wizard has two long-running phases that need visible feedback:
+ *
+ *   - **Walking** (Step 1 — pick folder): backend ``BulkImporter.plan()``
+ *     walks the folder + classifies files. Can take 10–30s for thousands
+ *     of files. Backend doesn't stream during walk so we render a spinner +
+ *     folder path + elapsed time. ``walkPath`` and ``walkStartedAt`` are
+ *     set when the dry-run kicks; both reset when the walk completes
+ *     (success or error).
+ *   - **Applying** (Step 4 — apply): JS-driven serial ingest loop already
+ *     emits REAL per-file progress via ``applyIdx``. T4 adds ``applyStartedAt``
+ *     for an ETA estimate ("Estimated time remaining: ~Xm") computed from
+ *     a rolling 10s/file napkin assumption.
+ *
+ * Per D11 (timer-based pseudo-progress): we deliberately keep the apply
+ * loop's REAL progress (already accurate) and only synthesize state for
+ * the walk phase where the backend doesn't stream.
+ */
+export type BulkPhase = "idle" | "walking" | "applying" | "complete" | "error";
+
 export interface BulkState {
   step: 1 | 2 | 3 | 4;
   folder: BulkFolder | null;
@@ -63,6 +85,11 @@ export interface BulkState {
   cancelled: boolean;
   done: boolean;
   results: BulkResults;
+  // Plan 25 T4 — phase tracking
+  phase: BulkPhase;
+  walkPath: string | null;
+  walkStartedAt: number | null;
+  applyStartedAt: number | null;
 
   // actions
   pickFolder: (path: string, files: BulkFile[]) => void;
@@ -75,6 +102,9 @@ export interface BulkState {
   startApply: () => Promise<void>;
   cancel: () => void;
   reset: () => void;
+  // Plan 25 T4 — phase actions
+  beginWalk: (path: string) => void;
+  endWalk: (ok: boolean) => void;
 }
 
 const INITIAL: Pick<
@@ -89,6 +119,10 @@ const INITIAL: Pick<
   | "cancelled"
   | "done"
   | "results"
+  | "phase"
+  | "walkPath"
+  | "walkStartedAt"
+  | "applyStartedAt"
 > = {
   step: 1,
   folder: null,
@@ -100,6 +134,10 @@ const INITIAL: Pick<
   cancelled: false,
   done: false,
   results: { applied: [], failed: [], quarantined: [] },
+  phase: "idle",
+  walkPath: null,
+  walkStartedAt: null,
+  applyStartedAt: null,
 };
 
 function nowPicked(): string {
@@ -120,7 +158,34 @@ export const useBulkStore = create<BulkState>((set, get) => ({
       cancelled: false,
       done: false,
       results: { applied: [], failed: [], quarantined: [] },
+      // Plan 25 T4 — walk completed successfully; clear walk state
+      phase: "idle",
+      walkPath: null,
+      walkStartedAt: null,
     });
+  },
+
+  // Plan 25 T4 — begin/end walk lifecycle. The walk phase has no streaming
+  // progress signal from the backend; the UI renders a spinner + folder
+  // path + elapsed time off ``walkStartedAt``. ``endWalk(false)`` clears
+  // walk state without advancing the step (toast in the caller surfaces
+  // the error).
+  beginWalk: (path) => {
+    set({
+      phase: "walking",
+      walkPath: path,
+      walkStartedAt: Date.now(),
+    });
+  },
+
+  endWalk: (ok) => {
+    if (ok) {
+      // pickFolder() already cleared walk state. Defensive: if a caller
+      // didn't reach pickFolder(), still drop us back to idle.
+      set({ phase: "idle", walkPath: null, walkStartedAt: null });
+    } else {
+      set({ phase: "error", walkPath: null, walkStartedAt: null });
+    }
   },
 
   setStep: (step) => set({ step }),
@@ -169,6 +234,9 @@ export const useBulkStore = create<BulkState>((set, get) => ({
       cancelled: false,
       done: false,
       results: { applied: [], failed: [], quarantined: skipped },
+      // Plan 25 T4 — apply phase markers for ETA computation
+      phase: "applying",
+      applyStartedAt: Date.now(),
     });
 
     for (let i = 0; i < queue.length; i++) {
@@ -200,7 +268,7 @@ export const useBulkStore = create<BulkState>((set, get) => ({
       }
     }
 
-    set({ applying: false, done: true });
+    set({ applying: false, done: true, phase: "complete" });
   },
 
   cancel: () => set({ cancelled: true }),
