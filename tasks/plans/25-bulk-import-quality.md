@@ -1029,6 +1029,82 @@ _Filled in at each task close. Standard receipt format mirrors Plan
 
 **Self-review concerns:** None blocking. The §5 stage 3.5 prose at line 215 is a single dense paragraph; if the spec convention is shorter bullets, future editors may want to split it into sub-bullets. Kept as-is for T0 to match the template verbatim and to keep numbering simple (sub-bullets would risk renumbering or visual confusion next to stages 4-9).
 
+## T1 outcome
+
+**Status:** DONE.
+
+**Files modified:**
+
+- `packages/brain_core/src/brain_core/ingest/bulk.py` (+101 LOC) — added `_SYSTEM_FILES` frozenset (Mac + Windows + Linux + dev-artifact lists per D8 + plan-doc template; 32 entries), `_VALID_EXTENSIONS` frozenset (9 extensions per spec line 263), `_is_system_file()` predicate (exact-name + `._*` AppleDouble + `.Trash-*` Linux trash + `~$*` Office temp patterns), and 3 new pre-dispatch filter checks in `BulkImporter.plan()` walk loop (system-file name check, ancestor-path system-dir check, extension whitelist check). Filter checks land BETWEEN the existing `_is_hidden` check and the `dispatch` call — order matters because filtered files must be invisible (NOT in `plan.skipped`) per D2. Walk integration at `bulk.py:222-238` (post-edit line range).
+
+- `packages/brain_core/tests/ingest/test_bulk.py` (~+22 / -3 LOC) — adjusted the shared `_make_folder` fixture and the `test_plan_returns_items_and_skips` assertion to match the new D2 contract: `garbage.xyz` (unsupported `.xyz` extension) is now silently filtered (NOT in `skipped`); added `unclaimed.eml` to keep the `plan.skipped` semantic alive (whitelisted extension + no Path-based handler → dispatcher rejection → `skipped`).
+
+**Files created:**
+
+- `packages/brain_core/tests/ingest/test_bulk_walk_filtering.py` (290 LOC, 12 tests) — covers `.DS_Store` exact-name, `Thumbs.db` exact-name, `__MACOSX/` ancestor-path, `$RECYCLE.BIN/` ancestor-path, `.mov` unsupported, `.zip` unsupported, `._*` AppleDouble pattern, `~$*` Office temp pattern, `.Trash-*` Linux pattern, all 4 path-claimable extensions pass (`.txt`/`.pdf`/`.docx`/`.pptx`), combined filter coverage (hidden + system + unsupported all pruned with positive control), `__pycache__/` dev-artifact ancestor-path.
+
+**`_VALID_EXTENSIONS` final list (verified by grepping each handler's `can_handle`):**
+
+`.txt`, `.md`, `.markdown` (TextHandler `_EXTS`); `.pdf` (PDFHandler); `.vtt`, `.srt` (TranscriptVTTHandler `_EXTS`); `.docx` (DocxHandler + TranscriptDOCXHandler); `.pptx` (PptxHandler); `.eml` (kept for forward-compat — EmailHandler currently only claims `str` so `.eml` files on disk land in `plan.skipped` via dispatcher rejection, not items).
+
+**Additional system files beyond the spec footnote:**
+
+The spec §5 Walk-stage filtering footnote (line 262) lists ~27 system files. The plan-doc T1 template adds 5 more: `Icon\r` (Mac folder custom icon), `Network Trash Folder` (Mac SMB share trash), `.tox` (Python tox cache), `.idea` (JetBrains), `.vscode` (Visual Studio Code). Kept the superset per the plan-doc T1 explicit list — `.idea`/`.vscode` are also caught by `_is_hidden` (dotfiles) but live in `_SYSTEM_FILES` for self-documentation per the plan-doc note ("belt-and-suspenders + makes the denylist self-documenting").
+
+**Walk-loop integration location:**
+
+`packages/brain_core/src/brain_core/ingest/bulk.py:222-238` (post-edit) — filter checks land between `_is_hidden` (line ~219) and `dispatch` (line ~244). Order:
+1. `max_files` cap check (existing)
+2. `is_file()` / `is_symlink()` skip (existing)
+3. `_is_hidden` dotfile/ancestor check (existing)
+4. **NEW T1:** `_is_system_file(p.name)` — exact-name + pattern match
+5. **NEW T1:** ancestor `_is_system_file(part)` — deep-path system-dir exclusion
+6. **NEW T1:** `p.suffix.lower() not in _VALID_EXTENSIONS` — silent extension filter
+7. `dispatch(p, handlers=...)` — adds to `skipped` on DispatchError (existing)
+
+**Test count and pass status:**
+
+- New tests: 12 (all pass, 0.50s)
+- Existing test adjusted: 1 (`test_plan_returns_items_and_skips`)
+- Full brain_core suite baseline (pre-T1): 1234 collected, 1234 passed + 5 skipped
+- Full brain_core suite post-T1: 1246 collected (+12), 1241 passed + 5 skipped (12.73s)
+
+**Verification recipe (re-run):**
+
+```bash
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/ingest/test_bulk_walk_filtering.py -v
+# → 12 passed
+
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# → 1241 passed, 5 skipped
+```
+
+**Locked decisions covered:** D2 (unsupported-type pre-filter silent at walk stage, NOT in `skipped`) ✅; D7 (no new dependencies — pure stdlib) ✅; D8 (bundled system-file denylist + unsupported-type pre-filter in one task / one commit) ✅.
+
+**Commits (per D9, NOT pushed):**
+
+- _SHA TBD_ — `feat(plan-25): T1 — BulkImporter walk filter (system files + valid extensions)`
+- _SHA TBD_ — `docs(plan-25): T1 — outcome receipts`
+
+**Self-review findings:**
+
+- **Reviewer gates per plan-doc §T1 review block:**
+  - (a) `_SYSTEM_FILES` covers Mac (15 entries) + Windows (10) + Linux (1) + dev artifacts (7) — ✅ matches plan-doc template.
+  - (b) Pattern-based checks for `._*`, `.Trash-*`, `~$*` — ✅ all three implemented in `_is_system_file`.
+  - (c) `_VALID_EXTENSIONS` matches handler-claimable suffixes — ✅ verified by grepping each handler's `can_handle`; `.eml` retained per plan-doc template (forward-compat, lands in `skipped` not silent-filter for now).
+  - (d) Walk filters apply BEFORE the dispatcher — ✅ all three new checks are between `_is_hidden` and `dispatch`.
+  - (e) Deep-path system-dir filtering — ✅ test `test_macosx_dir_filtered` constructs `__MACOSX/file.txt` (filename itself is plain `file.txt`, not a system match) and asserts exclusion via ancestor-path traversal.
+  - (f) Full brain_core suite stays green — ✅ 1241 passed, 5 skipped.
+
+- **No concerns blocking T2.** One minor follow-up worth flagging for T2 (content sniff) reviewer attention: the `.eml` case is the ONLY currently-whitelisted extension with no Path-based handler. If a future plan registers a Path-based EmailHandler, the `test_plan_returns_items_and_skips` fixture's `unclaimed.eml` will need adjustment — the test asserts dispatcher rejection lands it in `skipped`. Noted here for posterity; not a T1 blocker.
+
+- **Cross-platform check:** `_SYSTEM_FILES` is a frozenset of exact filenames — comparison is case-sensitive. This matches reality on macOS (case-insensitive filesystem coalesces `Thumbs.db` and `thumbs.db` at the FS layer, so a single case-sensitive check suffices) and Windows (NTFS is case-insensitive at the OS layer; entries like `desktop.ini` AND `Desktop.ini` are both in the set as belt-and-suspenders). Linux is case-sensitive but the affected files (`.directory`, `.Trash-*`) follow Linux conventions exactly. No cross-platform concerns surfaced.
+
+- **Use of `\r` literal:** `"Icon\r"` is the actual filename macOS uses for folder custom icons (literal CR character in the filename, no extension). Verified the frozenset entry uses the exact `\r` escape and not a string-with-literal-backslash-r. Python frozenset construction handles this correctly; `_is_system_file` does an exact `name in _SYSTEM_FILES` comparison so the CR byte must match exactly. Documented in the inline comment.
+
 ## Plan 26 candidate scope
 
 Filled in at T4 closure. Plan 24's 22 unaddressed carry-forwards (6
