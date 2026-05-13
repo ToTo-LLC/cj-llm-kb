@@ -507,10 +507,96 @@ Effectively 2 distinct physical sites collapsing the 3 D11 lifecycle scenarios. 
 
 ## Plan 27 candidate scope
 
-(Filled at T5 close — will inherit Plan 26's surfaced items + the
-remaining 25 carry-forwards from Plan 25's tail block, minus the 4
-addressed in Plan 26.)
+See `tasks/todo.md` tail block — section
+`## Plan 27 candidate scope (2 NEW Plan-26-surfaced + 6 Plan-24-surfaced
++ 13 Plan 22 carry-forwards + 4 preserved NOT-DOINGs)`. Plan 26 closed 4
+items from Plan 25's tail block (item #0 CRITICAL ClassifyOutput
+Literal addressed by T1; #1 `ScannedPDFError` hard-remove by T2; #2 SSE
+walk progress by T3; #3 per-file filename apply UI by T4) and surfaced
+2 NEW items (#1a workspace `editable = true` flip — now 6-plan
+recurring; #2a `truncatePath` rule-of-three reminder). Carry-forwards
+from Plan 22 + Plan 24 roll forward unchanged.
 
 ## Review
 
-(Filled at T5 close.)
+**Tag:** `plan-26-critical-fix-and-plan-25-aftermath` cut locally at
+T5 close on green 10-gate demo (`scripts/demo-plan-26.py` prints
+`PLAN 26 DEMO OK`).
+
+**Closure summary.** 6 work units across 4 substantive tasks + 1
+foundation/spec annotation + 1 closure, matching the Plan 25 shape.
+Per-task commit cadence: T0 = 1 commit + 1 outcome receipt; T1 = 1
+commit + 1 outcome receipt; T2 = 1 commit + 1 outcome receipt; T3 = 2
+commits (backend + frontend) + 2 outcome-receipt commits; T4 = 1
+commit + 1 outcome receipt; T5 = 3 commits per task spec (demo +
+lessons + todo/plan-doc Review). Plan 26 closes 3 Plan-25-surfaced
+items (#1 / #2 / #3) AND the CRITICAL pre-existing Plan 24 gap (#0).
+
+**Verification receipts:**
+- **brain_core:** 1274 → 1289 across T1 (+4) + T2 (−1) + T3 backend
+  (+11) = +14 net. Full sweep green via the canonical iCloud-safe
+  recipe (`find .venv -name "*.pth" | xargs -I{} chflags 0 {} 2>/dev/
+  null; uv run pytest packages/brain_core/`).
+- **brain_api:** 223 → 228 across T3 backend (+5 SSE endpoint
+  behaviors). mypy --strict clean on new code.
+- **brain_web:** 599 → 617 across T3 frontend (+6 walk-interstitial
+  EventSource lifecycle) + T4 (+7 bulk-store + step-apply pins) = +18.
+  `pnpm vitest run` green; `pnpm tsc --noEmit` clean.
+- **Demo:** 10/10 gates green; final stdout `PLAN 26 DEMO OK`. Gates
+  6 + 7 exercise live behaviour (real `IngestPipeline` constructed
+  for `plan_streaming()` async consumption + FastAPI TestClient SSE
+  response parsing); gates 9 + 10 shell out to `pnpm vitest run`
+  per `feedback_tsc_vs_vitest.md`.
+
+**Bumps:**
+- **New files (6):** `walk_events.py`, `bulk_walk_progress.py`,
+  `bulk-progress.ts`, `test_bulk_streaming.py`,
+  `test_bulk_walk_progress_endpoint.py`, `demo-plan-26.py`.
+- **New endpoints (1):** `GET /api/bulk/walk-progress` SSE stream.
+- **New event types (4):** `WalkStarted` / `WalkProgress` /
+  `WalkComplete` / `WalkError` Pydantic models + `WalkEvent`
+  discriminated-union alias.
+- **No new dependencies confirmed:** stdlib-only SSE (no
+  `sse-starlette`); native browser `EventSource` (no JS library);
+  no new pip packages, no new npm packages. The
+  `_SOURCE_TYPE_VALUES` Literal-unpack pattern uses Python 3.12
+  runtime + Pydantic v2 features both already present.
+- **No schema changes:** T1 derives the Literal from an existing enum;
+  no new fields, no new tables, no new frontmatter keys.
+- **One spec annotation:** §6 "Streaming events" gained one paragraph
+  + one blank line documenting the new SSE endpoint alongside the
+  existing chat-WebSocket entry.
+
+**Backlog forward (Plan 27 + beyond):**
+- 3 Plan-25-surfaced items closed (#1 / #2 / #3) plus CRITICAL #0.
+- 22+ items remain in the Plan 27 candidate-scope tail block:
+  - 2 NEW Plan-26-surfaced (workspace editable flip — 6-plan
+    recurring, promoted to commitment-candidate; truncatePath
+    rule-of-three reminder)
+  - 6 Plan-24-surfaced (#4-9, unchanged)
+  - 13 Plan 22 carry-forwards (UX polish 8 + Architectural 4 +
+    Dev-loop 1 superseded by NEW #1a)
+  - 4 preserved NOT-DOINGs (Plan 17 / earlier carry-forwards)
+- The CRITICAL #0 closure deserves a callout: Plan 24 shipped 2
+  new `SourceType` enum values + handlers but didn't extend the
+  classifier output schema. Plan 25 T2 review caught this; Plan 26
+  T1 closed it permanently with the runtime-derived Literal pattern.
+  Future SourceType additions are now drift-immune.
+
+**Plan-doc reality-gap pattern fired AGAIN at T0** — same class as
+Plan 25 T4 (plan-doc said "§4 API endpoints" but spec §4 is "Vault
+schema"; the actual streaming-surface catalog is §6). The Plan 26
+implementer correctly routed the annotation to §6 without surfacing
+a question. Plan 25 T4's lesson generalized to spec anchors; Plan
+26 T0 confirms this is now a 2-instance pattern. Plan 27 plan-doc
+authoring should pre-flight grep spec section anchors before writing
+task briefs. Captured in lessons.md.
+
+**Workspace `editable = false` friction hit AGAIN at T5 closure** —
+Plan 26 T5 demo returned 404 on `/api/bulk/walk-progress`; root cause
+was a stale brain_api install in `.venv` (workspace pyproject pins
+`editable = false`, so source edits don't propagate without
+`uv sync --reinstall-package brain_api`). This is now a 6-plan
+recurring pattern (Plan 21 + 22 + 23 + 24 + 25 + 26). The remedy is
+in the Plan 27 candidate-scope tail block as item #1a, promoted to
+commitment-candidate. Captured in lessons.md.
