@@ -24,6 +24,7 @@ from fastapi import FastAPI
 
 from brain_api.auth import OriginHostMiddleware, RequestIDMiddleware
 from brain_api.context import build_app_context
+from brain_api.endpoints import bulk_walk_progress as bulk_walk_progress_endpoint
 from brain_api.endpoints import setup_status as setup_status_endpoint
 from brain_api.endpoints import token as token_endpoint
 from brain_api.endpoints import upload as upload_endpoint
@@ -422,6 +423,10 @@ def create_app(
     app.include_router(setup_status_endpoint.router)
     app.include_router(token_endpoint.router)
     app.include_router(upload_endpoint.router)
+    # Plan 26 T3: SSE stream for the bulk-import wizard's walk phase.
+    # Registered alongside the other Plan 08 self-service endpoints so
+    # ``/api/bulk/walk-progress`` resolves before the static SPA mount.
+    app.include_router(bulk_walk_progress_endpoint.router)
 
     # Task 15: project-wide exception handlers (D7a mapping). Installed AFTER
     # router include so the handlers wrap every endpoint's exceptions — middleware

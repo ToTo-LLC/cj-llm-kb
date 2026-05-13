@@ -6,10 +6,21 @@ Workflow:
   2. Inspect the plan (print it, present it to the user, etc.).
   3. Call `apply(plan, ...)` to run the full IngestPipeline per item and return
      a list of IngestResult in the same order as plan.items.
+
+Plan 26 T3 adds :meth:`BulkImporter.plan_streaming` — an async generator
+yielding :class:`brain_core.ingest.walk_events.WalkEvent` instances so
+brain_api can serve real walk-phase progress to the bulk-import wizard
+over Server-Sent Events. The streaming path does NOT touch the
+classifier and does NOT return a :class:`BulkPlan`; it exists purely
+for UI progress. The wizard still calls :meth:`plan` separately to get
+the actual planned items (D-decision (a) in Plan 26).
 """
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +29,18 @@ from brain_core.ingest.dispatcher import DispatchError, dispatch
 from brain_core.ingest.hashing import content_hash
 from brain_core.ingest.pipeline import IngestPipeline
 from brain_core.ingest.types import IngestResult
+from brain_core.ingest.walk_events import (
+    WalkComplete,
+    WalkError,
+    WalkEvent,
+    WalkProgress,
+    WalkStarted,
+)
+
+# Plan 26 T3 D9: emit a WalkProgress event every N candidate files seen
+# during the walk. Cuts SSE chatter to ~one frame per 50ms even on a
+# fast SSD walk over 10k files (vs ~one per ms if we emitted per file).
+_WALK_PROGRESS_INTERVAL: int = 50
 
 
 @dataclass(frozen=True)
@@ -357,3 +380,162 @@ class BulkImporter:
                 )
             results.append(result)
         return results
+
+    async def plan_streaming(
+        self,
+        source_root: Path,
+    ) -> AsyncIterator[WalkEvent]:
+        """Yield walk-phase progress events for the bulk-import wizard.
+
+        Plan 26 T3. This method exists ONLY to drive the SSE endpoint's
+        progress UI — it does NOT classify, does NOT compute duplicate
+        hints, does NOT return a :class:`BulkPlan`, and does NOT mutate
+        the vault. The wizard calls :meth:`plan` separately AFTER the
+        stream completes to obtain the actual planned items (D-decision
+        (a) in ``tasks/plans/26-critical-fix-and-plan-25-aftermath.md``).
+
+        Event sequence:
+
+        - 1x :class:`WalkStarted` immediately, before the first ``os.scandir``.
+        - 1x :class:`WalkProgress` every :data:`_WALK_PROGRESS_INTERVAL`
+          candidate files counted. The counter increments BEFORE the
+          system-file / extension filter so the user sees forward
+          motion even when most of the tree is OS clutter.
+        - 1x :class:`WalkComplete` on natural exit, carrying the final
+          ``total_count`` of files that PASSED all filters AND were
+          claimed by the dispatcher. ``plan_id`` is a fresh UUID4 for
+          telemetry correlation only.
+        - 1x :class:`WalkError` in place of :class:`WalkComplete` when
+          the walk raises. The exception is re-raised AFTER the event
+          is yielded so the endpoint sees a clean stream close + a
+          structured failure for logging.
+
+        Cancellation:
+
+        :class:`asyncio.CancelledError` (from the ASGI request scope
+        closing) is propagated WITHOUT emitting a :class:`WalkError` —
+        the client is already gone; one final event would never reach
+        them. The generator simply re-raises so the server-side stream
+        wrapper can clean up.
+
+        Filter parity with :meth:`plan`: this method MUST stay
+        consistent with :meth:`plan` on which files count toward
+        ``total_count``. Both paths share the helper triad
+        :func:`_is_hidden`, :func:`_is_system_file`, and the
+        :data:`_VALID_EXTENSIONS` whitelist, plus the
+        :func:`brain_core.ingest.dispatcher.dispatch` claim check.
+        """
+        plan_id = str(uuid.uuid4())
+        yield WalkStarted(path=str(source_root))
+
+        files_seen = 0  # candidate-files counter (drives WalkProgress)
+        total_count = 0  # files that passed every filter
+
+        try:
+            # Existence + readability are checked BEFORE walking because
+            # ``Path.glob`` swallows FileNotFoundError / PermissionError
+            # on the root directory itself and returns an empty iterator
+            # — silently succeeding when the caller almost certainly
+            # wants a structured error. The brain_api endpoint also runs
+            # a pre-check but the model layer cannot assume that (this
+            # method is called by tests and may be wired into other
+            # consumers in the future).
+            if not source_root.exists():
+                exc_nf = FileNotFoundError(
+                    f"source_root does not exist: {source_root}"
+                )
+                yield WalkError(
+                    error_message=str(exc_nf),
+                    error_code="path_not_found",
+                )
+                raise exc_nf
+            if not source_root.is_dir():
+                exc_nf = FileNotFoundError(
+                    f"source_root is not a directory: {source_root}"
+                )
+                yield WalkError(
+                    error_message=str(exc_nf),
+                    error_code="path_not_found",
+                )
+                raise exc_nf
+            try:
+                # Touch the directory once so a chmod-0 dir surfaces as
+                # PermissionError BEFORE glob silently returns empty.
+                next(iter(source_root.iterdir()), None)
+            except PermissionError as exc:
+                yield WalkError(
+                    error_message=str(exc),
+                    error_code="permission_denied",
+                )
+                raise
+
+            try:
+                candidates = sorted(source_root.glob("**/*"))
+            except FileNotFoundError as exc:
+                yield WalkError(
+                    error_message=str(exc),
+                    error_code="path_not_found",
+                )
+                raise
+            except PermissionError as exc:
+                yield WalkError(
+                    error_message=str(exc),
+                    error_code="permission_denied",
+                )
+                raise
+
+            for p in candidates:
+                # Skip non-files and symlinks (consistent with plan()).
+                if not p.is_file() or p.is_symlink():
+                    continue
+
+                # Increment the "seen" counter BEFORE the OS-clutter filter
+                # so the user sees movement on noisy trees. WalkProgress
+                # reports files-examined, not files-that-will-be-ingested.
+                files_seen += 1
+                if files_seen % _WALK_PROGRESS_INTERVAL == 0:
+                    yield WalkProgress(files_seen=files_seen, current_path=str(p))
+
+                # Hidden / system-file / extension filters — same triad as
+                # plan(). Filtered files are silently dropped from the
+                # total_count, matching the plan-view's "you never see OS
+                # clutter" contract.
+                if _is_hidden(p, root=source_root):
+                    continue
+                if _is_system_file(p.name):
+                    continue
+                try:
+                    rel_parts = p.relative_to(source_root).parts
+                except ValueError:
+                    rel_parts = ()
+                if any(_is_system_file(part) for part in rel_parts):
+                    continue
+                if p.suffix.lower() not in _VALID_EXTENSIONS:
+                    continue
+
+                # Dispatcher claim check — uses the pipeline's handler
+                # list so config-supplied tunables match plan().
+                try:
+                    await dispatch(p, handlers=self._pipeline.handlers)
+                except DispatchError:
+                    # Claimed-but-unsupported — these land in plan.skipped
+                    # for the wizard's review, but for progress-reporting
+                    # purposes they DO NOT advance total_count.
+                    continue
+
+                total_count += 1
+
+            yield WalkComplete(total_count=total_count, plan_id=plan_id)
+        except asyncio.CancelledError:
+            # Client disconnect mid-walk — let the request scope unwind
+            # cleanly. Do NOT yield a WalkError (no one will receive it)
+            # and do NOT swallow the cancel (the stream wrapper relies on
+            # it for cleanup signaling).
+            raise
+        except (FileNotFoundError, PermissionError):
+            # WalkError already yielded above; re-raise the original
+            # exception so the endpoint can log it via structlog.
+            raise
+        except Exception as exc:
+            yield WalkError(error_message=str(exc), error_code="internal_error")
+            raise
