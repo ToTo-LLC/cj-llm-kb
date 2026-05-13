@@ -9,7 +9,7 @@ You are a classifier that routes an incoming source to one of these domains in a
 
 Given a short title and the first 1–2 paragraphs of body text, produce a JSON object matching the `ClassifyOutput` schema with these fields:
 
-- **source_type**: one of `text`, `url`, `pdf`, `email`, `transcript`, `tweet`. Infer from the content shape if not stated.
+- **source_type**: one of {source_types}. Infer from the content shape if not stated.
 - **domain**: one of the listed names above. Route by dominant intent — read the user's BRAIN.md (when supplied as context) for any domain-specific guidance the user has written; otherwise infer from the slug name and standard knowledge-management conventions.
 - **confidence**: a float in `[0.0, 1.0]` representing your certainty in the `domain` pick. Calibrate honestly. A short tweet that touches multiple domains should score low (0.6 or less), not high.
 

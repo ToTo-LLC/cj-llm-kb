@@ -7,10 +7,18 @@ from dataclasses import dataclass
 
 from brain_core.budget import PerDomainBudgetGuard
 from brain_core.config.schema import DEFAULT_DOMAINS, Config
+from brain_core.ingest.types import SourceType
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest
 from brain_core.prompts.loader import load_prompt
 from brain_core.prompts.schemas import ClassifyOutput
+
+# Plan 26 T1: render the classify prompt's source_type enum from the live
+# SourceType enum (the prompt template's ``{source_types}`` placeholder gets
+# the backticked comma-joined list). Keeping this as a module-level constant
+# is fine — the SourceType enum is fixed at import time, and any future
+# expansion (e.g. Plan 24 docx/pptx) will land here on the next module load.
+_SOURCE_TYPES_RENDERED: str = ", ".join(f"`{s.value}`" for s in SourceType)
 
 
 @dataclass(frozen=True)
@@ -55,7 +63,7 @@ async def classify(
     """
     prompt = load_prompt("classify")
     domains_text = ", ".join(f"`{d}`" for d in allowed_domains)
-    system = prompt.render_system(domains=domains_text)
+    system = prompt.render_system(domains=domains_text, source_types=_SOURCE_TYPES_RENDERED)
     user_content = prompt.render(title=title, snippet=snippet)
     # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
     # round-trip. ``domain`` is typically ``None`` here (the auto-detect

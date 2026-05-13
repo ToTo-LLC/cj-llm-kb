@@ -35,7 +35,9 @@ def test_classify_system_renders_listed_domains_only() -> None:
     enum (D5).
     """
     prompt = load_prompt("classify")
-    rendered = prompt.render_system(domains="`research`, `hobby`")
+    rendered = prompt.render_system(
+        domains="`research`, `hobby`", source_types="`text`, `url`"
+    )
 
     assert "{domains}" not in rendered
     # The enum line lists each call-allowed slug as a backticked code

@@ -74,6 +74,14 @@ _TEXT_SHAPED_SOURCE_TYPES: frozenset[SourceType] = frozenset({
     SourceType.PDF,
 })
 
+# Plan 26 T1: classify prompt's ``{source_types}`` placeholder gets a
+# backticked, comma-joined render of the SourceType enum. Keeping this
+# at module level mirrors classifier.py — both call sites stay in
+# lockstep with the live enum, and any future addition (e.g. another
+# Plan 24-style expansion) updates both renders without touching the
+# call sites themselves.
+_SOURCE_TYPES_RENDERED: str = ", ".join(f"`{s.value}`" for s in SourceType)
+
 
 def _looks_like_meaningful_text(body_text: str, *, min_chars: int = 200) -> bool:
     """Cheap heuristic: does ``body_text`` look like human-readable content?
@@ -1127,7 +1135,7 @@ class IngestPipeline:
         """
         prompt = load_prompt("classify")
         domains_text = ", ".join(f"`{d}`" for d in allowed_domains)
-        system = prompt.render_system(domains=domains_text)
+        system = prompt.render_system(domains=domains_text, source_types=_SOURCE_TYPES_RENDERED)
         user_content = prompt.render(title=title, snippet=snippet)
         # Plan 16 Task 28.5: per-domain budget guard fires BEFORE the LLM
         # round-trip. ``domain`` here is ``domain_override`` (when supplied)

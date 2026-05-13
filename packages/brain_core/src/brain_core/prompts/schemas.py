@@ -6,9 +6,17 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
+from brain_core.ingest.types import SourceType
 from brain_core.vault.types import PatchSet
 
 SCHEMAS: dict[str, type[BaseModel]] = {}
+
+# Plan 26 T1: keep the ClassifyOutput.source_type Literal in lockstep with the
+# SourceType enum. Hardcoding the tuple here let docx/pptx (Plan 24) slip past
+# the LLM-reply validator silently — adding a new SourceType would only fail at
+# the next live classify call, never at module-import time. Derive at import
+# time so any future enum addition is caught the moment the schema is loaded.
+_SOURCE_TYPE_VALUES: tuple[str, ...] = tuple(s.value for s in SourceType)
 
 
 class SummarizeOutput(BaseModel):
@@ -31,7 +39,7 @@ class ClassifyOutput(BaseModel):
     validator is permissive — the field type still rejects non-strings.
     """
 
-    source_type: Literal["text", "url", "pdf", "email", "transcript", "tweet"]
+    source_type: Literal[*_SOURCE_TYPE_VALUES]  # type: ignore[valid-type]
     domain: str
     confidence: float = Field(ge=0.0, le=1.0)
 

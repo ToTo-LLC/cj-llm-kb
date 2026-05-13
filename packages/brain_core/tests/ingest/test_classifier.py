@@ -96,6 +96,7 @@ async def test_classify_request_shape() -> None:
     template (which still contains ``{domains}`` literally).
     """
     from brain_core.config.schema import DEFAULT_DOMAINS
+    from brain_core.ingest.types import SourceType
 
     fake = FakeLLMProvider()
     output = ClassifyOutput(source_type="pdf", domain="research", confidence=0.9)
@@ -113,9 +114,13 @@ async def test_classify_request_shape() -> None:
 
     prompt = load_prompt("classify")
     expected_domains_text = ", ".join(f"`{d}`" for d in DEFAULT_DOMAINS)
-    expected_system = prompt.render_system(domains=expected_domains_text)
+    expected_source_types = ", ".join(f"`{s.value}`" for s in SourceType)
+    expected_system = prompt.render_system(
+        domains=expected_domains_text, source_types=expected_source_types
+    )
     assert request.system == expected_system
     assert "{domains}" not in request.system  # template was rendered
+    assert "{source_types}" not in request.system  # Plan 26 T1
     assert request.temperature == 0.0
     assert request.max_tokens == 256
     assert request.messages[0].role == "user"
