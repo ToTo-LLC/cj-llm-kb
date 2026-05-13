@@ -478,9 +478,16 @@ failure and print `PLAN 26 DEMO OK` on success:
 
 **Commit:** `7f20b4d`. **Lines changed:** `pdf.py` module docstring (lines 1-31 collapsed to 1-20), stale comment at threshold constant block (former lines 45-49 trimmed), `class ScannedPDFError(HandlerError):` deleted (former lines 60-67). `test_handler_pdf.py` import line 6 narrowed; `test_pdf_handler_low_text_triggers_image_mode` docstring (lines 26-30) cleaned of Pre-Plan-25 narrative; `test_scanned_pdf_error_remains_handler_error_subclass` deleted (1 test, NOT 2 — implementer caught brief's off-by-one); new `test_scanned_pdf_error_no_longer_exported` ImportError pin added. **Grep verification:** zero matches in `src/`; 2 in `tests/` both inside the new regression pin (docstring + import-under-test). **Test count:** −1 net (1 deletion + 1 new pin). All pdf-handler tests green; full brain_core sweep green. **No PDFHandler logic touched; no deprecation cycle (D2 hard-remove).**
 
-## T3 outcome
+## T3 outcome (BACKEND phase complete; FRONTEND phase pending)
 
-(Filled at T3 close.)
+**Backend commit:** `f12e357`. **5 new files:** `walk_events.py` (4 Pydantic v2 models + `WalkEvent` discriminated-union alias), `test_walk_events.py`, `test_bulk_streaming.py`, `bulk_walk_progress.py` endpoint, `test_bulk_walk_progress_endpoint.py`. **2 modified files:** `bulk.py` (new `plan_streaming()` async generator), `app.py` (router registration alongside Plan 08 endpoints). **Test growth:** brain_core 1278→1289 (+11: 5 walk_events models + 6 plan_streaming behaviors); brain_api 223→228 (+5 endpoint behavior tests). **Full sweeps green; mypy --strict clean on new code.** **Key implementation calls:**
+- **Pre-check `source_root` BEFORE `Path.glob()`** — `glob` swallows `FileNotFoundError` / `PermissionError` and silently returns empty; without the pre-check the error event types would never fire. Implementer caught at exec time.
+- **`_check_sse_token` mirrors `check_ws_token`** — FastAPI's required-Query rejects missing token as 422 BEFORE the 403 token-mismatch path; test pins both branches separately.
+- **Stream wrapper does NOT re-raise after emitting `WalkError`** — the error frame is already on the wire; re-raising would surface a 500 the client can't consume mid-stream. `CancelledError` IS re-raised (clean request-scope unwind).
+- **Stateless `plan_id`** (D6 option a) — UUID4 correlation token only; wizard re-calls `plan()` separately for actual items.
+- **No new deps; stdlib-only SSE** (D14 verified).
+
+**FRONTEND phase pending** — brain-frontend-engineer dispatch next for `walk-interstitial.tsx` EventSource wiring + graceful-degradation timer fallback.
 
 ## T4 outcome
 
