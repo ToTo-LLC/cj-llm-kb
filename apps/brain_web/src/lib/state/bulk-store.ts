@@ -90,6 +90,11 @@ export interface BulkState {
   walkPath: string | null;
   walkStartedAt: number | null;
   applyStartedAt: number | null;
+  // Plan 26 T4 — per-file filename display during apply phase. The
+  // apply loop writes the current file's relative path here before each
+  // ``await ingest()`` so the UI can render "Current: <path>" under the
+  // progress bar. Cleared on complete/error/finally (D11).
+  currentFile: string | null;
 
   // actions
   pickFolder: (path: string, files: BulkFile[]) => void;
@@ -105,6 +110,8 @@ export interface BulkState {
   // Plan 25 T4 — phase actions
   beginWalk: (path: string) => void;
   endWalk: (ok: boolean) => void;
+  // Plan 26 T4 — per-file filename display
+  setCurrentFile: (name: string | null) => void;
 }
 
 const INITIAL: Pick<
@@ -123,6 +130,7 @@ const INITIAL: Pick<
   | "walkPath"
   | "walkStartedAt"
   | "applyStartedAt"
+  | "currentFile"
 > = {
   step: 1,
   folder: null,
@@ -138,6 +146,7 @@ const INITIAL: Pick<
   walkPath: null,
   walkStartedAt: null,
   applyStartedAt: null,
+  currentFile: null,
 };
 
 function nowPicked(): string {
@@ -184,7 +193,15 @@ export const useBulkStore = create<BulkState>((set, get) => ({
       // didn't reach pickFolder(), still drop us back to idle.
       set({ phase: "idle", walkPath: null, walkStartedAt: null });
     } else {
-      set({ phase: "error", walkPath: null, walkStartedAt: null });
+      // Plan 26 T4 (D11) — error state-machine transition clears
+      // ``currentFile`` alongside walk markers so the lingering
+      // apply-phase microcopy doesn't leak into the error screen.
+      set({
+        phase: "error",
+        walkPath: null,
+        walkStartedAt: null,
+        currentFile: null,
+      });
     }
   },
 
@@ -237,41 +254,69 @@ export const useBulkStore = create<BulkState>((set, get) => ({
       // Plan 25 T4 — apply phase markers for ETA computation
       phase: "applying",
       applyStartedAt: Date.now(),
+      // Plan 26 T4 — start each apply session with no current-file
+      // microcopy; the first iteration sets it before its ingest call.
+      currentFile: null,
     });
 
-    for (let i = 0; i < queue.length; i++) {
-      if (get().cancelled) break;
-      const file = queue[i];
-      try {
-        await ingest({
-          source: file.name,
-          domain_override:
-            file.classified && file.classified !== "auto"
-              ? file.classified
-              : undefined,
-        });
-        set((s) => ({
-          applyIdx: i + 1,
-          results: {
-            ...s.results,
-            applied: [...s.results.applied, file.name],
-          },
-        }));
-      } catch {
-        set((s) => ({
-          applyIdx: i + 1,
-          results: {
-            ...s.results,
-            failed: [...s.results.failed, file.name],
-          },
-        }));
+    // Plan 26 T4 (D11) — outer try/finally guarantees ``currentFile``
+    // clears at apply-phase exit regardless of how the loop terminates
+    // (normal completion, cancel, or an unexpected synchronous throw
+    // from one of the ``set()`` calls). This is the third clear-site.
+    try {
+      for (let i = 0; i < queue.length; i++) {
+        if (get().cancelled) break;
+        const file = queue[i];
+        // Plan 26 T4 — surface the in-flight filename to the UI before
+        // awaiting the ingest. The store's ``currentFile`` drives the
+        // ``apply-current-file`` microcopy under the progress bar.
+        get().setCurrentFile(file.name);
+        try {
+          await ingest({
+            source: file.name,
+            domain_override:
+              file.classified && file.classified !== "auto"
+                ? file.classified
+                : undefined,
+          });
+          set((s) => ({
+            applyIdx: i + 1,
+            results: {
+              ...s.results,
+              applied: [...s.results.applied, file.name],
+            },
+          }));
+        } catch {
+          set((s) => ({
+            applyIdx: i + 1,
+            results: {
+              ...s.results,
+              failed: [...s.results.failed, file.name],
+            },
+          }));
+        }
       }
+    } finally {
+      // Plan 26 T4 (D11) — complete state-machine transition clears
+      // ``currentFile`` alongside ``phase: "complete"``. Setting it in
+      // the finally block (rather than after the loop) ensures the
+      // clear fires even if a caller cancels via an exception path.
+      set({
+        applying: false,
+        done: true,
+        phase: "complete",
+        currentFile: null,
+      });
     }
-
-    set({ applying: false, done: true, phase: "complete" });
   },
 
   cancel: () => set({ cancelled: true }),
 
   reset: () => set({ ...INITIAL }),
+
+  // Plan 26 T4 — setter for the current-file filename microcopy. Called
+  // by the apply loop before each ``await ingest()`` and cleared in the
+  // outer finally (D11 third clear-site). Tests also drive this
+  // directly to render the apply-current-file element in isolation.
+  setCurrentFile: (name) => set({ currentFile: name }),
 }));

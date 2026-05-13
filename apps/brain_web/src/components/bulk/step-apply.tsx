@@ -52,6 +52,21 @@ function formatEta(remaining: number): string | null {
   return `~${minutes}m`;
 }
 
+/**
+ * Plan 26 T4 — leading-ellipsis truncation for the per-file filename
+ * microcopy under the apply-phase progress bar. Mirrors the inline
+ * helper in :file:`walk-interstitial.tsx` (rule-of-three not met yet —
+ * D10 explicitly keeps these duplicated so neither side has to grow a
+ * shared dependency before the abstraction earns its keep).
+ *
+ * The leaf filename is more useful than the prefix when a path overflows
+ * 60 chars, so we keep the last 59 chars and prepend a single ellipsis.
+ */
+function truncatePath(path: string, max = 60): string {
+  if (path.length <= max) return path;
+  return `…${path.slice(-(max - 1))}`;
+}
+
 export function StepApply(): React.ReactElement {
   const files = useBulkStore((s) => s.files);
   const folder = useBulkStore((s) => s.folder);
@@ -61,6 +76,7 @@ export function StepApply(): React.ReactElement {
   const cancelled = useBulkStore((s) => s.cancelled);
   const done = useBulkStore((s) => s.done);
   const results = useBulkStore((s) => s.results);
+  const currentFile = useBulkStore((s) => s.currentFile);
   const cancel = useBulkStore((s) => s.cancel);
   const reset = useBulkStore((s) => s.reset);
   const openDialog = useDialogsStore((s) => s.open);
@@ -128,6 +144,20 @@ export function StepApply(): React.ReactElement {
           >
             Estimated time remaining: {eta}
           </div>
+        )}
+        {currentFile && (
+          // Plan 26 T4 — per-file filename microcopy. Renders under the
+          // progress bar while the apply loop has an in-flight file.
+          // Truncated to 60 chars with a leading ellipsis so very long
+          // paths (deep nesting, long folder names) don't break the
+          // single-line layout. Cleared at complete/error/finally (D11).
+          <p
+            className="mt-2 text-sm text-[var(--text-muted)]"
+            data-testid="apply-current-file"
+            title={currentFile}
+          >
+            Current: {truncatePath(currentFile)}
+          </p>
         )}
       </div>
 
