@@ -498,7 +498,12 @@ failure and print `PLAN 26 DEMO OK` on success:
 
 ## T4 outcome
 
-(Filled at T4 close.)
+**Commit:** `c74ea6a`. **Modified files:** `bulk-store.ts` (gained `currentFile: string | null` state + `setCurrentFile` action + 3 clear sites), `step-apply.tsx` (gained `currentFile` selector + inline `truncatePath(path, max=60)` helper + `apply-current-file` JSX block below progress bar). **New test files:** `bulk-store.test.ts` (+4 tests), `step-apply.test.tsx` (+3 tests). **Test growth:** brain_web vitest +7 (617 passed / 1 skipped total). `tsc --noEmit` clean. **Truncation helper:** inline at `step-apply.tsx` per D10; signature `function truncatePath(path: string, max = 60): string` returning `path` unchanged when ≤ max, otherwise `"…" + path.slice(-(max-1))`. Mirrors walk-interstitial pattern verbatim (rule-of-three NOT yet met; no shared extraction). **D11 lifecycle 3 clear-sites verified:**
+- **Complete transition** — `startApply` outer `finally` block sets `currentFile: null` alongside `phase: "complete"`
+- **Error transition** — `endWalk(false)` sets `currentFile: null` alongside `phase: "error"` (and existing walk-marker resets)
+- **Apply-loop finally** — same physical site as (1) since the outer `try/finally` wraps the entire for-loop; fires regardless of completion/cancellation/throw
+
+Effectively 2 distinct physical sites collapsing the 3 D11 lifecycle scenarios. **No new deps, no backend touches, no walk-interstitial touches.**
 
 ## Plan 27 candidate scope
 
