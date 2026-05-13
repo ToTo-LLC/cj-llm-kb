@@ -54,6 +54,109 @@ def _is_hidden(path: Path, *, root: Path) -> bool:
     return any(part.startswith(".") for part in rel.parts)
 
 
+# Plan 25 T1: cross-platform system-file denylist. Catches OS-generated
+# files (Mac/Windows/Linux) and dev-artifact directories that are never
+# user content. `_is_hidden` already covers dotfiles like `.git/`,
+# `.DS_Store`, `.idea/` — entries below that DO start with `.` are
+# belt-and-suspenders, but the non-dot entries (`Thumbs.db`, `Desktop.ini`,
+# `$RECYCLE.BIN/`, `__MACOSX/`, etc.) are the load-bearing ones since
+# `_is_hidden` cannot catch them.
+_SYSTEM_FILES: frozenset[str] = frozenset(
+    {
+        # Mac
+        ".DS_Store",
+        "__MACOSX",
+        ".Spotlight-V100",
+        ".fseventsd",
+        ".Trashes",
+        ".DocumentRevisions-V100",
+        ".TemporaryItems",
+        ".AppleDouble",
+        ".AppleDB",
+        ".AppleDesktop",
+        ".LSOverride",
+        ".VolumeIcon.icns",
+        ".com.apple.timemachine.donotpresent",
+        "Icon\r",  # Mac folder custom icon
+        "Network Trash Folder",
+        # Windows
+        "Thumbs.db",
+        "ehthumbs.db",
+        "ehthumbs_vista.db",
+        "Desktop.ini",
+        "desktop.ini",
+        "$RECYCLE.BIN",
+        "System Volume Information",
+        "pagefile.sys",
+        "hiberfil.sys",
+        "swapfile.sys",
+        # Linux
+        ".directory",
+        # Dev artifacts (often misplaced in a bulk-import folder; not
+        # strictly OS-system but never user knowledge-base content).
+        "__pycache__",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".tox",
+        ".idea",
+        ".vscode",
+    }
+)
+
+
+# Plan 25 T1: whitelist of file extensions claimable by a registered
+# handler when walking a folder. Derived from each handler's
+# ``can_handle`` suffix check:
+#   - TextHandler              → .txt, .md, .markdown
+#   - PDFHandler               → .pdf
+#   - TranscriptVTTHandler     → .vtt, .srt
+#   - DocxHandler              → .docx
+#   - TranscriptDOCXHandler    → .docx (content-sniffed)
+#   - PptxHandler              → .pptx
+#   - EmailHandler             → str only (pasted .eml); .eml files
+#                                 on disk currently fall through to
+#                                 the dispatcher with no claimer, but
+#                                 .eml is included for forward-compat
+#                                 with a future path-based handler.
+#   - URLHandler / TweetHandler → str only (URLs); not applicable to
+#                                 folder walks.
+_VALID_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".markdown",
+        ".pdf",
+        ".eml",
+        ".vtt",
+        ".srt",
+        ".docx",
+        ".pptx",
+    }
+)
+
+
+def _is_system_file(name: str) -> bool:
+    """Return True if ``name`` matches a system-file denylist entry.
+
+    Handles both exact-name matches against the cross-platform
+    ``_SYSTEM_FILES`` set and pattern-based matches:
+
+    - ``._*`` — AppleDouble files (e.g. ``._image.png``)
+    - ``.Trash-*`` — Linux trash folders (e.g. ``.Trash-1000``)
+    - ``~$*`` — Office temp files (e.g. ``~$document.docx``)
+    """
+    if name in _SYSTEM_FILES:
+        return True
+    if name.startswith("._"):  # AppleDouble
+        return True
+    if name.startswith(".Trash-"):  # Linux trash
+        return True
+    if name.startswith("~$"):  # Office temp
+        return True
+    return False
+
+
 class BulkImporter:
     """Thin wrapper around IngestPipeline for folder-level operations."""
 
@@ -109,6 +212,25 @@ class BulkImporter:
 
             # Skip hidden files / paths
             if _is_hidden(p, root=folder):
+                continue
+
+            # Plan 25 T1: system-file denylist — catches non-dot system
+            # files like Thumbs.db, Desktop.ini, $RECYCLE.BIN/, __MACOSX/,
+            # and pattern-based matches (`._*`, `.Trash-*`, `~$*`). These
+            # are silently filtered, NOT added to `skipped` — the user
+            # never wants to see OS clutter in the plan view.
+            if _is_system_file(p.name):
+                continue
+            # Plan 25 T1: also drop any file whose ancestor path contains
+            # a system directory (e.g. a file deep inside __MACOSX/ must
+            # be excluded even if its own filename is not a system match).
+            if any(_is_system_file(part) for part in p.relative_to(folder).parts):
+                continue
+            # Plan 25 T1: unsupported-type pre-filter — only files with
+            # extensions claimable by a registered handler enter the plan.
+            # Video/archive/executable/image and other non-text formats
+            # are silently walked over and DO NOT appear in `skipped`.
+            if p.suffix.lower() not in _VALID_EXTENSIONS:
                 continue
 
             # Check that a handler claims this file. Reuse the pipeline's

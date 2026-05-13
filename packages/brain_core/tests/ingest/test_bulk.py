@@ -75,7 +75,17 @@ def _make_folder(tmp_path: Path) -> Path:
         .hiddenfile.txt — skipped: file itself is hidden
         hidden/        — directory with hidden name
         hidden/.secret.txt — skipped: parent dir is hidden
-        garbage.xyz    — skipped: no handler claims it
+        garbage.xyz    — silently filtered (Plan 25 T1): not in
+                          ``_VALID_EXTENSIONS``; does NOT land in
+                          ``skipped`` — the user never sees noise from
+                          random non-content files in the plan view.
+        unclaimed.eml  — whitelisted extension (Path-based EmailHandler
+                          is not registered; EmailHandler only claims
+                          ``str`` input), so the walk lets it past the
+                          extension filter and the dispatcher rejects
+                          it → lands in ``skipped``. Keeps the
+                          ``plan.skipped`` semantic test alive after
+                          Plan 25 T1.
         sub/c.txt      — claimable (TextHandler), nested
     """
     folder = tmp_path / "import_folder"
@@ -88,6 +98,12 @@ def _make_folder(tmp_path: Path) -> Path:
     hidden_dir.mkdir()
     (hidden_dir / ".secret.txt").write_text("secret", encoding="utf-8")
     (folder / "garbage.xyz").write_text("unknown format", encoding="utf-8")
+    # `.eml` is in `_VALID_EXTENSIONS` (Plan 25 T1) — forward-compat
+    # for a future path-based email handler — but no current handler
+    # claims a Path ending in `.eml`, so dispatcher rejection lands it
+    # in `skipped`. This preserves the post-T1 "skipped covers
+    # whitelisted-but-unclaimed" semantics.
+    (folder / "unclaimed.eml").write_text("not a valid eml file", encoding="utf-8")
     sub = folder / "sub"
     sub.mkdir()
     (sub / "c.txt").write_text("content of c", encoding="utf-8")
@@ -121,7 +137,13 @@ async def test_plan_returns_items_and_skips(ephemeral_vault: Path, tmp_path: Pat
     assert ".secret.txt" not in spec_names
 
     skipped_names = {p.name for p in plan.skipped}
-    assert "garbage.xyz" in skipped_names
+    # Plan 25 T1: `garbage.xyz` is filtered at the extension pre-check
+    # and does NOT land in `skipped`. The `unclaimed.eml` file has a
+    # whitelisted extension but no current Path-based handler, so it
+    # passes the extension filter and the dispatcher rejects it — that
+    # is what `skipped` is for post-T1.
+    assert "garbage.xyz" not in skipped_names
+    assert "unclaimed.eml" in skipped_names
 
     for item in plan.items:
         assert item.classified_domain == "research"
