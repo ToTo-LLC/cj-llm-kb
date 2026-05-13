@@ -1209,6 +1209,66 @@ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:p
 - _SHA TBD_ — `test(plan-25): T2 — helper + pipeline integration tests + fixture bumps`
 - _SHA TBD_ — `docs(plan-25): T2 — outcome receipts`
 
+## T3 outcome
+
+**Status:** DONE.
+
+**Files modified:**
+
+- `packages/brain_core/src/brain_core/ingest/handlers/pdf.py` (rewritten, +99 / -25 LOC net) — replaced the pre-Plan-25 `ScannedPDFError`-raising skip-and-flag behavior with D14 image-mode: native text extraction always runs first; when `len(body) < min_chars`, every page is rendered to PNG at 150 DPI via `fitz.Page.get_pixmap(dpi=150)` + `pix.tobytes("png")` and collected into `extras["images"]` as `{"blob": bytes, "content_type": "image/png", "page_index": <1-based>, "index": <0-based>}` dicts (mirrors the PptxHandler shape, swapping `slide_index` → `page_index`). `extras["pdf_image_mode"] = True` is set as a diagnostic flag in the image-mode branch. The handler stays pure — `LLMProvider.vision_extract` is NEVER called here; the Plan 24 T4 pipeline OCR pass handles the rendered images. `ScannedPDFError` retained as an empty subclass of `HandlerError` so any external importer doesn't break. Module-level constants `_PDF_IMAGE_MODE_FALLBACK_THRESHOLD = 200` + `_PDF_RENDER_DPI = 150`.
+
+- `packages/brain_core/src/brain_core/ingest/pipeline.py` (+24 / -7 LOC) — extended `_ocr_images` inline-block branching at `pipeline.py:1257-1273` (post-edit): `page_index` is checked FIRST (PDF context dominates) → `[Page N: <text>]`; `slide_index` second → `[Image (slide N): <text>]`; else fallback → `[Image: <text>]`. The `ingest.ocr.image_skipped` warning log now also carries `page_index=img.get("page_index")` so partial-failure diagnostics in image-mode PDFs show which page errored. Stage 3.5 content-sniff guard at `pipeline.py:286-322` (post-edit) extended with a PRE-OCR exception: when `extras["images"]` is non-empty, sniff is SKIPPED entirely so image-mode PDFs (with empty pre-OCR body) reach Stage 5.5 instead of quarantining. This is necessary because D15's marker-aware exception only fires on POST-OCR bodies — pre-OCR there's nothing for the regex to match. Documented inline as "Plan 25 T3 PRE-OCR exception".
+
+**Files created:**
+
+- `packages/brain_core/tests/ingest/handlers/test_pdf_image_mode.py` (+393 LOC) — 10 unit + integration tests built via hermetic `fitz`-constructed PDF fixtures (no binary files committed). Coverage:
+  1. `test_text_rich_pdf_uses_text_path` — text-rich PDF (>1000 chars via `insert_textbox`) → no `pdf_image_mode` flag, `extras["images"]` empty.
+  2. `test_image_only_pdf_renders_pages` — 3-page image-only PDF → 3 PNG entries with correct 1-based `page_index` + 0-based `index`; PNG magic-byte check on each blob.
+  3. `test_near_empty_pdf_triggers_image_mode` — ~20-char text PDF (<200) → image-mode fires.
+  4. `test_just_above_threshold_uses_text_path` — 250+ char body → text path, no image-mode.
+  5. `test_image_mode_uses_page_index_not_slide_index` — pins the mutual-exclusivity contract.
+  6. `test_extras_pdf_image_mode_flag_only_set_in_image_mode` — flag present in image-mode, absent in text path.
+  7. `test_pdf_pixmap_rendered_at_dpi_150` — `unittest.mock.patch.object(fitz.Page, "get_pixmap", ...)` intercepts the kwarg + asserts `dpi=150`.
+  8. `test_image_mode_pdf_pipeline_inlines_page_blocks` — end-to-end through `IngestPipeline` with `FakeLLMProvider.queue_vision`; body carries `[Page 1: ...]`...`[Page 3: ...]` with NO `[Image (slide` or `[Image:` blocks; ledger booked `op="ocr"` rows to `research`.
+  9. `test_image_mode_pdf_passes_content_sniff_pre_ocr` — single-page image-only PDF whose post-OCR body stays <200 chars; status=OK (proves the Stage 3.5 pre-OCR exception fires + the D15 OCR-marker exception covers the post-OCR sniff implicitly via the marker regex).
+  10. `test_image_mode_pdf_budget_exhausted_raises_failed` — daily cap $0.001 + seeded 2x-cap ledger row; status=FAILED, errors contain "BudgetCapExceeded"/"cap"/"domain=research", `fake.vision_calls == []` (gate fired before LLM).
+
+- `packages/brain_core/tests/ingest/test_handler_pdf.py` (+27 / -3 LOC) — updated `test_pdf_handler_flags_probable_scan` → `test_pdf_handler_low_text_triggers_image_mode` (asserts new behavior: rendered pages in `extras` instead of `ScannedPDFError` raise); added `test_pdf_handler_extracts_text` body to assert no `pdf_image_mode` flag on the rich path; added `test_scanned_pdf_error_remains_handler_error_subclass` pinning the backward-compat export.
+
+**Extension points (file:line):**
+
+- PDFHandler image-mode trigger: `packages/brain_core/src/brain_core/ingest/handlers/pdf.py:102-122` (the `if self._min_chars > 0 and len(body) < self._min_chars` branch).
+- Pipeline `_ocr_images` `page_index` branch: `packages/brain_core/src/brain_core/ingest/pipeline.py:1257-1273` (post-edit; was 1242-1246 pre-edit).
+- Pre-OCR content-sniff exception: `packages/brain_core/src/brain_core/ingest/pipeline.py:286-296` (post-edit; the `_has_pending_ocr_images` guard short-circuits the sniff branch when `extras["images"]` is non-empty).
+
+**Pre-Plan-25 `needs_ocr` skip-and-flag removal:** the location was `packages/brain_core/src/brain_core/ingest/handlers/pdf.py:50-54` (pre-edit) raising `ScannedPDFError` with `f"extracted {len(body)} chars from {spec.name}; below min={self._min_chars} (likely scanned)"`. T3 replaced the `raise` with the image-mode render loop. The `ScannedPDFError` class is preserved as an export-friendly alias (empty subclass of `HandlerError`) so external importers don't break on the symbol vanishing, but it's no longer raised by `extract()`.
+
+**Verification:**
+
+- New tests: 10 in `test_pdf_image_mode.py` + 1 new in `test_handler_pdf.py` = 11 new. All passing.
+- Brain_core baseline: 1258 (T2 close) → post-T3 1269 (+11). 5 skipped is unchanged.
+- mypy clean on `pdf.py`, `pipeline.py`, both test files.
+
+**Self-review findings:**
+
+- **Architectural coordination — Stage 3.5 pre-OCR exception (not in plan-doc):** the plan-doc's T3 spec didn't anticipate the Stage 3.5 / Stage 5.5 ordering gap. D15 makes sniff OCR-aware via the `_OCR_MARKER_PATTERN` regex, BUT pre-OCR an image-mode PDF has empty body so no markers exist for the regex to match. Without a separate exception, image-only PDFs would quarantine at Stage 3.5 before ever reaching the OCR pass, defeating the whole T3 feature. I added a check at the Stage 3.5 guard: when `extras["images"]` is non-empty, SKIP the sniff entirely (the OCR pass will fill the body downstream). The post-OCR body still benefits from D15's regex (e.g. for re-ingest scenarios where a body already carries `[Page N:` markers). This change is documented inline in the pipeline as "Plan 25 T3 PRE-OCR exception" + pinned by `test_image_mode_pdf_passes_content_sniff_pre_ocr`. Flag this in the lessons update for Plan 26: T2 + T3 had a sequencing dependency that wasn't visible until exec time.
+
+- **Test #4 fixture choice — `insert_textbox` vs `insert_text`:** `fitz.Page.insert_text((50, 100), text)` truncates at the right margin without wrapping, so a 250-char prose body landed in the PDF as only ~110 chars of extracted text — flipping the test from "text path" to "image-mode" unexpectedly. Switched the fixture builder to `insert_textbox(page_rect, text, fontsize=10)` which wraps across the full page area. Documented in the fixture builder's docstring.
+
+- **DPI verification (test #7) — patching `fitz.Page.get_pixmap`:** Used `unittest.mock.patch.object` to intercept the kwarg list. Considered inspecting `Pixmap.xres` / `yres` on the result PNG but `pix.tobytes("png")` returns bytes that don't reliably carry DPI metadata across platforms. Patching is cleaner + faster.
+
+- **Cross-platform check:** `pymupdf` ships native binaries for macOS and Windows. `fitz.Page.get_pixmap(dpi=150)` + `pix.tobytes("png")` are stable across platforms. The PNG bytes returned by pymupdf are platform-independent (PNG spec is canonical). `pathlib.Path` for archive_root. No `shell=True`, no hardcoded separators.
+
+- **Concern — `_PDF_RENDER_DPI` hardcoded vs configurable:** Per the spec's pre-task questions section, hardcoding 150 in a module constant for now is fine; promote to a `Config.handlers.pdf.render_dpi` field only when a real use case (e.g. high-density scanned legal docs needing 300 DPI for fidelity) demands it. Not a Plan 25 concern.
+
+- **Concern — `ScannedPDFError` retained but unused:** the class is kept solely for import-compat with any external caller. It's not raised by `extract()` anymore. Plan 26 could either (a) deprecate + remove in a follow-up cleanup, or (b) keep indefinitely as a no-op alias. Documented in the class docstring.
+
+**Commits (per D9, NOT pushed):**
+
+- _SHA TBD_ — `feat(plan-25): T3 — PDFHandler image-mode + pipeline page_index OCR plumbing`
+- _SHA TBD_ — `test(plan-25): T3 — PDF image-mode unit + integration tests`
+- _SHA TBD_ — `docs(plan-25): T3 — outcome receipts`
+
 ## Plan 26 candidate scope
 
 Filled in at T4 closure. Plan 24's 22 unaddressed carry-forwards (6
