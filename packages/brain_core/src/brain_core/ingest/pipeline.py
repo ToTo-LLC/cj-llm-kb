@@ -277,11 +277,27 @@ class IngestPipeline:
             # Printable + letter-ratio checks still apply so binary nonsense
             # with a fake marker prefix still rejects.
             #
+            # Plan 25 T3 PRE-OCR exception: PDFHandler image-mode emits
+            # near-empty body + ``extras["images"]`` carrying rendered pages
+            # for the Stage 5.5 OCR pass. At Stage 3.5 the OCR hasn't run
+            # yet so no ``[Page N:`` markers exist — D15 can't fire. We
+            # skip the sniff entirely when ``extras["images"]`` is
+            # non-empty so image-mode PDFs (and any future handler that
+            # emits images alongside a short body) reach Stage 5.5 instead
+            # of quarantining on empty body. Printable / letter ratio
+            # post-OCR is enforced by the LLM output shape itself.
+            #
             # Cost rail: Stage 3.5 fires BEFORE any LLM call so no
             # ``PerDomainBudgetGuard.check_for`` is needed at this seam — the
             # sniff is a free pre-screen, and stages 4-9 are skipped entirely
             # on quarantine.
-            if extracted.source_type in _TEXT_SHAPED_SOURCE_TYPES:
+            _has_pending_ocr_images = bool(
+                extracted.extras and extracted.extras.get("images")
+            )
+            if (
+                extracted.source_type in _TEXT_SHAPED_SOURCE_TYPES
+                and not _has_pending_ocr_images
+            ):
                 if not _looks_like_meaningful_text(extracted.body_text):
                     self._quarantine_content_sniff(
                         spec=spec,
@@ -1170,15 +1186,20 @@ class IngestPipeline:
             - Empty OCR text — no inline block is emitted (avoids
               ``[Image: ]`` noise in the body).
         * Inline format:
+            - ``[Page N: <text>]`` when the image dict carries
+              ``page_index`` (PDFHandler image-mode, Plan 25 T3).
+              ``page_index`` takes precedence over ``slide_index`` if
+              both are set (PDF context dominates; in practice the
+              handlers never set both).
             - ``[Image (slide N): <text>]`` when the image dict carries
               ``slide_index`` (PptxHandler).
             - ``[Image: <text>]`` otherwise (DocxHandler and any future
-              non-slide-positioned handler).
+              non-positioned handler).
         * OCR blocks are APPENDED to the end of ``body_text`` with a
-          double-newline separator. Per-slide interleaving (inserting
-          the block after the matching ``## Slide N`` section) is
-          deferred — the slide-index marker in the inline block gives
-          downstream LLM prompts enough context.
+          double-newline separator. Per-slide / per-page interleaving
+          (inserting the block after the matching ``## Slide N`` /
+          ``## Page N`` section) is deferred — the index marker in the
+          inline block gives downstream LLM prompts enough context.
 
         Returns a new :class:`ExtractedSource` (the dataclass is frozen)
         with the augmented ``body_text``; ``extras`` is preserved
@@ -1231,6 +1252,7 @@ class IngestPipeline:
                     error_type=type(exc).__name__,
                     image_index=img.get("index"),
                     slide_index=img.get("slide_index"),
+                    page_index=img.get("page_index"),
                 )
                 continue
 
@@ -1239,8 +1261,14 @@ class IngestPipeline:
                 # Empty OCR → don't emit an empty ``[Image: ]`` block.
                 continue
 
+            # Plan 25 T3: ``page_index`` (PDFHandler image-mode) takes
+            # precedence over ``slide_index`` (PptxHandler) so PDF context
+            # dominates. In practice the handlers never set both.
+            page_index = img.get("page_index")
             slide_index = img.get("slide_index")
-            if slide_index is not None:
+            if page_index is not None:
+                ocr_blocks.append(f"[Page {page_index}: {text}]")
+            elif slide_index is not None:
                 ocr_blocks.append(f"[Image (slide {slide_index}): {text}]")
             else:
                 ocr_blocks.append(f"[Image: {text}]")
