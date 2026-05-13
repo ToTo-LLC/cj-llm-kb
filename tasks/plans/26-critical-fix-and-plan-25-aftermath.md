@@ -487,7 +487,14 @@ failure and print `PLAN 26 DEMO OK` on success:
 - **Stateless `plan_id`** (D6 option a) — UUID4 correlation token only; wizard re-calls `plan()` separately for actual items.
 - **No new deps; stdlib-only SSE** (D14 verified).
 
-**FRONTEND phase pending** — brain-frontend-engineer dispatch next for `walk-interstitial.tsx` EventSource wiring + graceful-degradation timer fallback.
+**FRONTEND phase complete.** **Frontend commit:** `bf3bf5f`. **New files:** `lib/api/bulk-progress.ts` (typed EventSource wrapper exporting `subscribeWalkProgress` + 5-callback shape `onStarted/onProgress/onComplete/onError/onConnectionError` + idempotent close handle that auto-closes on terminal frames). **Modified files:** `walk-interstitial.tsx` (added `useEffect` SSE subscription rendering live `filesSeen` + `currentPath`; elapsed-time `setInterval` kept independent; `data-streaming-mode` attribute tracks `connecting`/`live`/`timer-fallback` mode). **Test growth:** walk-interstitial.test.tsx 0→6 (happy path + walk_error toast + transport-error-before-frame fallback + transport-error-after-frame terminal + unmount cleanup + no-token fallback). Existing Plan 25 T4 `tests/unit/bulk-wizard.test.tsx` (5 tests) still green — they don't seed a token so new `useEffect` short-circuits to timer-fallback before opening EventSource. **Auth pattern:** `getToken()` accessor from `@/lib/state/token-store` (zustand vanilla getter; Plan 08 T2 precedent, mirrors chat WS `?token=<hex>` query-param convention `_check_sse_token` enforces). **3 graceful-degradation paths:**
+- `onConnectionError` BEFORE first frame → `setFallbackToTimer(true)` (Plan 25 T4 layout)
+- `onConnectionError` AFTER first frame → danger toast + `endWalk(false)` (no fallback; live mode failed mid-stream)
+- No token in store → silent fallback (no EventSource opened)
+
+**Verification:** `pnpm vitest run` 88 files / 610+1 skipped passing; `pnpm tsc --noEmit` clean. **No npm deps added.**
+
+**T3 combined backend + frontend totals:** 6 new files, 3 modified files; +11 brain_core tests + +5 brain_api tests + +6 brain_web vitest tests = +22 across the stack.
 
 ## T4 outcome
 
