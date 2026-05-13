@@ -1443,14 +1443,69 @@ real progress and added an ETA derived from remaining file count.
 
 ## Plan 26 candidate scope
 
-Filled in at T5 closure. Plan 24's 22 unaddressed carry-forwards (6
-Plan 24-surfaced + 16 Plan 22 carry-forwards) unchanged through Plan
-25, plus any Plan 25-surfaced.
+Filled in at T5 closure. **30 items total** — 4 NEW Plan-25-surfaced + 6 Plan-24-surfaced (unchanged) + 16 Plan 22 carry-forwards (unchanged through Plans 23 / 24 / 25) + 4 preserved NOT-DOING carry-forwards. See `tasks/todo.md` tail block for the full grouped list.
+
+**4 NEW Plan-25-surfaced candidates:**
+
+1. **CRITICAL/correctness:** Plan 24 `ClassifyOutput.source_type` `Literal["text", "url", "pdf", "email", "transcript", "tweet"]` does NOT include `docx` or `pptx` literals. Pre-existing Plan 24 gap surfaced at Plan 25 T2 when the pipeline-integration test `test_pipeline_passes_short_pptx_with_ocr_marker` had to bypass classify via `domain_override`. Plan 24 added the `SourceType` enum members + handlers + frontmatter support but didn't extend the classify prompt's output schema. Fix: one-line schema change + 2-3 test fixture updates.
+2. **Cleanup:** `ScannedPDFError` empty alias retained as a `HandlerError` subclass for backward-compat imports after T3 stopped raising it. Plan 26 could (a) deprecate + remove if no external consumers surface, or (b) keep indefinitely as a no-op alias. T3 cleanup concern.
+3. **UX polish:** Real WebSocket-based walk-phase progress streaming. Plan 25 T4 ships timer-based pseudo-progress for the walk phase because the backend `BulkImporter.plan()` returns one-shot, no streaming. Apply phase already has REAL progress. Plan 5 set up WebSocket chat infrastructure; extending to bulk-progress would give the walk phase real file counts.
+4. **UX polish:** Per-file filename display in apply-phase progress UI. Plan-doc T4 spec called for "Current: <filename>" microcopy below the apply progress bar; T4 implementer's `applyIdx`-driven progress already shows accurate count + ETA but the current filename surface was deferred. Add `currentFile` field to bulk-store + thread the filename from the `startApply()` for-loop into it before each `await ingest()`.
 
 ## Review
 
-_Filled in at T5 close. Tag SHA + closure summary + bumps +
-verification receipts + backlog forward._
+**Tag:** `plan-25-bulk-import-quality` cut locally on green demo (lightweight `commit` type per project convention; NOT pushed per D9 — controller surfaces to user for push authorization).
+
+**Closure summary.** Plan 25 closes the four bulk-import quality issues the user surfaced after hands-on use of Plan 22 + Plan 24, plus the T3 PDF image-mode addition that grew during brainstorm. Total: 5 substantive tasks + 1 closure = 6 work units. Scope locks held: A (all 5 items as one focused plan), 2.A (backend pre-filter at walk stage), 4.A (standard 200/80/40 sniff thresholds), PDF trigger heuristic-based, D15 OCR-aware sniff exception. Zero new dependencies; zero schema changes; four spec text edits across §5 (stages list + bulk-import footnote + pdf handler row + failure-handling consistency bullet).
+
+**Test count bumps:**
+
+- brain_core: 1234 (Plan 24 close) → **1269** + 5 skipped (+35 across T1 / T2 / T3).
+- brain_web vitest: 599 (Plan 24 close) → **604** + 1 skipped (+5 across T4).
+- tsc --noEmit: clean across `apps/brain_web/`.
+
+**Verification receipts (per task):**
+
+- T0: spec edits + internal-consistency check (no contradictions with §3 / §4 / §10 / Watched folders subsections).
+- T1: 12 new walk-filter tests; brain_core 1234 → 1241 + 5 skipped (+12, -1 adjusted fixture).
+- T2: 17 new sniff tests (12 helper + 1 set-membership pin + 4 pipeline-integration); brain_core 1241 → 1258 + 5 skipped (+17); 17 distinct existing tests across 7 files adjusted for 200-char floor.
+- T3: 10 new PDF image-mode tests + 1 new `test_handler_pdf.py` pin; brain_core 1258 → 1269 + 5 skipped (+11).
+- T4: 5 new vitest tests; brain_web 599 → 604 + 1 skipped (+5); tsc --noEmit clean; RED-on-revert receipts captured.
+- T5 (closure): 14-gate demo `scripts/demo-plan-25.py` prints `PLAN 25 DEMO OK`.
+
+**Notable execution-time discoveries:**
+
+1. **T2/T3 sequencing dependency** — Stage 3.5 sniff (T2) would have quarantined image-mode PDFs (T3) BEFORE Stage 5.5 OCR ran, because pre-OCR the body is empty and D15's marker regex can't fire. T3 implementer caught this at exec time and added a PRE-OCR exception: skip Stage 3.5 when `extras["images"]` is non-empty. Lesson captured in `tasks/lessons.md` Plan 25 closure section as the T3 NEW lesson on cross-stage feature ordering.
+2. **T4 plan-doc D11 divergence** — plan-doc specified timer-driven pseudo-progress for apply phase; implementer caught at exec time that existing apply loop is JS-driven serial so `applyIdx` already reflects REAL progress. Simulating on top would be strictly worse UX. Kept real progress for apply; used timer-based pseudo-progress ONLY for walk phase. Documented in T4 outcome receipt + lessons.md.
+3. **Plan 24 `ClassifyOutput.source_type` Literal gap** — pre-existing Plan 24 schema gap surfaced at Plan 25 T2 implementer review. Not a Plan 25 blocker; flagged as the critical Plan 26 candidate.
+
+**Spec text changes:**
+
+- §5 Stages list: new `3.5 Content sniff` entry between Extract (3) and Archive (4); D15 OCR-aware exception documented.
+- §5 Bulk import: new `Walk-stage filtering` footnote with system-file denylist + unsupported-type pre-filter bullets.
+- §5 Day-one handlers table: pdf row replaced pre-Plan-25 `needs_ocr, skipped` with T3 image-mode rendering (`vision_extract` + `[Page N: <text>]` + D14 <200 chars trigger).
+- §5 Failure handling (bonus consistency edit): bifurcated PDF-vs-text-shaped behavior — PDFs <200 chars trigger T3 image-mode (no skip); text-shaped sources <200 chars fall through to 3.5 Content sniff quarantine.
+
+**Files changed (summary):**
+
+- `docs/superpowers/specs/2026-04-13-cj-llm-kb-design.md` — 4 edits (T0).
+- `packages/brain_core/src/brain_core/ingest/bulk.py` — `_SYSTEM_FILES` + `_VALID_EXTENSIONS` + `_is_system_file` + 3 walk-loop filter checks (T1, +101 LOC).
+- `packages/brain_core/src/brain_core/ingest/pipeline.py` — Stage 3.5 sniff + `_OCR_MARKER_PATTERN` + `_TEXT_SHAPED_SOURCE_TYPES` + `_looks_like_meaningful_text` + `_quarantine_content_sniff` (T2, +202 LOC); `_ocr_images` page_index branch + Stage 3.5 PRE-OCR exception (T3, +24 / -7 LOC).
+- `packages/brain_core/src/brain_core/ingest/handlers/pdf.py` — image-mode rewrite (T3, +99 / -25 LOC net).
+- `packages/brain_core/tests/ingest/test_bulk_walk_filtering.py` — NEW (T1, 290 LOC, 12 tests).
+- `packages/brain_core/tests/ingest/test_pipeline_content_sniff.py` — NEW (T2, 370 LOC, 17 tests).
+- `packages/brain_core/tests/ingest/handlers/test_pdf_image_mode.py` — NEW (T3, 393 LOC, 10 tests).
+- `apps/brain_web/src/components/bulk/walk-interstitial.tsx` — NEW (T4, 82 LOC).
+- `apps/brain_web/src/components/bulk/step-pick-folder.tsx` — `beginWalk`/`endWalk` wiring (T4, +24 / -2 LOC).
+- `apps/brain_web/src/components/bulk/step-apply.tsx` — apply-headline + apply-eta microcopy (T4, +38 / -3 LOC).
+- `apps/brain_web/src/lib/state/bulk-store.ts` — `BulkPhase` + 4 fields + 2 actions (T4, +58 / -3 LOC).
+- `apps/brain_web/tests/unit/bulk-wizard.test.tsx` — NEW (T4, 170 LOC, 5 tests).
+- `scripts/demo-plan-25.py` — NEW (T5 closure, 14 gates).
+- `tasks/lessons.md` — Plan 25 closure section appended.
+- `tasks/todo.md` — row 25 ✅ + Plan 26 candidate scope tail refreshed.
+- `tasks/plans/25-bulk-import-quality.md` — outcome receipts T0-T4 + this Review section.
+
+**Backlog forward.** 30-item Plan 26 candidate scope queued (4 Plan-25-surfaced + 6 Plan-24-surfaced + 16 Plan 22 + 4 preserved NOT-DOING). Critical item (Plan 24 `ClassifyOutput.source_type` Literal gap) flagged for early-priority adjudication at Plan 26 brainstorm.
 
 ---
 
