@@ -28,7 +28,7 @@ from brain_core.ingest.failures import record_failure
 from brain_core.ingest.handlers.base import SourceHandler
 from brain_core.ingest.hashing import content_hash
 from brain_core.ingest.ocr import ocr_image
-from brain_core.ingest.types import ExtractedSource, IngestResult, IngestStatus
+from brain_core.ingest.types import ExtractedSource, IngestResult, IngestStatus, SourceType
 from brain_core.llm.provider import LLMProvider
 from brain_core.llm.types import LLMMessage, LLMRequest, LLMResponse
 from brain_core.prompts.loader import load_prompt
@@ -45,6 +45,90 @@ from brain_core.vault.types import Edit, IndexEntryPatch, NewFile, PatchSet
 from brain_core.vault.writer import Receipt, VaultWriter
 
 _log = structlog.get_logger(__name__)
+
+
+# Plan 25 T2: OCR-marker pattern for the content-sniff D15 exception.
+# Matches OCR block markers inserted by:
+#   - Plan 24 T4 DocxHandler images:      [Image: <text>]
+#   - Plan 24 T4 PptxHandler slide images: [Image (slide N): <text>]
+#   - Plan 25 T3 PDFHandler page renders:  [Page N: <text>]
+# When a body carries any of these, ``_looks_like_meaningful_text`` skips
+# its 200-char ``min_chars`` floor (OCR-heavy sources are NOT near-empty
+# regardless of post-OCR length). Printable + letter-ratio checks still
+# apply so binary nonsense with a fake ``[Image: `` prefix still rejects.
+_OCR_MARKER_PATTERN = re.compile(
+    r"\[(?:Image(?:\s+\(slide\s+\d+\))?|Page\s+\d+):\s"
+)
+
+
+# Plan 25 T2: source-type set the Stage 3.5 sniff applies to. URL + EMAIL +
+# TWEET are excluded — those handlers produce highly structured output
+# (HTML-derived prose, RFC822-derived headers+body, JSON-derived prose)
+# that wouldn't benefit from the same heuristic and may legitimately
+# emit short bodies. Sniff those separately if a future plan needs it.
+_TEXT_SHAPED_SOURCE_TYPES: frozenset[SourceType] = frozenset({
+    SourceType.TEXT,
+    SourceType.TRANSCRIPT,
+    SourceType.DOCX,
+    SourceType.PPTX,
+    SourceType.PDF,
+})
+
+
+def _looks_like_meaningful_text(body_text: str, *, min_chars: int = 200) -> bool:
+    """Cheap heuristic: does ``body_text`` look like human-readable content?
+
+    Catches binary nonsense masquerading as text, base64 dumps without
+    context, encrypted blobs, etc. Passes legitimate technical docs, code
+    samples, multi-language content. Used by :meth:`IngestPipeline.ingest`
+    Stage 3.5 (Plan 25 T2) to short-circuit clearly-non-meaningful files
+    BEFORE any LLM call.
+
+    Thresholds per Plan 25 D3:
+
+    * ``len(body_text) >= min_chars`` (default 200) — SKIPPED when body
+      contains OCR block markers per D15 (OCR-heavy sources are not
+      near-empty regardless of post-OCR length).
+    * non-whitespace content >= ``min_chars / 2`` — only when ``min_chars``
+      applies (i.e. skipped under the D15 OCR-marker exception).
+    * printable ratio >= 80% — printable ASCII or Unicode letters /
+      digits / whitespace / punctuation (per ``str.isprintable``); excludes
+      control chars + raw binary bytes. ALWAYS applies, including under
+      D15. Catches binary nonsense with a fake ``[Image: `` prefix.
+    * letter ratio >= 40% (per ``str.isalpha``, which includes non-ASCII
+      Unicode letters so multi-language content passes). ALWAYS applies,
+      including under D15.
+
+    Empty bodies always return ``False`` — there's nothing to ingest.
+    """
+    if len(body_text) == 0:
+        return False
+
+    has_ocr_markers = bool(_OCR_MARKER_PATTERN.search(body_text))
+
+    # Threshold 1: min char count — skipped when OCR markers present (D15).
+    if not has_ocr_markers and len(body_text) < min_chars:
+        return False
+
+    # Threshold 2: non-whitespace content — only when min_chars applies.
+    if not has_ocr_markers:
+        non_ws = "".join(c for c in body_text if not c.isspace())
+        if len(non_ws) < min_chars / 2:
+            return False  # too much whitespace = effectively empty
+
+    # Threshold 3: printable ratio (ALWAYS applies — including under D15).
+    printable = sum(1 for c in body_text if c.isprintable())
+    if printable / len(body_text) < 0.8:
+        return False
+
+    # Threshold 4: letter ratio (ALWAYS applies — including under D15).
+    # ``str.isalpha`` includes non-ASCII Unicode letters so multi-language
+    # content passes naturally.
+    letters = sum(1 for c in body_text if c.isalpha())
+    if letters / len(body_text) < 0.4:
+        return False
+
+    return True
 
 
 @dataclass
@@ -177,6 +261,51 @@ class IngestPipeline:
                 vault_root=self.vault_root, domain=tentative_domain, when=now
             )
             extracted = await handler.extract(spec, archive_root=archive_dir)
+
+            # Stage 3.5: Content sniff (Plan 25 T2)
+            # ------------------------------------------------------------------
+            # For text-shaped sources (text, transcript, docx, pptx, pdf), screen
+            # the extracted body against cheap stdlib heuristics. Non-meaningful
+            # content (binary nonsense, encrypted blobs, base64 dumps without
+            # context) quarantines to ``raw/inbox/failed/<slug>.needs_review.json``
+            # without burning LLM tokens on classify / summarize / integrate.
+            #
+            # D15 OCR-aware exception: bodies carrying ``[Image:`` / ``[Image
+            # (slide N):`` / ``[Page N:`` markers (Plan 24 T4 docx/pptx OCR,
+            # Plan 25 T3 pdf page renders) skip the 200-char min floor — OCR-
+            # heavy sources are NOT near-empty regardless of post-OCR length.
+            # Printable + letter-ratio checks still apply so binary nonsense
+            # with a fake marker prefix still rejects.
+            #
+            # Cost rail: Stage 3.5 fires BEFORE any LLM call so no
+            # ``PerDomainBudgetGuard.check_for`` is needed at this seam — the
+            # sniff is a free pre-screen, and stages 4-9 are skipped entirely
+            # on quarantine.
+            if extracted.source_type in _TEXT_SHAPED_SOURCE_TYPES:
+                if not _looks_like_meaningful_text(extracted.body_text):
+                    self._quarantine_content_sniff(
+                        spec=spec,
+                        slug=slug,
+                        extracted=extracted,
+                    )
+                    self._record_history(
+                        source=str(spec),
+                        source_type=extracted.source_type.value,
+                        domain=None,
+                        status=IngestStatus.FAILED.value,
+                        patch_id=None,
+                        error="content_sniff: non_meaningful_text",
+                        cost_usd=run_cost,
+                    )
+                    return IngestResult(
+                        status=IngestStatus.FAILED,
+                        note_path=None,
+                        extracted=extracted,
+                        errors=[
+                            "content_sniff: text does not appear meaningful "
+                            "(non_meaningful_text)"
+                        ],
+                    )
 
             # Stage 4: Content hash + Idempotency
             chash = content_hash(extracted.body_text)
@@ -1248,6 +1377,77 @@ class IngestPipeline:
             if line:
                 return line[:60]
         return "source"
+
+    def _quarantine_content_sniff(
+        self,
+        *,
+        spec: str | Path,
+        slug: str,
+        extracted: ExtractedSource,
+    ) -> Path:
+        """Write a Stage 3.5 content-sniff quarantine record (Plan 25 T2 / D4).
+
+        Path layout: ``<vault_root>/raw/inbox/failed/<slug>.<ts>.needs_review.json``.
+        The compact UTC timestamp suffix mirrors :func:`record_failure`'s retry-
+        history behavior — re-ingesting the same source after a quarantine
+        keeps prior records.
+
+        JSON shape captures the diagnostic counts the sniff helper used so
+        the user can audit the rejection in the Inbox UI:
+
+        * ``stage`` — always ``"content_sniff"``.
+        * ``reason`` — always ``"non_meaningful_text"``.
+        * ``source_path`` — string form of ``spec``.
+        * ``source_type`` — the resolved :class:`SourceType` value.
+        * ``slug`` — preliminary slug used for the path.
+        * ``ts_utc`` — ISO 8601 UTC timestamp.
+        * ``details.char_count`` — length of ``extracted.body_text``.
+        * ``details.printable_ratio`` — printable / total (0.0 on empty body).
+        * ``details.letter_ratio`` — alpha / total (0.0 on empty body).
+        * ``details.has_ocr_markers`` — whether D15 OCR-marker exception was
+          relevant (True + still-rejected pins the "OCR marker is not a
+          binary-content bypass" contract).
+        * ``retry_hint`` — plain-English next-action string.
+
+        Returns the path of the written record (mirrors :func:`record_failure`
+        so the caller and tests can locate the artefact).
+        """
+        now = datetime.now(tz=UTC)
+        failed_dir = self.vault_root / "raw" / "inbox" / "failed"
+        failed_dir.mkdir(parents=True, exist_ok=True)
+        ts_compact = now.strftime("%Y%m%dT%H%M%S%f")
+        path = failed_dir / f"{slug}.{ts_compact}.needs_review.json"
+
+        body = extracted.body_text
+        body_len = len(body)
+        if body_len > 0:
+            printable_ratio = sum(1 for c in body if c.isprintable()) / body_len
+            letter_ratio = sum(1 for c in body if c.isalpha()) / body_len
+        else:
+            printable_ratio = 0.0
+            letter_ratio = 0.0
+        has_ocr_markers = bool(_OCR_MARKER_PATTERN.search(body))
+
+        record = {
+            "stage": "content_sniff",
+            "reason": "non_meaningful_text",
+            "source_path": str(spec),
+            "source_type": extracted.source_type.value,
+            "slug": slug,
+            "ts_utc": now.isoformat(),
+            "details": {
+                "char_count": body_len,
+                "printable_ratio": printable_ratio,
+                "letter_ratio": letter_ratio,
+                "has_ocr_markers": has_ocr_markers,
+            },
+            "retry_hint": (
+                "If you believe this file is meaningful, classify it manually "
+                "via the Inbox UI or re-ingest with a different handler."
+            ),
+        }
+        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        return path
 
     def _record_history(
         self,
