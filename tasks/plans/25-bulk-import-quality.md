@@ -1105,6 +1105,110 @@ unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:p
 
 - **Use of `\r` literal:** `"Icon\r"` is the actual filename macOS uses for folder custom icons (literal CR character in the filename, no extension). Verified the frozenset entry uses the exact `\r` escape and not a string-with-literal-backslash-r. Python frozenset construction handles this correctly; `_is_system_file` does an exact `name in _SYSTEM_FILES` comparison so the CR byte must match exactly. Documented in the inline comment.
 
+## T2 outcome
+
+**Status:** DONE.
+
+**Files modified:**
+
+- `packages/brain_core/src/brain_core/ingest/pipeline.py` (+202 LOC) — added module-level `_OCR_MARKER_PATTERN` regex (matches `[Image:`, `[Image (slide N):`, `[Page N:`), `_TEXT_SHAPED_SOURCE_TYPES` frozenset (5 members: `TEXT`, `TRANSCRIPT`, `DOCX`, `PPTX`, `PDF`; `URL` + `EMAIL` + `TWEET` intentionally excluded), `_looks_like_meaningful_text(body_text, *, min_chars=200)` helper enforcing 4 thresholds (length, non-whitespace, printable ratio, letter ratio) with D15 OCR-marker exception, and `IngestPipeline._quarantine_content_sniff(*, spec, slug, extracted)` method writing `raw/inbox/failed/<slug>.<ts>.needs_review.json` with diagnostic JSON shape. Stage 3.5 inserted between Stage 3 (Extract) and Stage 4 (Content hash + Idempotency) in `ingest()` — fires only when `extracted.source_type in _TEXT_SHAPED_SOURCE_TYPES`; quarantine path returns `IngestStatus.FAILED` and records ingest-history row with `cost_usd=0.0`. Stage 3.5 insertion at `pipeline.py:218-244` (post-edit line range); helper at `pipeline.py:50-128`; quarantine method at `pipeline.py:1338-1410` (post-edit).
+
+- `packages/brain_core/tests/ingest/fixtures/hello.txt` (+1 line) — bumped from 65 chars to 262 chars of meaningful prose. The shipped fixture was used by 12 test files across brain_core + brain_api + brain_mcp; bumping it once is cleaner than rewriting every consumer (and matches the spirit of Stage 3.5 — "real text files have real content").
+
+- `packages/brain_core/tests/ingest/test_pipeline.py` (+8 / -3 LOC) — `test_ingest_records_failure_on_exception` writes inline `"hello body"` (10 chars). Bumped to filler prose so the failure path under test (empty queue at summarize) is reached.
+
+- `packages/brain_core/tests/ingest/test_bulk.py` (+15 / -4 LOC) — added module-level `_MEANINGFUL_BODY` constant (270 chars), updated 3 apply-phase tests (`test_apply_runs_pipeline_per_item_in_order`, `test_apply_does_not_stop_on_failure`, `test_apply_honors_per_item_classified_domain`) to use it. Each file's body is prefixed with a unique short string to avoid Stage 4 idempotency collisions.
+
+- `packages/brain_core/tests/ingest/test_pipeline_ingest_watched_context.py` (+8 / -2 LOC) — bumped inline content in 2 bulk-import tests (`test_bulk_importer_apply_threads_watched_folder_id` + `test_bulk_importer_apply_without_watched_kwarg_is_backwards_compat`).
+
+- `packages/brain_core/tests/ingest/handlers/test_docx_ocr_integration.py` (+17 / -6 LOC) — added module-level `_DOCX_FILLER_PROSE` constant; `_build_image_docx` + `_build_plain_docx` paragraphs prefixed with it so docx bodies clear the sniff floor before reaching the post-classify OCR pass under test.
+
+- `packages/brain_core/tests/ingest/handlers/test_pptx_ocr_integration.py` (+22 / -6 LOC) — added `_PPTX_FILLER` constant; all 4 fixture builders (`_build_three_slide_pptx_with_image_on_slide_2`, `_build_five_slide_pptx_with_images_on_2_and_5`, `_build_plain_pptx`, `_build_two_image_pptx`) bumped per-slide placeholder text.
+
+- `packages/brain_core/tests/watch/test_folder_watcher_integration.py` (+22 / -6 LOC) — bumped 4 inline-content writes in `test_e2e_create_writes_source_note_with_watch_frontmatter` + `test_e2e_create_then_modify_routes_via_update_source` (2 writes: create + modify) + `test_e2e_concurrent_files_each_produce_a_note` (5 burst files, each made distinct + above floor).
+
+- `packages/brain_api/tests/test_tool_endpoints.py` (+5 / -2 LOC) — bumped `test_brain_ingest` `demo.txt` body to clear sniff floor.
+
+- `packages/brain_api/tests/test_upload_endpoint.py` (+5 / -1 LOC) — bumped `test_upload_markdown_happy_path_returns_patch_id` multipart bytes payload.
+
+- `packages/brain_api/tests/test_watched_folders_integration.py` (+5 / -2 LOC) — bumped `test_api_watch_folder_initial_sync_imports_files` alpha + beta inline content.
+
+- `packages/brain_mcp/tests/test_tool_ingest.py` (+5 / -1 LOC) — bumped shared `_write_source_file` helper used by all 3 brain_mcp ingest tests.
+
+**Files created:**
+
+- `packages/brain_core/tests/ingest/test_pipeline_content_sniff.py` (370 LOC, 17 tests) — covers:
+  - **12 helper-level tests** for `_looks_like_meaningful_text`: meaningful prose passes, short body quarantines, binary garbage quarantines (all 256 byte-values), high whitespace quarantines, base64-dump-passes (documented heuristic limit), short OCR-marker PPTX passes via D15, short PDF page-marker passes via D15, short docx Image-marker passes via D15, binary-garbage-with-fake-OCR-marker still quarantines (D15 is NOT a binary bypass), digit-only body quarantines on letter ratio, empty body quarantines, Cyrillic multi-language content passes (review gate (e) for UTF-8 letters).
+  - **1 set-membership pin** for `_TEXT_SHAPED_SOURCE_TYPES` (review gate (d)).
+  - **4 pipeline-integration tests**: binary-garbage `.txt` routes to quarantine with empty FakeLLM queue (no LLM spend per review gate (c)), normal prose `.txt` consumes 3-response queue happy path, quarantine JSON shape pin (every documented field present), short OCR-marker PPTX clears Stage 3.5 via D15 in the integrated pipeline.
+
+**Pipeline insertion point:**
+
+`packages/brain_core/src/brain_core/ingest/pipeline.py` Stage 3.5 lives between Stage 3 (Extract) and Stage 4 (Content hash + Idempotency) in `IngestPipeline.ingest()`. Post-edit line range: `pipeline.py:218-244`. The check fires only when `extracted.source_type in _TEXT_SHAPED_SOURCE_TYPES`; non-text-shaped types (`URL`, `EMAIL`, `TWEET`) flow through unchanged. Quarantine path returns `IngestStatus.FAILED` immediately, skipping stages 4-9 — no LLM round-trip is dispatched.
+
+**Existing quarantine helper reused vs new:**
+
+NEW. The existing `record_failure(...)` in `brain_core/ingest/failures.py` writes `<slug>.<ts>.error.json` for *unexpected exception* failure records. T2's quarantine path is semantically different: it's an EXPECTED quarantine (sniff caught non-meaningful content, no exception involved), so the JSON shape is richer (`stage`, `reason`, diagnostic ratios, `retry_hint`) and the suffix is `.needs_review.json` per plan-doc D4. The new `IngestPipeline._quarantine_content_sniff` method mirrors `record_failure`'s timestamped-filename convention so retries don't overwrite prior records.
+
+**`_TEXT_SHAPED_SOURCE_TYPES` set:**
+
+`{SourceType.TEXT, SourceType.TRANSCRIPT, SourceType.DOCX, SourceType.PPTX, SourceType.PDF}` — verified against `brain_core.ingest.types.SourceType` (8 members; the 3 excluded are `URL`, `EMAIL`, `TWEET`). The plan-doc spec called for these 5; the test `test_text_shaped_source_types_membership` pins the exact set so any future SourceType addition is flagged for explicit decision.
+
+**Test count and pass status:**
+
+- New tests (T2): 17 (all pass, 0.38s)
+- Existing tests adjusted for the 200-char floor: 17 distinct test functions across 7 test files (12 in brain_core, 3 in brain_api, 2 in brain_mcp = wait — the actual adjusted count, by file: test_pipeline.py 1, test_bulk.py 3, test_pipeline_ingest_watched_context.py 2, test_docx_ocr_integration.py 5, test_pptx_ocr_integration.py 3, test_folder_watcher_integration.py 3, test_tool_endpoints.py 1, test_upload_endpoint.py 1, test_watched_folders_integration.py 1, test_tool_ingest.py 3 = 23 tests touched).
+- Full brain_core suite baseline (pre-T2, T1 closure): 1241 passed + 5 skipped (1246 collected).
+- Full brain_core suite post-T2: **1258 passed** + 5 skipped (1263 collected, +17 from new tests). 12.21s.
+- Cross-package sweep (brain_core + brain_api + brain_mcp + brain_cli): 1756 passed + 12 skipped, 18.47s. No regressions.
+
+**Verification recipe (re-run):**
+
+```bash
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/ingest/test_pipeline_content_sniff.py -v
+# → 17 passed
+
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest packages/brain_core/tests/ -q
+# → 1258 passed, 5 skipped
+
+unset VIRTUAL_ENV && PYTHONPATH=packages/brain_core/src:packages/brain_api/src:packages/brain_mcp/src:packages/brain_cli/src \
+  uv run --package brain_core pytest \
+  packages/brain_core/tests/ packages/brain_api/tests/ packages/brain_mcp/tests/ packages/brain_cli/tests/ -q
+# → 1756 passed, 12 skipped
+```
+
+**Locked decisions covered:** D3 (sniff thresholds 200/80%/40%) ✅; D4 (quarantine to `raw/inbox/failed/<slug>.needs_review.json` with reason `non_meaningful_text`) ✅; D7 (no new dependencies — stdlib only: `re`, `json`, `pathlib`, `datetime`) ✅; D15 (OCR-marker exception preserves printable + letter ratio checks) ✅.
+
+**Self-review findings:**
+
+- **Reviewer gates per plan-doc §T2 review block:**
+  - (a) Sniff helper matches 3 documented thresholds + D15 OCR-aware exception — ✅ helper has 4 thresholds (the spec lists 3 + non-whitespace floor as a sub-rule of the min_chars threshold; my implementation makes the non-whitespace floor explicit so it round-trips correctly under D15 skip). All 4 documented in the helper's docstring.
+  - (b) Quarantine path mirrors existing failure-handling pattern — ✅ same `raw/inbox/failed/` dir + same compact-UTC-timestamp suffix shape as `record_failure`. Distinguished by `.needs_review.json` suffix (vs `.error.json`) so the Inbox UI can differentiate "exception failure" from "expected quarantine".
+  - (c) No LLM tokens spent on quarantined files — ✅ `test_pipeline_quarantines_binary_garbage` + `test_quarantine_json_shape` both run with FakeLLMProvider queue intentionally EMPTY; if Stage 3.5 fails to short-circuit, the first downstream LLM call would raise `RuntimeError` and the assertion would fail.
+  - (d) Sniff applies to ALL text-shaped SourceTypes — ✅ `test_text_shaped_source_types_membership` pins the 5-member set exactly. Future SourceType additions surface as a test failure that requires an explicit decision.
+  - (e) UTF-8 content handled correctly — ✅ `test_utf8_letters_count_for_letter_ratio` exercises Cyrillic prose. `str.isalpha` is Unicode-aware so non-ASCII letters count naturally.
+  - (f) OCR-marker exception preserves printable + letter ratio checks — ✅ `test_binary_garbage_with_fake_ocr_marker_still_quarantines` constructs `[Image: <620 chars of control codes>]`. The marker is present but printable ratio fails. Pins "D15 is NOT a bypass for binary content".
+  - (g) Full brain_core suite stays green — ✅ 1258 passed + 5 skipped (was 1241 + 5). Cross-package: 1756 passed + 12 skipped.
+
+- **Concern — base64-dump heuristic limit (called out in plan-doc):** Test `test_base64_dump_outcome` documents that well-formed base64 dumps PASS the sniff (high letter ratio + 100% printable). This is by design — base64 content is technically "meaningful text" by the helper's heuristics. Downstream classify/summarize prompts have the context to handle it (and pre-Plan-25 behavior left it to the LLM anyway). The sniff is a cheap pre-screen for OBVIOUS nonsense (binary, encrypted), not a sophisticated classifier. A future plan could add a base64-detection sub-rule if production usage shows the LLM wasting tokens on base64 dumps. Documented in the test docstring.
+
+- **Concern — fixture bump impact:** Bumping `tests/ingest/fixtures/hello.txt` from 65 → 262 chars touches a shared fixture used across 12 test files. Verified all consumers continue to pass; the bumped content has the same shape (UTF-8 prose) and is a strict superset of the old content (starts with "Hello, brain."), so any test that asserts on the *first line* of body_text still works. No idempotency-test surprise: content_hash is computed at runtime per-test, not pre-recorded.
+
+- **Concern — Plan 24 `docx`/`pptx` `ClassifyOutput.source_type` Literal gap:** The pipeline-integration test `test_pipeline_passes_short_pptx_with_ocr_marker` had to use `domain_override` because `ClassifyOutput.source_type` is annotated `Literal["text", "url", "pdf", "email", "transcript", "tweet"]` — missing the Plan 24 additions of `docx` + `pptx`. This is a pre-existing gap (Plan 24 added the SourceType members + handlers + frontmatter support but didn't extend the classify prompt's output schema). Not a T2 blocker — the production code path that ingests `.pptx` files (e.g. `brain_watch_folder`) already passes `domain_override` since the watch is scoped to a single domain. Flag for a future plan: extend the ClassifyOutput Literal to match `SourceType`.
+
+- **Cross-platform check:** `_OCR_MARKER_PATTERN` is a raw regex over Unicode strings — no path separators, no platform-specific bytes. The quarantine file path uses `pathlib.Path` and `datetime.now(tz=UTC).strftime(...)` — both cross-platform. Filename suffix `.needs_review.json` is a plain ASCII suffix that Windows + macOS + Linux all accept. The compact timestamp `%Y%m%dT%H%M%S%f` contains no reserved characters. No POSIX-only assumptions.
+
+- **Empty-body early-return:** Added a `len(body_text) == 0` short-circuit at the top of `_looks_like_meaningful_text` (not in the plan-doc spec). Necessary because the printable/letter ratio computations divide by `len(body_text)`. Without it, a body of `""` would `ZeroDivisionError` on the printable check. The plan-doc snippet had `if len(body_text) > 0 and printable / ...` guards on both ratio checks; my implementation does the equivalent via the top-of-function early return, which is cleaner and avoids the guard repetition. Documented in the helper's docstring and pinned by `test_empty_body_quarantines`.
+
+**Commits (per D9, NOT pushed):**
+
+- _SHA TBD_ — `feat(plan-25): T2 — pipeline content-sniff stage 3.5 + OCR-aware exception`
+- _SHA TBD_ — `test(plan-25): T2 — helper + pipeline integration tests + fixture bumps`
+- _SHA TBD_ — `docs(plan-25): T2 — outcome receipts`
+
 ## Plan 26 candidate scope
 
 Filled in at T4 closure. Plan 24's 22 unaddressed carry-forwards (6
