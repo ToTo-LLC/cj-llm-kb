@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from brain_core.ingest.handlers.pdf import PDFHandler, ScannedPDFError
+from brain_core.ingest.handlers.pdf import PDFHandler
 from brain_core.ingest.types import SourceType
 
 
@@ -23,11 +23,10 @@ async def test_pdf_handler_extracts_text(tmp_path: Path, fixtures_dir: Path) -> 
 
 @pytest.mark.asyncio
 async def test_pdf_handler_low_text_triggers_image_mode(tmp_path: Path) -> None:
-    """Plan 25 T3 D14: low-text PDFs render pages for OCR instead of raising.
+    """Plan 25 T3 D14: low-text PDFs render pages for OCR.
 
-    Pre-Plan-25 this raised :class:`ScannedPDFError`. Plan 25 T3 changes
-    the path to image-mode: pages are rendered to PNG and returned in
-    ``extras["images"]`` for the pipeline OCR pass.
+    Pages are rendered to PNG and returned in ``extras["images"]`` for the
+    pipeline OCR pass.
     """
     import fitz  # type: ignore[import-untyped]
 
@@ -46,13 +45,11 @@ async def test_pdf_handler_low_text_triggers_image_mode(tmp_path: Path) -> None:
     assert images[0]["content_type"] == "image/png"
 
 
-def test_scanned_pdf_error_remains_handler_error_subclass() -> None:
-    """Plan 25 T3: :class:`ScannedPDFError` is retained as an export for
-    backward-compat (no longer raised by the handler, but importers shouldn't
-    break)."""
-    from brain_core.ingest.handlers.base import HandlerError
-
-    assert issubclass(ScannedPDFError, HandlerError)
+def test_scanned_pdf_error_no_longer_exported() -> None:
+    """Plan 26 T2: ScannedPDFError was removed (Plan 25 T3 made it obsolete;
+    Plan 26 D2 hard-removed). Verify no zombie alias survives."""
+    with pytest.raises(ImportError):
+        from brain_core.ingest.handlers.pdf import ScannedPDFError  # noqa: F401
 
 
 def test_pdf_handler_rejects_non_pdf(tmp_path: Path) -> None:

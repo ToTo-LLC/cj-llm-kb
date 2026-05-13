@@ -1,33 +1,23 @@
 """PDF handler — text extraction via pymupdf with Plan 25 T3 image-mode fallback.
 
-Plan 25 T3 changes the pre-existing scanned-PDF behavior:
+When ``len(extracted_text) < min_chars``, the handler RENDERS every page to
+a PNG at 150 DPI and returns those bytes in ``extras["images"]`` for the
+Plan 24 T4 pipeline OCR pass (each image dict carries ``page_index`` 1-based
++ ``index`` 0-based overall counter). The pipeline's :meth:`_ocr_images`
+calls :func:`brain_core.ingest.ocr.ocr_image` per page and inlines
+``[Page N: <text>]`` blocks into the body. ``body_text`` on the returned
+:class:`ExtractedSource` stays whatever native text extraction produced
+(typically empty / near-empty); the pipeline pass adds the OCR text
+downstream.
 
-* Pre-Plan-25: when ``len(extracted_text) < min_chars``, the handler raised
-  :class:`ScannedPDFError` (a :class:`HandlerError` subclass) — the pipeline
-  surfaced a FAILED ingest and the user was told to OCR the file themselves.
+``extras["pdf_image_mode"] = True`` is set as a diagnostic flag so the
+operator can see in logs / downstream introspection which extraction path
+fired.
 
-* Plan 25 T3 (D14): when ``len(extracted_text) < min_chars``, the handler
-  RENDERS every page to a PNG at 150 DPI and returns those bytes in
-  ``extras["images"]`` for the Plan 24 T4 pipeline OCR pass (each image dict
-  carries ``page_index`` 1-based + ``index`` 0-based overall counter). The
-  pipeline's :meth:`_ocr_images` calls :func:`brain_core.ingest.ocr.ocr_image`
-  per page and inlines ``[Page N: <text>]`` blocks into the body. ``body_text``
-  on the returned :class:`ExtractedSource` stays whatever native text
-  extraction produced (typically empty / near-empty); the pipeline pass adds
-  the OCR text downstream.
-
-* ``extras["pdf_image_mode"] = True`` is set as a diagnostic flag so the
-  operator can see in logs / downstream introspection which extraction path
-  fired.
-
-* Handlers stay pure (Plan 24 T4 architecture): the handler NEVER calls
-  :meth:`LLMProvider.vision_extract` directly. It only collects bytes for
-  the pipeline to OCR. That keeps budget / cost rails + per-domain guards
-  centralised at the pipeline seam.
-
-* :class:`ScannedPDFError` is retained as an alias-friendly export for
-  backward compatibility with any caller still importing the symbol; it's
-  no longer raised by :meth:`PDFHandler.extract`.
+Handlers stay pure (Plan 24 T4 architecture): the handler NEVER calls
+:meth:`LLMProvider.vision_extract` directly. It only collects bytes for
+the pipeline to OCR. That keeps budget / cost rails + per-domain guards
+centralised at the pipeline seam.
 """
 
 from __future__ import annotations
@@ -44,9 +34,7 @@ from brain_core.ingest.types import ExtractedSource, SourceType
 
 # Plan 25 T3 D14: image-mode trigger threshold. When native text extraction
 # returns fewer than this many characters, render every page to a PNG for
-# the pipeline OCR pass. Mirrors the pre-Plan-25 ``min_chars`` default that
-# previously raised :class:`ScannedPDFError`; behavior at the threshold
-# changed (raise → render), the value did not.
+# the pipeline OCR pass.
 _PDF_IMAGE_MODE_FALLBACK_THRESHOLD: int = 200
 
 # Plan 25 T3: render DPI for image-mode page rasterisation. 150 DPI balances
@@ -55,16 +43,6 @@ _PDF_IMAGE_MODE_FALLBACK_THRESHOLD: int = 200
 # module constant rather than a Config field — promote to ``vision_dpi``
 # only when a real use case demands it.
 _PDF_RENDER_DPI: int = 150
-
-
-class ScannedPDFError(HandlerError):
-    """Retained for backward-compat imports.
-
-    Plan 25 T3: :meth:`PDFHandler.extract` no longer raises this — it
-    renders pages for OCR instead. The class remains a subclass of
-    :class:`HandlerError` so any external caller still catching this
-    exception name doesn't break at import time.
-    """
 
 
 class PDFHandler:
